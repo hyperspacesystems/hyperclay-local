@@ -818,6 +818,9 @@ class SyncManager extends EventEmitter {
   onDiscovery(discovery) {
     for (const entry of this.sessions.values()) {
       this.applyLimits(entry, accountFor(discovery, entry.session));
+      // One discovery refresh is also the retry for sites held at the plan's
+      // file limit: an upgrade or a deletion online is picked up within it.
+      if (entry.runner?.state === 'live') entry.engine.retryFileLimitBlocks?.();
       if (!entry.runner || entry.runner.state !== 'paused') continue;
       const reason = entry.session.paused?.reason;
       if (reason === 'port-taken') continue;

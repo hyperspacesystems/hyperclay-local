@@ -532,6 +532,13 @@ async function createRemote(engine, nodeId, entry, context, gen) {
   const content = isSite ? buffer.toString('utf8') : buffer;
   const type = typeOf(entry, context, rel);
 
+  // This pass already met the plan's file limit: the rest of the plan is held
+  // without a request each. The queue path retries one at a time instead.
+  if (isSite && engine.fileLimitReached) {
+    await engine.blockFileLimit(rel);
+    return { action: A.NOOP, blocked: true };
+  }
+
   let created;
   try {
     created = await createNode(engine.conn, {
@@ -555,6 +562,7 @@ async function createRemote(engine, nodeId, entry, context, gen) {
       return keepLocal(engine, rel, buffer.length, Number.isFinite(error.limit) ? error.limit : engine.uploadLimit);
     }
     if (isSite && error.statusCode === 403 && error.code === 'file-limit') {
+      engine.fileLimitReached = true;
       await engine.blockFileLimit(rel);
       return { action: A.NOOP, blocked: true };
     }
@@ -574,7 +582,12 @@ async function createRemote(engine, nodeId, entry, context, gen) {
   // The cached list predates this node; a later event must not read its absence as a delete.
   if (typeof engine.invalidateServerNodesCache === 'function') engine.invalidateServerNodesCache();
 
+  const heldAtFileLimit = engine.uploadBlocks?.files?.[rel]?.reason === 'file-limit';
   await engine.clearUploadBlock(rel);
+  // A site that landed means the plan has room again: the rest of this pass may
+  // try, and a file held earlier is asked for again, one request at a time.
+  if (isSite) engine.fileLimitReached = false;
+  if (heldAtFileLimit) engine.retryFileLimitBlocks?.();
   engine.emit('file-synced', { file: rel, action: 'upload', type });
   return { action: A.CREATE_REMOTE, nodeId: created.id, etag };
 }

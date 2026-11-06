@@ -153,6 +153,9 @@ module.exports = {
   async runPlan(plan) {
     const pass = { inventory: null, refreshed: new Set() };
     const ordered = [...plan].sort((a, b) => rankOf(a) - rankOf(b));
+    // A plan that has met the plan's file limit holds the rest of its sites
+    // without a request each; the next plan asks again.
+    this.fileLimitReached = false;
 
     for (const item of ordered) {
       // A pause or a restart while the pass runs stops it before the next

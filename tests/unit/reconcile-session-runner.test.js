@@ -84,6 +84,7 @@ function makeEngine(overrides = {}) {
     refreshNode: jest.fn().mockResolvedValue(),
     dropPendingWork: jest.fn(),
     whenQueueEmpty: jest.fn().mockResolvedValue(),
+    retryFileLimitBlocks: jest.fn(),
     _applyFileDelete: jest.fn(),
     rootRefusal: () => null,
     ...overrides
@@ -217,6 +218,27 @@ describe('live frames after the reconcile', () => {
     expect(engine.refreshNode).toHaveBeenCalledTimes(1);
     expect(engine.refreshNode).toHaveBeenCalledWith('7', { generation: 1 });
     expect(runner.state).toBe('live');
+  });
+
+  it('a live site delete asks again for the sites held at the file limit', async () => {
+    const { engine, stream } = await liveSession();
+
+    stream.push({ type: 'node-deleted', nodeId: 7, nodeType: 'site', name: 'a.html', path: 'a.html' });
+    await flush();
+
+    expect(engine.refreshNode).toHaveBeenCalledWith('7', { generation: 1 });
+    expect(engine.retryFileLimitBlocks).toHaveBeenCalledTimes(1);
+  });
+
+  it('a deleted upload or folder is no reason to ask again for held sites', async () => {
+    const { engine, stream } = await liveSession();
+
+    stream.push({ type: 'node-deleted', nodeId: 8, nodeType: 'upload', name: 'p.png', path: 'p.png' });
+    stream.push({ type: 'node-deleted', nodeId: 9, nodeType: 'folder', name: 'docs', path: 'docs' });
+    await flush();
+
+    expect(engine.refreshNode).toHaveBeenCalledTimes(2);
+    expect(engine.retryFileLimitBlocks).not.toHaveBeenCalled();
   });
 
   it('relays a live-sync frame through the engine at any state', async () => {

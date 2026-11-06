@@ -81,7 +81,15 @@ class SessionRunner extends EventEmitter {
               this.lastError = (error && error.message) || null;
             });
           }
-          if (this.state === 'live') return this.#enqueueInvalidation(gen, frame.data);
+          if (this.state === 'live') {
+            const refreshed = this.#enqueueInvalidation(gen, frame.data);
+            // A site deleted online may have freed room in the plan: ask again
+            // for the sites held at the file limit once the invalidation lands.
+            if (frame.data?.type === 'node-deleted' && frame.data?.nodeType === 'site') {
+              return Promise.resolve(refreshed).then(() => this.engine.retryFileLimitBlocks());
+            }
+            return refreshed;
+          }
           if (frame.data?.nodeId != null) invalidated.add(String(frame.data.nodeId));
         },
         onError: (error) => this.#onError(gen, error),

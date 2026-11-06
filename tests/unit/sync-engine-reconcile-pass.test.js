@@ -293,10 +293,14 @@ describe('runPlanItem — a session-level failure ends the pass', () => {
   });
 });
 
-describe('runPlanItem — the free plan\'s file limit is a per-file skip', () => {
+describe('runPlanItem — the free plan\'s file limit ends the pass\'s site attempts', () => {
+  afterEach(() => {
+    syncEngine.syncQueue.clearQueueTimer();
+  });
+
   // Two brand-new local sites: the server refuses the first with the plan's
-  // 403 `file-limit`, and the pass must go on to create the second. The error
-  // belongs to that file, so nothing about the session changes.
+  // 403 `file-limit`, so the second is held for the same reason without a
+  // request of its own. The error belongs to the file, not to the session.
   function seedTwoNewSites() {
     syncEngine.repo.seed();
     fileOps.getLocalFiles.mockResolvedValue(new Map([
@@ -306,7 +310,7 @@ describe('runPlanItem — the free plan\'s file limit is a per-file skip', () =>
     apiClient.listNodes.mockResolvedValue([]);
   }
 
-  test('a 403 file-limit skips that file, the pass creates the next, and the next pass retries it', async () => {
+  test('a 403 file-limit holds that file and the rest of the plan, and the next pass retries', async () => {
     const metaDir = fs.mkdtempSync(path.join(os.tmpdir(), 'reconcile-pass-file-limit-'));
     syncEngine.metaDir = metaDir;
     try {
@@ -317,24 +321,25 @@ describe('runPlanItem — the free plan\'s file limit is a per-file skip', () =>
 
       await expect(syncEngine.performInitialSync()).resolves.toBeUndefined();
 
-      expect(apiClient.createNode).toHaveBeenCalledTimes(2);
-      expect(apiClient.createNode).toHaveBeenLastCalledWith(
+      // The plan refused one file, so the rest of this pass's sites are held
+      // without a request each.
+      expect(apiClient.createNode).toHaveBeenCalledTimes(1);
+      expect(apiClient.createNode).toHaveBeenCalledWith(
         expect.anything(),
-        expect.objectContaining({ type: 'site', name: 'notes.html' })
+        expect.objectContaining({ type: 'site', name: 'index.html' })
       );
-      expect(syncEngine.blockedUploads()).toEqual([
-        { path: 'index.html', bytes: undefined, limit: undefined, reason: 'file-limit' }
-      ]);
+      expect(syncEngine.blockedUploads().map((file) => file.path)).toEqual(['index.html', 'notes.html']);
 
-      // The next pass asks again: the plan stopped refusing it, so it syncs and
-      // the record goes away with no action in the app.
+      // The next pass asks again: the plan stopped refusing, so both sync and
+      // the records go away with no action in the app.
       apiClient.createNode.mockResolvedValue({ id: 7, type: 'site', name: 'index.html', parentId: 0 });
 
       await syncEngine.performInitialSync();
 
+      expect(apiClient.createNode).toHaveBeenCalledTimes(3);
       expect(apiClient.createNode).toHaveBeenLastCalledWith(
         expect.anything(),
-        expect.objectContaining({ type: 'site', name: 'index.html' })
+        expect.objectContaining({ type: 'site', name: 'notes.html' })
       );
       expect(syncEngine.blockedUploads()).toEqual([]);
     } finally {
@@ -349,8 +354,8 @@ describe('sites held at the free plan\'s file limit are retried', () => {
   beforeEach(() => {
     metaDir = fs.mkdtempSync(path.join(os.tmpdir(), 'reconcile-retry-file-limit-'));
     syncEngine.metaDir = metaDir;
-    fileOps.getLocalFiles.mockResolvedValue(new Map([['index.html', localFile('index.html')]]));
     fileOps.getLocalUploads.mockResolvedValue(new Map());
+    fileOps.getLocalFolders.mockResolvedValue(new Map());
     apiClient.listNodes.mockResolvedValue([]);
   });
 
@@ -359,52 +364,84 @@ describe('sites held at the free plan\'s file limit are retried', () => {
     fs.rmSync(metaDir, { recursive: true, force: true });
   });
 
-  test('a server-side site delete retries the held site on the queue', async () => {
-    syncEngine.repo.seed([[42, { type: 'site', path: 'foo.html', inode: 7 }]]);
-    await syncEngine.blockFileLimit('index.html');
-    apiClient.createNode.mockResolvedValue({ id: 7, type: 'site', name: 'index.html', parentId: 0 });
+  // The queue path reads the cached inventory instead of listing on every file.
+  function cacheEmptyList() {
+    syncEngine.invalidateServerNodesCache();
+    syncEngine.serverNodesCache = [];
+    syncEngine.serverNodesCacheTime = Date.now();
+  }
 
-    await syncEngine.handleNodeDeleted({ nodeId: 42, nodeType: 'site', name: 'foo.html', path: 'foo.html' });
-    await syncEngine.processQueue();
-
-    expect(apiClient.createNode).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ type: 'site', name: 'index.html' })
+  test('one refusal holds every site in the pass: a full plan costs one request', async () => {
+    fileOps.getLocalFiles.mockResolvedValue(new Map([
+      ['alpha.html', localFile('alpha.html')],
+      ['beta.html', localFile('beta.html')],
+      ['gamma.html', localFile('gamma.html')]
+    ]));
+    apiClient.createNode.mockRejectedValue(
+      Object.assign(new Error('Free plan holds 10 HTML files online'), { statusCode: 403, code: 'file-limit' })
     );
-    expect(syncEngine.blockedUploads()).toEqual([]);
+
+    await syncEngine.performInitialSync();
+
+    expect(apiClient.createNode).toHaveBeenCalledTimes(1);
+    expect(syncEngine.blockedUploads().map((file) => file.path)).toEqual(['alpha.html', 'beta.html', 'gamma.html']);
+    expect(syncEngine.blockedUploads().every((file) => file.reason === 'file-limit')).toBe(true);
   });
 
-  test('the fallback poll retries the held site', async () => {
-    await syncEngine.blockFileLimit('index.html');
-    apiClient.createNode.mockResolvedValue({ id: 7, type: 'site', name: 'index.html', parentId: 0 });
-    syncEngine.fetchAndCacheServerFiles = jest.fn().mockResolvedValue([]);
-    syncEngine.fetchAndCacheServerUploads = jest.fn().mockResolvedValue([]);
+  test('one retry asks for the held sites one at a time, in path order', async () => {
+    fileOps.getLocalFiles.mockResolvedValue(new Map([
+      ['beta.html', localFile('beta.html')],
+      ['alpha.html', localFile('alpha.html')]
+    ]));
+    await syncEngine.blockFileLimit('alpha.html');
+    await syncEngine.blockFileLimit('beta.html');
+    cacheEmptyList();
+    apiClient.createNode
+      .mockResolvedValueOnce({ id: 7, type: 'site', name: 'alpha.html', parentId: 0 })
+      .mockResolvedValueOnce({ id: 8, type: 'site', name: 'beta.html', parentId: 0 });
 
-    await syncEngine.checkForRemoteChanges();
+    syncEngine.retryFileLimitBlocks();
+    expect(syncEngine.syncQueue.length()).toBe(1);
+
     await syncEngine.processQueue();
 
-    expect(apiClient.createNode).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ type: 'site', name: 'index.html' })
-    );
+    expect(apiClient.createNode.mock.calls.map(([, body]) => body.name)).toEqual(['alpha.html', 'beta.html']);
     expect(syncEngine.blockedUploads()).toEqual([]);
   });
 
   test('a site the server still refuses stays held', async () => {
+    fileOps.getLocalFiles.mockResolvedValue(new Map([['index.html', localFile('index.html')]]));
     await syncEngine.blockFileLimit('index.html');
+    cacheEmptyList();
     apiClient.createNode.mockRejectedValue(
       Object.assign(new Error('Free plan holds 10 HTML files online'), { statusCode: 403, code: 'file-limit' })
     );
-    syncEngine.fetchAndCacheServerFiles = jest.fn().mockResolvedValue([]);
-    syncEngine.fetchAndCacheServerUploads = jest.fn().mockResolvedValue([]);
 
-    await expect(syncEngine.checkForRemoteChanges()).resolves.toBeUndefined();
+    syncEngine.retryFileLimitBlocks();
     await expect(syncEngine.processQueue()).resolves.toBeUndefined();
 
     expect(apiClient.createNode).toHaveBeenCalledTimes(1);
-    expect(apiClient.listNodes).toHaveBeenCalledTimes(1);
     expect(syncEngine.blockedUploads()).toEqual([
       { path: 'index.html', bytes: undefined, limit: undefined, reason: 'file-limit' }
     ]);
+  });
+
+  test('a held file the pass finds already on the server is dropped from the list', async () => {
+    const bytes = '<html>content</html>';
+    fileOps.getLocalFiles.mockResolvedValue(new Map([['index.html', localFile('index.html')]]));
+    await syncEngine.blockFileLimit('index.html');
+    expect(syncEngine.blockedUploads()).toHaveLength(1);
+
+    fileOps.readFile.mockResolvedValue(bytes);
+    apiClient.listNodes.mockResolvedValue(completeList([
+      { id: 9, type: 'site', name: 'index.html', path: '', checksum: checksum(bytes), modifiedAt: '2024-01-01T00:00:00Z' }
+    ]));
+
+    await syncEngine.reconcileAll(completeList([
+      { id: 9, type: 'site', name: 'index.html', path: '', checksum: checksum(bytes), modifiedAt: '2024-01-01T00:00:00Z' }
+    ]), { generation: syncEngine.generation });
+
+    expect(apiClient.createNode).not.toHaveBeenCalled();
+    expect(syncEngine.blockedUploads()).toEqual([]);
   });
 });

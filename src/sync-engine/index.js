@@ -71,6 +71,7 @@ class SyncEngine extends EventEmitter {
     this.bootstrapPass = false; // reconcileAll({ bootstrap: true }) deletes nothing
     this.repo = new NodeRepository(); // nodeId → { type, path, checksum?, inode?, parentId? }
     this.uploadBlocks = { limit: null, files: {} };
+    this.fileLimitReached = false; // this pass already got a 403 file-limit
     // Convenience: `this.metaDir = x` forwards to `this.repo.attach(x)` so
     // tests and init() can set the metadata directory in one place instead
     // of having to remember to call attach() separately.
@@ -140,11 +141,13 @@ class SyncEngine extends EventEmitter {
     }
   }
 
-  /** Ask the server again for every site held at the plan's file limit. */
+  /** Ask the server again for the held sites: one at a time, so a full plan costs one request. */
   retryFileLimitBlocks() {
-    for (const [rel, record] of Object.entries(this.uploadBlocks.files)) {
-      if (record.reason === 'file-limit') this.queueSync('change', rel);
-    }
+    const held = Object.entries(this.uploadBlocks.files)
+      .filter(([, record]) => record.reason === 'file-limit')
+      .map(([rel]) => rel)
+      .sort((a, b) => a.localeCompare(b));
+    if (held.length) this.queueSync('change', held[0]);
   }
 
   /** Remember an attachment kept local because the plan refuses its size. */

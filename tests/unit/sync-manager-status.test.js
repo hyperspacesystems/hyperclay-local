@@ -358,6 +358,20 @@ describe('discovery triggers', () => {
     }
   });
 
+  it('a refresh asks each live session again for the sites held at the file limit', async () => {
+    apiClient.listNodes.mockResolvedValue(completeList([]));
+    await manager.start(sessionA, rootA);
+    const entry = manager.sessions.get(sessionA.id);
+    eventsource.EventSource.mock.instances[0].onopen();
+    await waitFor(() => entry.runner.state === 'live');
+    const retry = jest.spyOn(entry.engine, 'retryFileLimitBlocks');
+
+    apiClient.getAccounts.mockResolvedValue(discovery());
+    await manager.refreshAccounts();
+
+    expect(retry).toHaveBeenCalledTimes(1);
+  });
+
   it('refreshAccountsIfStale skips a refresh within 30 seconds', async () => {
     jest.useFakeTimers();
     try {

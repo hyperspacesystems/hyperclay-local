@@ -68,6 +68,9 @@ module.exports = {
    * the remote view for its node is read from the cached inventory.
    */
   async applyLocalChange(item) {
+    // The queue probes one file at a time: a refusal in this pass-less path
+    // must not short-circuit the next trigger.
+    this.fileLimitReached = false;
     if (item.type === 'addDir') {
       await this.createFolderOnServer(item.filename);
       return;

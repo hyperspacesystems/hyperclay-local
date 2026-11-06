@@ -427,8 +427,6 @@ module.exports = {
       }
       this.emit('sync-error', classifyError(error, { filename: data.path, action: 'sse-node-deleted' }));
     }
-
-    if (data.nodeType === 'site') this.retryFileLimitBlocks();
   },
 
   async _applyFileDelete(nodeId, fullPath, nodeType) {
@@ -1222,8 +1220,6 @@ module.exports = {
       }
 
       this.stats.lastSync = new Date().toISOString();
-
-      this.retryFileLimitBlocks();
     } catch (error) {
       console.error('[SYNC] Failed to check for remote changes:', error);
       this.stats.errors.push(formatErrorForLog(error, { action: 'poll' }));
