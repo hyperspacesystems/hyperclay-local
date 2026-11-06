@@ -554,6 +554,10 @@ async function createRemote(engine, nodeId, entry, context, gen) {
       if (Number.isFinite(error.limit)) await engine.setUploadLimit(error.limit);
       return keepLocal(engine, rel, buffer.length, Number.isFinite(error.limit) ? error.limit : engine.uploadLimit);
     }
+    if (isSite && error.statusCode === 403 && error.code === 'file-limit') {
+      await engine.blockFileLimit(rel);
+      return { action: A.NOOP, blocked: true };
+    }
     throw error;
   }
   if (gen !== engine.generation) return { action: A.CREATE_REMOTE, stale: true };

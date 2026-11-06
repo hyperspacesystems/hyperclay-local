@@ -406,6 +406,26 @@ describe('buildCards', () => {
     expect(syncing[1].state).toBe('unsynced');
   });
 
+  test('files the free plan will not hold online say so, alone or beside a too-large one', () => {
+    const fileLimitOnly = buildCards(snapshot({
+      roots: [personalRoot(), teamRoot()],
+      sessions: [session({ blocked: [{ path: 'index.html', reason: 'file-limit' }] })],
+    }));
+    expect(fileLimitOnly[1].state).toBe('unsynced');
+    expect(fileLimitOnly[1].detail).toBe("1 file can't sync");
+    expect(fileLimitOnly[1].detailLong).toBe('Stored on this computer. Remove a file online or upgrade. The app retries automatically.');
+
+    const both = buildCards(snapshot({
+      roots: [personalRoot(), teamRoot()],
+      sessions: [session({
+        blocked: [{ path: 'index.html', reason: 'file-limit' }, { path: 'a.mp4', bytes: 2, limit: 1 }],
+      })],
+    }));
+    expect(both[1].state).toBe('unsynced');
+    expect(both[1].detail).toBe("2 files can't sync");
+    expect(both[1].detailLong).toBe("Stored on this computer. Too large or past the free plan's file limit.");
+  });
+
   test('a conflict outranks attachments kept here, and an empty list stays synced', () => {
     const conflicted = buildCards(snapshot({
       roots: [personalRoot(), teamRoot()],

@@ -28,7 +28,13 @@ const CARD_COPY = {
     detailLong: 'A file changed here and on hyperclay.com. Both copies are kept; see Notices.',
   },
   offline: { detail: 'offline', detailLong: "Can't reach hyperclay.com. Changes sync when you're back online." },
-  unsynced: { one: "1 file can't sync", many: "{count} files can't sync", detailLong: 'Stored on this computer. Too large for this plan to sync.' },
+  unsynced: {
+    one: "1 file can't sync",
+    many: "{count} files can't sync",
+    detailLong: 'Stored on this computer. Too large for this plan to sync.',
+    detailLongFileLimit: 'Stored on this computer. Remove a file online or upgrade. The app retries automatically.',
+    detailLongMixed: "Stored on this computer. Too large or past the free plan's file limit.",
+  },
   error: { detail: 'sync error', detailLong: '{error}' },
   'port-taken': {
     detail: 'Not served. Another program has :{port}.',
@@ -175,12 +181,22 @@ function rootActions(state, root, session) {
   return actions;
 }
 
+// A file kept here was refused either for its size or for the plan's online file
+// limit; the line says which of the two, or both.
+function unsyncedDetailLong(blocked) {
+  const fileLimit = blocked.filter((file) => file.reason === 'file-limit').length;
+  if (fileLimit === 0) return CARD_COPY.unsynced.detailLong;
+  if (fileLimit === blocked.length) return CARD_COPY.unsynced.detailLongFileLimit;
+  return CARD_COPY.unsynced.detailLongMixed;
+}
+
 function rootCopy(state, { root, session, personal, username, displayName }) {
   const names = { team: username, Team: displayName, port: root.port };
   if (state === 'synced') return CARD_COPY.synced;
   if (state === 'unsynced') {
-    const count = session.blocked.length;
-    return { detail: plural(count, CARD_COPY.unsynced.one, fillCopy(CARD_COPY.unsynced.many, { count })), detailLong: CARD_COPY.unsynced.detailLong };
+    const blocked = (session && session.blocked) || [];
+    const count = blocked.length;
+    return { detail: plural(count, CARD_COPY.unsynced.one, fillCopy(CARD_COPY.unsynced.many, { count })), detailLong: unsyncedDetailLong(blocked) };
   }
   if (state === 'offline') return CARD_COPY.offline;
   if (state === 'syncing') {

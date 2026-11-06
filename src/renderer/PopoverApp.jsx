@@ -1112,6 +1112,7 @@ const NoticeRows = ({ errors, conflicts, blocked, cards, onMarkErrorRead, onDism
       })}
       {(blocked || []).map((file, i) => {
         const label = titleForSession(file.sessionId);
+        const fileLimit = file.reason === 'file-limit';
         const size = formatBytes(file.bytes) || 'too large for this plan';
         const limit = Number.isFinite(file.limit) ? formatBytes(file.limit) : null;
         return (
@@ -1119,7 +1120,7 @@ const NoticeRows = ({ errors, conflicts, blocked, cards, onMarkErrorRead, onDism
             <div style={{ display: 'flex', gap: 8 }}>
               <span style={{ color: C.amber, fontSize: 12 }}>!</span>
               <span style={{ fontSize: 12, lineHeight: 1.4, color: C.text, wordBreak: 'break-word' }}>
-                {label ? `${label}: ` : ''}{file.path} is stored here but can't sync: {size}{limit ? `, and this plan allows ${limit}` : ''}
+                {label ? `${label}: ` : ''}{file.path} is stored here but can't sync: {fileLimit ? 'the free plan holds 10 HTML files online' : `${size}${limit ? `, and this plan allows ${limit}` : ''}`}
               </span>
             </div>
             <div style={{ display: 'flex', gap: 6, marginTop: 6, paddingLeft: 16 }}>

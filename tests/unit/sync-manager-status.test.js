@@ -242,11 +242,27 @@ describe('SyncManager statuses', () => {
     await engine.blockUpload('index.html', indexSize, 1);
     await engine.blockUpload('gone.mp4', 6, 1);
 
-    expect(statusOf(sessionA.id).blocked).toEqual([{ path: 'index.html', bytes: indexSize, limit: 1 }]);
+    expect(statusOf(sessionA.id).blocked).toEqual([{ path: 'index.html', bytes: indexSize, limit: 1, reason: 'too-large' }]);
     expect(announcements).toContainEqual({ sessionId: sessionA.id, rootId: rootA.id, accountId: 11 });
 
     fs.rmSync(path.join(rootA.path, 'index.html'));
     expect(statusOf(sessionA.id).blocked).toEqual([]);
+  });
+
+  it('keeps a file-limit record while its file is here and drops it when the file is deleted', async () => {
+    await manager.start(sessionA, rootA);
+    const engine = manager.get(sessionA.id);
+    await engine.blockFileLimit('index.html');
+
+    expect(statusOf(sessionA.id).blocked).toEqual([
+      { path: 'index.html', bytes: undefined, limit: undefined, reason: 'file-limit' }
+    ]);
+    expect(engine.blockedUploads()).toHaveLength(1);
+
+    fs.rmSync(path.join(rootA.path, 'index.html'));
+
+    expect(statusOf(sessionA.id).blocked).toEqual([]);
+    expect(engine.blockedUploads()).toEqual([]);
   });
 
   it('drops a record whose file is no longer the size it was kept under', async () => {

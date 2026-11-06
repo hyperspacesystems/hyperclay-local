@@ -11,6 +11,7 @@ const CONTRACTS_ROWS = [
   ['402', 'payment-required', { kind: 'pause', reason: 'plan-lapsed' }],
   ['403', 'viewer', { kind: 'pause', reason: 'viewer' }],
   ['403', 'forbidden', { kind: 'rediscover', reason: 'forbidden' }],
+  ['403', 'file-limit', { kind: 'skip', reason: 'file-limit' }],
   ['404', 'not-found', { kind: 'rediscover', reason: 'not-found' }],
   ['404', 'node-not-found', { kind: 'refresh-node' }],
   ['409', 'account-changed', { kind: 'rediscover', reason: 'account-changed' }],
@@ -49,6 +50,13 @@ describe('classifyError', () => {
   it('409 managed is skip', () => {
     expect(classifyError({ statusCode: 409, code: 'managed' }))
       .toEqual({ kind: 'skip', reason: 'managed' });
+  });
+
+  it('the free plan\'s file limit is a skip for that file, never a session rediscover', () => {
+    expect(classifyError({ statusCode: 403, code: 'file-limit' }))
+      .toEqual({ kind: 'skip', reason: 'file-limit' });
+    expect(classifyError({ statusCode: 403, code: 'forbidden' }))
+      .toEqual({ kind: 'rediscover', reason: 'forbidden' });
   });
 
   it('a locked-folder refusal is a skip, never a retry or a backoff', () => {

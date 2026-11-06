@@ -157,7 +157,7 @@ describe('an attachment over the cap stays local', () => {
     expect(api.createNode).not.toHaveBeenCalled();
     const saved = await readBlockFile();
     expect(saved.files['photo.png']).toMatchObject({ bytes: 20, limit: 10, reason: 'too-large' });
-    expect(engine.blockedUploads()).toEqual([{ path: 'photo.png', bytes: 20, limit: 10 }]);
+    expect(engine.blockedUploads()).toEqual([{ path: 'photo.png', bytes: 20, limit: 10, reason: 'too-large' }]);
   });
 
   it('an upload of an oversize attachment with a known baseline is never sent', async () => {
@@ -275,7 +275,7 @@ describe('an attachment over the cap stays local', () => {
     expect(api.putNodeContent).not.toHaveBeenCalled();
     expect(api.createNode).not.toHaveBeenCalled();
     expect(await fsp.readFile(path.join(root, 'photo.png'), 'utf8')).toBe(BIG);
-    expect(engine.blockedUploads()).toEqual([{ path: 'photo.png', bytes: 20, limit: 10 }]);
+    expect(engine.blockedUploads()).toEqual([{ path: 'photo.png', bytes: 20, limit: 10, reason: 'too-large' }]);
     expect((await readBlockFile()).files['photo.png']).toMatchObject({ bytes: 20, limit: 10, reason: 'too-large' });
     expect((await store.load(metaDir))['901']).toMatchObject({ kind: 'both-edited', path: 'photo.png' });
   });
@@ -290,7 +290,7 @@ describe('an attachment over the cap stays local', () => {
     expect(result).toEqual({ ok: false, error: 'too-large' });
     expect(api.createNode).not.toHaveBeenCalled();
     expect(await fsp.readFile(path.join(root, 'photo.png'), 'utf8')).toBe(BIG);
-    expect(engine.blockedUploads()).toEqual([{ path: 'photo.png', bytes: 20, limit: 10 }]);
+    expect(engine.blockedUploads()).toEqual([{ path: 'photo.png', bytes: 20, limit: 10, reason: 'too-large' }]);
     expect((await store.load(metaDir))['901']).toMatchObject({ kind: 'remote-deleted', path: 'photo.png' });
   });
 
@@ -361,7 +361,7 @@ describe('an attachment over the cap stays local', () => {
     expect(result).toEqual({ action: A.NOOP, blocked: true });
     expect(api.putNodeContent).not.toHaveBeenCalled();
     expect(fileOps.readFileBuffer).not.toHaveBeenCalledWith(full);
-    expect(engine.blockedUploads()).toEqual([{ path: 'photo.png', bytes: 20, limit: 10 }]);
+    expect(engine.blockedUploads()).toEqual([{ path: 'photo.png', bytes: 20, limit: 10, reason: 'too-large' }]);
     expect((await readBlockFile()).files['photo.png']).toMatchObject({ bytes: 20, limit: 10, reason: 'too-large' });
   });
 
@@ -376,7 +376,7 @@ describe('an attachment over the cap stays local', () => {
     expect(api.deleteNode).not.toHaveBeenCalled();
     expect(fileOps.readFileBuffer).not.toHaveBeenCalledWith(full);
     expect(await fsp.readFile(full, 'utf8')).toBe(EDITED);
-    expect(engine.blockedUploads()).toEqual([{ path: 'photo.png', bytes: 20, limit: 10 }]);
+    expect(engine.blockedUploads()).toEqual([{ path: 'photo.png', bytes: 20, limit: 10, reason: 'too-large' }]);
     expect((await readBlockFile()).files['photo.png']).toMatchObject({ bytes: 20, limit: 10, reason: 'too-large' });
   });
 });

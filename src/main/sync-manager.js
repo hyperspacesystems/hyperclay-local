@@ -498,14 +498,29 @@ class SyncManager extends EventEmitter {
   }
 
   /**
-   * Attachments kept here because the plan refuses their size: a record counts
+   * Files kept here because the plan refused them: a `too-large` record counts
    * only while the file it names is still on disk, unchanged and over the cap it
-   * was recorded under. Any other record is stale and dropped here.
+   * was recorded under; a `file-limit` record counts while the file is on disk.
+   * Any other record is stale and dropped here.
    */
   _blockedFor(entry) {
     const list = typeof entry.engine.blockedUploads === 'function' ? entry.engine.blockedUploads() : [];
     const blocked = [];
     for (const file of list) {
+      if (file.reason === 'file-limit') {
+        let present = false;
+        try {
+          present = fsSync.statSync(path.join(entry.root.path, file.path)).isFile();
+        } catch {
+          present = false;
+        }
+        if (!present) {
+          entry.engine.clearUploadBlock(file.path).catch(() => {});
+          continue;
+        }
+        blocked.push(file);
+        continue;
+      }
       let size = null;
       try {
         const stat = fsSync.statSync(path.join(entry.root.path, file.path));

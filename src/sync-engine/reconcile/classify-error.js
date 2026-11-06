@@ -13,6 +13,7 @@ function classifyError(error) {
   if (!status) return { kind: 'offline' };
   if (status === 401) return { kind: 'pause-all', reason: 'key-revoked' };
   if (PAUSE_BY_CODE[code]) return { kind: 'pause', reason: PAUSE_BY_CODE[code] };
+  if (status === 403 && code === 'file-limit') return { kind: 'skip', reason: 'file-limit' };
   if (status === 403 || status === 404 && code === 'not-found') return { kind: 'rediscover', reason: code || 'forbidden' };
   if (status === 409 && code === 'account-changed') return { kind: 'rediscover', reason: 'account-changed' };
   if (status === 409 && code === 'node-changed') return { kind: 'refresh-node' };

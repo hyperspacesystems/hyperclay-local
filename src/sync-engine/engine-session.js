@@ -97,6 +97,7 @@ module.exports = {
     this.serverNodesComplete = (inventory && inventory.complete === true) || nodes.complete === true;
     this.serverFilesCache = null;
     this.bootstrapPass = bootstrap === true;
+    await this.clearFileLimitBlocks();
 
     try {
       await this.performInitialFolderSync(nodes);

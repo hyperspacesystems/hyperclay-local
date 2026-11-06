@@ -140,6 +140,13 @@ class SyncEngine extends EventEmitter {
     }
   }
 
+  /** Ask the server again for every site held at the plan's file limit. */
+  retryFileLimitBlocks() {
+    for (const [rel, record] of Object.entries(this.uploadBlocks.files)) {
+      if (record.reason === 'file-limit') this.queueSync('change', rel);
+    }
+  }
+
   /** Remember an attachment kept local because the plan refuses its size. */
   async blockUpload(rel, bytes, limit) {
     const current = this.uploadBlocks.files[rel];
@@ -148,6 +155,36 @@ class SyncEngine extends EventEmitter {
       ...this.uploadBlocks,
       files: { ...this.uploadBlocks.files, [rel]: { bytes, limit, reason: 'too-large', at: new Date().toISOString() } },
     };
+    await this._saveUploadBlocks();
+  }
+
+  /** Remember a site kept local because the plan's online file limit refused it. */
+  async blockFileLimit(rel) {
+    const current = this.uploadBlocks.files[rel];
+    if (current && current.reason === 'file-limit') return;
+    this.uploadBlocks = {
+      ...this.uploadBlocks,
+      files: { ...this.uploadBlocks.files, [rel]: { reason: 'file-limit', at: new Date().toISOString() } },
+    };
+    await this._saveUploadBlocks();
+  }
+
+  /**
+   * A new pass asks the server again: every file-limit record is dropped first,
+   * so a file deleted online or a plan upgraded syncs with no action here, and
+   * only the files refused again are recorded.
+   */
+  async clearFileLimitBlocks() {
+    const files = { ...this.uploadBlocks.files };
+    let changed = false;
+    for (const [rel, record] of Object.entries(files)) {
+      if (record.reason === 'file-limit') {
+        delete files[rel];
+        changed = true;
+      }
+    }
+    if (!changed) return;
+    this.uploadBlocks = { ...this.uploadBlocks, files };
     await this._saveUploadBlocks();
   }
 
@@ -160,10 +197,10 @@ class SyncEngine extends EventEmitter {
     await this._saveUploadBlocks();
   }
 
-  /** `[{ path, bytes, limit }]`, sorted by path. */
+  /** `[{ path, bytes, limit, reason }]`, sorted by path. */
   blockedUploads() {
     return Object.entries(this.uploadBlocks.files)
-      .map(([rel, record]) => ({ path: rel, bytes: record.bytes, limit: record.limit }))
+      .map(([rel, record]) => ({ path: rel, bytes: record.bytes, limit: record.limit, reason: record.reason }))
       .sort((a, b) => a.path.localeCompare(b.path));
   }
 

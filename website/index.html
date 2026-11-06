@@ -76,6 +76,7 @@
 
         <div class="download-cta">
           <p class="trust">Free to use, source available. No account required. Works offline.</p>
+          <a class="bevel-button bevel-button--primary" href="https://journal.hyperclay.com/" style="margin-bottom: 8px;"><span class="bevel-button__label">Try an example</span></a>
           <a id="download-btn" class="bevel-button bevel-button--primary" href="#downloads" download>
             <span class="bevel-button__label" id="download-btn-text">Download</span>
           </a>
@@ -98,7 +99,7 @@
     <!-- 2. Point it at a folder -->
     <section class="section">
       <h2 class="section-h">Point it at a folder</h2>
-      <div class="prose"><p>Pick a folder inside your home folder. On first setup, Hyperclay Local starts serving it automatically. Open a malleable document in the workspace or your browser, edit it, and save back to disk. <a href="/docs/guide/quick-start/">Get started</a>.</p></div>
+      <div class="prose"><p>Pick a folder inside your home folder. On first setup, Hyperclay Local starts serving it automatically. Open an HTML file in the workspace or your browser, edit it, and save back to disk. <a href="/docs/guide/quick-start/">Get started</a>.</p></div>
     </section>
 
     <!-- 3. A file that remembers -->
@@ -107,15 +108,15 @@
       <div class="prose">
         <p>An HTML file can do almost anything. It can lay out an interface, run JavaScript, call browser APIs, and respond to every click and keystroke.</p>
         <p>The one thing it cannot do is remember. Close the tab and every change is gone.</p>
-        <p>A malleable document fixes that. It serializes its own DOM and posts it to a local server, which writes it back to the file on disk. Open it again and your changes are still there.</p>
-        <p>That makes one file a complete application. Its layout, its logic, and its data all live in the same document. You can email it, commit it to git, or drop it in Dropbox, and it still works.</p>
+        <p>Adding ClayJS fixes that. The page serializes its own DOM and posts it to a local server, which writes it back to the file on disk. Open it again and your changes are still there.</p>
+        <p>That makes one file a complete application. Its layout, its logic, and its data all live in the same HTML file. You can email it, commit it to git, or drop it in Dropbox, and it still works.</p>
       </div>
     </section>
 
     <!-- 4. What Hyperclay Local does -->
     <section class="section" id="how-it-saves">
       <h2 class="section-h">What the app actually does</h2>
-      <div class="prose"><p>ClayJS prepares your page's HTML and sends it to Hyperclay Local. The local server writes the document back to its file and keeps version history on disk. <a href="/docs/saving/">Read how saving works</a>.</p></div>
+      <div class="prose"><p>ClayJS prepares your page's HTML and sends it to Hyperclay Local. The local server writes the HTML back to the file and keeps version history on disk. <a href="/docs/saving/">Read how saving works</a>.</p></div>
     </section>
 
     <!-- 5. Interactive demos (the star) -->
@@ -356,7 +357,7 @@
       <ul class="features">
         <li><b>Tailwind CSS on save.</b> <span class="prose-line">Point a stylesheet at <code class="inline">/tailwindcss/{yourFileName}.css</code> and the server compiles Tailwind on every save, including only the utilities that file actually uses. No build step to run yourself.</span></li>
         <li><b>Cloud sync, if you want it.</b> <span class="prose-line">Turn on sync to mirror your folder to your hyperclay.com account and back. It is off by default, the API key is encrypted with your OS keychain, and your files work exactly the same with it off.</span></li>
-        <li><b><a href="https://clayjs.com/docs/">ClayJS</a>.</b> <span class="prose-line">Type directly into a heading, format a note, or fill in a form. ClayJS can save the text and field values as part of the document. <a href="https://clayjs.com/docs/guide/quick-start/">Build your first editable file</a>.</span></li>
+        <li><b><a href="https://clayjs.com/docs/">ClayJS</a>.</b> <span class="prose-line">Type directly into a heading, format a note, or fill in a form. ClayJS can save the text and field values into the HTML file. <a href="https://clayjs.com/docs/guide/quick-start/">Build your first editable file</a>.</span></li>
       </ul>
     </section>
 
@@ -404,7 +405,7 @@
 
       <details>
         <summary>How does the saving actually work?</summary>
-        <div class="faq__body"><p>ClayJS prepares your page's HTML and sends it to Hyperclay Local. The local server writes the document back to its file and keeps version history on disk. <a href="/docs/saving/">Read how saving works</a>.</p></div>
+        <div class="faq__body"><p>ClayJS prepares your page's HTML and sends it to Hyperclay Local. The local server writes the HTML back to the file and keeps version history on disk. <a href="/docs/saving/">Read how saving works</a>.</p></div>
       </details>
 
       <details>
@@ -429,7 +430,7 @@
         </div>
       </details>
 
-      <details><summary>Do I have to use ClayJS?</summary><div class="faq__body"><p>No. <a href="https://clayjs.com/docs/">ClayJS</a> provides editing and saving, but you can write your own client using the same <a href="/docs/saving/">save endpoint</a>. Your document stays an HTML file.</p></div></details>
+      <details><summary>Do I have to use ClayJS?</summary><div class="faq__body"><p>No. <a href="https://clayjs.com/docs/">ClayJS</a> provides editing and saving, but you can write your own client using the same <a href="/docs/saving/">save endpoint</a>. The file stays plain HTML.</p></div></details>
 
 
 

@@ -127,11 +127,11 @@ function flattenConflicts(statuses = []) {
   return conflicts;
 }
 
-/** One notice row per attachment kept here because the plan refuses its size. */
+/** One notice row per file kept here because the plan refused it. */
 function flattenBlocked(statuses = []) {
   const rows = [];
   for (const status of statuses) {
-    for (const file of status.blocked || []) rows.push({ sessionId: status.sessionId, path: file.path, bytes: file.bytes, limit: file.limit });
+    for (const file of status.blocked || []) rows.push({ sessionId: status.sessionId, path: file.path, bytes: file.bytes, limit: file.limit, reason: file.reason });
   }
   return rows;
 }
