@@ -430,6 +430,7 @@ async function download(engine, nodeId, entry, context, gen) {
     structureVersion: response.structureVersion !== undefined ? response.structureVersion : context.structureVersion,
   }, await entryMeta(engine, rel, type, parentId));
 
+  await releaseFileLimitHold(engine, rel);
   engine.emit('file-synced', { file: rel, action: 'download', type });
   return { action: A.DOWNLOAD, checksum: localChecksum };
 }
@@ -448,6 +449,14 @@ async function refreshStructureVersion(engine, nodeId, entry, context) {
   await engine.repo.updateBaseline(nodeId, { structureVersion: context.structureVersion });
 }
 
+// A site held at the file limit that is now bound to a server node (another device uploaded it, or
+// it came down) is synced: it leaves the held list, and the next held file is asked for.
+async function releaseFileLimitHold(engine, rel) {
+  if (engine.uploadBlocks?.files?.[rel]?.reason !== 'file-limit') return;
+  await engine.clearUploadBlock(rel);
+  engine.retryFileLimitBlocks?.();
+}
+
 async function adopt(engine, nodeId, entry, context) {
   const rel = relPathOf(entry, context, nodeId);
   const localChecksum = await localChecksumOf(engine, rel);
@@ -460,6 +469,7 @@ async function adopt(engine, nodeId, entry, context) {
     structureVersion: context.structureVersion === undefined ? null : context.structureVersion,
   }, await entryMeta(engine, rel, type, parentId));
 
+  await releaseFileLimitHold(engine, rel);
   return { action: A.ADOPT, checksum: localChecksum };
 }
 
