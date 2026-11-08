@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [1.36.0] - 2026-11-08
+
+### Changed
+- On the free plan, a site refused for the file limit is now held in the can't sync list and retried, instead of restarting the session each time.
+- Each retry sends one request, and each sync pass asks about one held file.
+
+### Fixed
+- A held site that was deleted online, or that turns up through account discovery, is retried.
+- When a held site is adopted or downloaded from the server, it leaves the held list and the next held file is asked for.
+
 ## [1.35.0] - 2026-11-06
 
 ### Changed
