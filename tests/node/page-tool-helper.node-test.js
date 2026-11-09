@@ -8,8 +8,9 @@ const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
+const { JSDOM } = require('jsdom');
 
-const { runPageTool, loadPrompts } = require('../../src/main/helpers/page-tool');
+const { runPageTool, loadPrompts, MOCK_TOOL } = require('../../src/main/helpers/page-tool');
 const { claudeArgs } = require('../../src/main/helpers/ai-edit');
 const {
   documentHTML,
@@ -363,6 +364,42 @@ test('MOCK_MODEL returns a fixed tool without spawning', async () => {
     if (previous === undefined) delete process.env.MOCK_MODEL;
     else process.env.MOCK_MODEL = previous;
   }
+});
+
+// The mock is what browser passes run with, so its script has to be one ClayJS
+// can mount: `mount(tool)` reading the artifact's html out of tool.root.
+test('the mock tool defines mount and counts through its state', () => {
+  const dom = new JSDOM(`<div id="root">${MOCK_TOOL.artifact.html}</div>`);
+  const root = dom.window.document.getElementById('root');
+  const added = [];
+  const listeners = new Set();
+  const tool = {
+    root,
+    state: {
+      data: { ...MOCK_TOOL.state },
+      add(path, n = 1) {
+        added.push([path, n]);
+        if (path.length === 1) tool.state.data = { ...tool.state.data, [path[0]]: (tool.state.data[path[0]] ?? 0) + n };
+        for (const fn of [...listeners]) fn();
+      },
+    },
+    on(event, fn) {
+      assert.equal(event, 'change');
+      listeners.add(fn);
+      return () => listeners.delete(fn);
+    },
+  };
+
+  const factory = new Function('tool', `${MOCK_TOOL.artifact.javascript};return typeof mount === 'function' ? mount : undefined;`)(tool);
+  assert.equal(typeof factory, 'function', 'the mock script defines mount(tool)');
+
+  const cleanup = factory(tool);
+  assert.equal(root.querySelector('output').textContent, '0');
+
+  root.querySelector('button').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+  assert.deepEqual(added, [[['count'], 1]]);
+  assert.equal(root.querySelector('output').textContent, '1');
+  assert.equal(typeof cleanup, 'function');
 });
 
 test('a document that asks for the page itself with a tool is refused', async () => {

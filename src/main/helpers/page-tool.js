@@ -34,11 +34,11 @@ const START_STATUS = 'Making your tool…';
 const MOCK_TOOL = {
   artifact: {
     title: 'Counter',
-    html: '<div class="page-tool-counter"><button type="button" data-count>0</button></div>',
-    css: '.page-tool-counter button { font: inherit; padding: 6px 10px; }',
-    javascript: "const button = root.querySelector('[data-count]');\nlet count = 0;\nbutton.addEventListener('click', () => { count += 1; button.textContent = String(count); });",
-    fallbackHtml: '<p>Counter: 0</p>',
-    summary: 'A counter that counts up when clicked.',
+    html: '<div class="counter"><button type="button">Add one</button> <output>0</output></div>',
+    css: '.counter { display: flex; gap: 0.5rem; align-items: center; } .counter button { font: inherit; }',
+    javascript: "function mount(tool) { const button = tool.root.querySelector('button'); const output = tool.root.querySelector('output'); const draw = () => { output.textContent = String(tool.state.data.count ?? 0); }; const click = () => tool.state.add(['count'], 1); button.addEventListener('click', click); const off = tool.on('change', draw); draw(); return () => { button.removeEventListener('click', click); off(); }; }",
+    fallbackHtml: '<p>Counter</p>',
+    summary: 'A counter that counts up.',
   },
   state: { count: 0 },
 };
