@@ -147,4 +147,40 @@ describe('a live-room checkpoint is only reported done once its bytes are durabl
     expect((await checkpoint.attempt(filePath())).kind).toBe('ok');
     expect(await fs.readFile(pageStatePath(dir, NAME), 'utf8')).toContain('edit-1');
   });
+
+  test('document rename followed by fsync failure stays dirty and reports transient', async () => {
+    const originalSync = writeQueue.syncDirectory;
+    const sync = jest.spyOn(writeQueue, 'syncDirectory').mockImplementation(async (directory) => {
+      if (directory === dir) throw Object.assign(new Error('document directory sync failed'), { code: 'EIO' });
+      return originalSync(directory);
+    });
+
+    const saved = await request(server)
+      .post('/_/save')
+      .set('Page-URL', `http://127.0.0.1:${server.address().port}/${NAME}`)
+      .set('Content-Type', 'text/plain')
+      .send(FIXTURE.html);
+    expect(saved.status).toBe(200);
+
+    const target = authority.bindTarget({ rootId: 'root-a', logicalPath: NAME, canonicalPath: filePath() });
+    const room = await authority.roomFor(target, () => ({
+      rootId: 'root-a', logicalPath: NAME, canonicalPath: filePath(), identity: target.identity,
+    }));
+    const edited = authority.rooms.apply(room, 'editor', {
+      name: 'page', n: 1, epoch: room.epoch, pageGeneration: room.pageTransition?.id ?? null,
+      ops: [{ op: 'set', path: ['y', 'edit-1'], value: FIXTURE.update }],
+    });
+    expect(edited.error).toBeUndefined();
+    expect(authority.roomIsDirty(room)).toBe(true);
+
+    const before = await fs.readFile(filePath(), 'utf8');
+
+    const result = await checkpoint.attempt(filePath());
+
+    const after = await fs.readFile(filePath(), 'utf8');
+    expect(after).not.toBe(before);
+    expect(await fs.readFile(pageStatePath(dir, NAME), 'utf8')).toContain('edit-1');
+    expect(result).toMatchObject({ kind: 'transient', reason: 'operation-failed' });
+    expect(authority.roomIsDirty(room)).toBe(true);
+  });
 });

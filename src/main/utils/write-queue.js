@@ -204,7 +204,10 @@ async function atomicWriteFile(filePath, content, encoding = 'utf8', beforeRenam
     try {
       await module.exports.syncDirectory(path.dirname(filePath));
     } catch (error) {
-      if (durable && !DIR_SYNC_UNSUPPORTED.has(error && error.code)) throw error;
+      if (durable && !DIR_SYNC_UNSUPPORTED.has(error && error.code)) {
+        if (error) error.afterRename = true;
+        throw error;
+      }
     }
   } catch (error) {
     if (handle) {
