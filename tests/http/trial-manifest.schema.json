@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hyperclay.local/tests/http/trial-manifest.schema.json",
+  "title": "Host HTTP trial manifest",
+  "description": "The record a later run fills in: what v1.36.0 is, what the candidate is, which contract and case inventory were used, and the runs made against them. No results are recorded here.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "baseline",
+    "candidate",
+    "contract",
+    "rootSnapshot",
+    "caseInventorySha256",
+    "runs",
+    "verdict"
+  ],
+  "properties": {
+    "schema": { "const": 1 },
+    "baseline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "source", "artifactSha256", "lockSha256"],
+      "properties": {
+        "version": { "type": "string", "minLength": 1 },
+        "source": { "type": "string", "minLength": 1 },
+        "artifactSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "lockSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["htmlclaySource", "localSource", "goBinarySha256", "jsWorkerSha256", "cgoEnabled"],
+      "properties": {
+        "htmlclaySource": { "type": "string", "minLength": 1 },
+        "localSource": { "type": "string", "minLength": 1 },
+        "goBinarySha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "jsWorkerSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "cgoEnabled": { "const": false }
+      }
+    },
+    "contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "integrity", "manifestSha256"],
+      "properties": {
+        "version": { "type": "string", "minLength": 1 },
+        "integrity": { "type": "string", "minLength": 1 },
+        "manifestSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "rootSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["manifestSha256", "baselineCopy", "candidateCopy"],
+      "properties": {
+        "manifestSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "baselineCopy": { "type": "string", "minLength": 1 },
+        "candidateCopy": { "type": "string", "minLength": 1 }
+      }
+    },
+    "caseInventorySha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "runs": { "type": "array" },
+    "verdict": { "enum": ["not-run", "pass", "fail", "could-not-demonstrate"] }
+  }
+}

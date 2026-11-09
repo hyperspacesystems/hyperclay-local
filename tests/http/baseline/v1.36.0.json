@@ -1,0 +1,972 @@
+{
+  "schema": 1,
+  "version": "1.36.0",
+  "source": {
+    "commit": "df34a51"
+  },
+  "artifact": {
+    "name": "HyperclayLocal-1.36.0-arm64-mac.zip",
+    "sha512": "ZpAuKLN7yTmE2vuNjXqVLxUjmSdW38okXyBUPppJwTNy1X1VFvNtD8m6eczCHFlrE5GaIBl+o4sTMn2T840Y9g==",
+    "asarFilesCompared": 890,
+    "verified": true
+  },
+  "lockSha256": "8cbd01f20ef86bceacbaed1390656fe9a90b67d1338488ea8b72e0212bd2a11b",
+  "contractVersion": 1,
+  "report": {
+    "schema": 1,
+    "hostBuild": {
+      "version": "1.36.0",
+      "source": "<tmp>"
+    },
+    "profile": "local-full",
+    "startedAt": "2026-11-09T19:30:10.871Z",
+    "finishedAt": "2026-11-09T19:30:13.010Z",
+    "cases": [
+      {
+        "id": "origin.absent",
+        "status": "pass",
+        "detail": "ok",
+        "requests": [
+          {
+            "root": "root-a",
+            "method": "POST",
+            "path": "/_/save",
+            "status": 200,
+            "headers": {
+              "content-type": "application/json; charset=utf-8",
+              "etag": "W/\"3d-O+d4XTnOg8COHnzLo+3CVbmPqK4\""
+            }
+          }
+        ],
+        "before": "54185b755fc972a07e576c612598e28542bfb0a745a44744f25fddf617d01d10",
+        "after": "f734f1c3b2cdb9f2cd7c7492aa8c990457be9a28e123c9b8eea135385800eee1"
+      },
+      {
+        "id": "origin.own-port",
+        "status": "pass",
+        "detail": "ok",
+        "requests": [
+          {
+            "root": "root-a",
+            "method": "POST",
+            "path": "/_/save",
+            "status": 200,
+            "headers": {
+              "content-type": "application/json; charset=utf-8",
+              "etag": "W/\"3d-nH5Y66K0tAJFDYdwiWxr3ram5As\""
+            }
+          }
+        ],
+        "before": "41b8232ccfb1b0aab5da9a4e9df385589b5af3ceb00d39b1833b9b71955e2843",
+        "after": "6b1ab821140dded20ae0597e1594b3caced82b5c05540ee38dc8cc23edbfc6b4"
+      },
+      {
+        "id": "origin.foreign",
+        "status": "pass",
+        "detail": "ok",
+        "requests": [
+          {
+            "root": "root-a",
+            "method": "POST",
+            "path": "/_/save",
+            "status": 403,
+            "headers": {
+              "content-type": "application/json; charset=utf-8",
+              "etag": "W/\"42-PRZnoGODbU6vamWTU7neO1WPQnk\""
+            }
+          }
+        ],
+        "before": "0f26997e5b73afc70e8590d24344e3d2fb10db13cab8b9830e5fd7cddf8bdee9",
+        "after": "0f26997e5b73afc70e8590d24344e3d2fb10db13cab8b9830e5fd7cddf8bdee9"
+      },
+      {
+        "id": "origin.null",
+        "status": "pass",
+        "detail": "ok",
+        "requests": [
+          {
+            "root": "root-a",
+            "method": "POST",
+            "path": "/_/save",
+            "status": 403,
+            "headers": {
+              "content-type": "application/json; charset=utf-8",
+              "etag": "W/\"42-PRZnoGODbU6vamWTU7neO1WPQnk\""
+            }
+          }
+        ],
+        "before": "534f1df9fd73623f654bc15fda284e99aee503c25fc8ee755dedac408985aad0",
+        "after": "534f1df9fd73623f654bc15fda284e99aee503c25fc8ee755dedac408985aad0"
+      },
+      {
+        "id": "cookie.on-document",
+        "status": "pass",
+        "detail": "ok",
+        "requests": [
+          {
+            "root": "root-a",
+            "method": "GET",
+            "path": "/cookie/document.html",
+            "status": 200,
+            "headers": {
+              "content-type": "text/html; charset=utf-8",
+              "etag": "W/\"a5-W+YV+uUGCJPG5l/lzMXRkbHd+8U\"",
+              "vary": "Clay-Source"
+            }
+          }
+        ],
+        "before": "c9912699654ae01ff0974c72a0ed0ec977a718ae723e4409ce249999f679d9ed",
+        "after": "c9912699654ae01ff0974c72a0ed0ec977a718ae723e4409ce249999f679d9ed"
+      },
+      {
+        "id": "cookie.on-non-document",
+        "status": "pass",
+        "detail": "ok",
+        "requests": [
+          {
+            "root": "root-a",
+            "method": "GET",
+            "path": "/_/meta",
+            "status": 200,
+            "headers": {
+              "content-type": "application/json; charset=utf-8",
+              "etag": "W/\"1e8-lyFrbXUCGp1EJ1RklRDibNK4vcU\"",
+              "cache-control": "private, no-store"
+            }
+          }
+        ],
+        "before": "c1b9f6f197d219d28c291ba68571b60b70734da75ff7f99c555e3c6409947187",
+        "after": "c1b9f6f197d219d28c291ba68571b60b70734da75ff7f99c555e3c6409947187"
+      },
+      {
+        "id": "save.tokenless-document-url",
+        "status": "pass",
+        "detail": "ok",
+        "requests": [
+          {
+            "root": "root-a",
+            "method": "POST",
+            "path": "/_/save",
+            "status": 200,
+            "headers": {
+              "content-type": "application/json; charset=utf-8",
+              "etag": "W/\"3d-k0blgGlrRwr1F2nwNzLl75QvOcg\""
+            }
+          }
+        ],
+        "before": "2e2c7a87e5c3b8d7e5871b24f7a1c598230d3245623768fd6b559f365021d8a0",
+        "after": "175c4c3530b8e2dc33f552b35b1c63f198132892a63eb2fbe0d6392dbbfe70e0"
+      },
+      {
+        "id": "save.legacy-bare-route",
+        "status": "pass",
+        "detail": "ok",
+        "requests": [
+          {
+            "root": "root-a",
+            "method": "POST",
+            "path": "/save",
+            "status": 200,
+            "headers": {
+              "content-type": "application/json; charset=utf-8",
+              "etag": "W/\"3d-PONNi/E/xbA6fhc63vR1BQqKY9c\""
+            }
+          }
+        ],
+        "before": "3c060aeb73d7ffd1e0ef60a805cf6bb6c50825d129734165ae26970d3c8d7267",
+        "after": "d840b7a7fb51c647baefe814e52527a7fc5c0163cd5fa0d8ee3a376239bea6c8"
+      },
+      {
+        "id": "precondition.missing-if-match",
+        "status": "pass",
+        "detail": "ok",
+        "requests": [
+          {
+            "root": "root-a",
+            "method": "POST",
+            "path": "/_/save",
+            "status": 200,
+            "headers": {
+              "content-type": "application/json; charset=utf-8",
+              "etag": "W/\"3d-DYFocmW70qq+9frQTjZeNLdp4U8\""
+            }
+          }
+        ],
+        "before": "f965d9767f8a19d5fba43534961bb938effd78dee081e7edae91811a3404fd10",
+        "after": "b5810f3da3f5206a4ef85d8684adebd0e65ea92452689c6de4bdf91e2c67e312"
+      },
+      {
+        "id": "precondition.empty-if-match",
+        "status": "pass",
+        "detail": "ok",
+        "requests": [
+          {
+            "root": "root-a",
+            "method": "POST",
+            "path": "/_/save",
+            "status": 412,
+            "headers": {
+              "content-type": "application/json; charset=utf-8",
+              "etag": "W/\"9d-51/m/B+qYkDeZUYTjk6aLB4dIoc\""
+            }
+          }
+        ],
+        "before": "b1a50b9eea34f1e099274cbdacc423c3cdaaaa810bb8a3c5ca2afaba699b0b81",
+        "after": "b1a50b9eea34f1e099274cbdacc423c3cdaaaa810bb8a3c5ca2afaba699b0b81"
+      },
+      {
+        "id": "precondition.unchanged-save",
+        "status": "pass",
+        "detail": "ok",
+        "requests": [
+          {
+            "root": "root-a",
+            "method": "POST",
+            "path": "/_/save",
+            "status": 200,
+            "headers": {
+              "content-type": "application/json; charset=utf-8",
+              "etag": "W/\"3d-ON/NGxl6FYGvXDhy/+FRRJAXyJM\""
+            }
+          },
+          {
+            "root": "root-a",
+            "method": "POST",
+            "path": "/_/save",
+            "status": 200,
+            "headers": {
+              "content-type": "application/json; charset=utf-8",
+              "etag": "W/\"3d-ON/NGxl6FYGvXDhy/+FRRJAXyJM\""
+            }
+          }
+        ],
+        "before": "e37a8549d56ce3f3c36dec8bc30970dba331b7d2bd9d5bd03cd0e2faf6b619bc",
+        "after": "adac1a8fd4c232f678f19ec171f9639c8df0241b16525bf9587a7084cff0aa9d"
+      },
+      {
+        "id": "precondition.competing-saves",
+        "status": "pass",
+        "detail": "ok",
+        "requests": [
+          {
+            "root": "root-a",
+            "method": "POST",
+            "path": "/_/save",
+            "status": 200,
+            "headers": {
+              "content-type": "application/json; charset=utf-8",
+              "etag": "W/\"3d-jw9MJ9+5XbapqQwzJCqkLEj0hbY\""
+            }
+          },
+          {
+            "root": "root-a",
+            "method": "POST",
+            "path": "/_/save",
+            "status": 200,
+            "headers": {
+              "content-type": "application/json; charset=utf-8",
+              "etag": "W/\"3d-+Cg5EmMyGetQy6D8vXK+72Twv+s\""
+            }
+          },
+          {
+            "root": "root-a",
+            "method": "POST",
+            "path": "/_/save",
+            "status": 412,
+            "headers": {
+              "content-type": "application/json; charset=utf-8",
+              "etag": "W/\"bb-ozAhrBraKsz5csLuUQovxyfZsk0\""
+            }
+          }
+        ],
+        "before": "f9b9595556283f2addf1fe9cb5f70e1cbfe0c0f005d52e84e259ab41350fead3",
+        "after": "27294b463dc5e83d4742870bb35ce4ffec9c46c17a7752fc10b3de230019646a"
+      },
+      {
+        "id": "alias.token-attributes",
+        "status": "pass",
+        "detail": "ok",
+        "requests": [
+          {
+            "root": "root-a",
+            "method": "POST",
+            "path": "/_/save",
+            "status": 200,
+            "headers": {
+              "content-type": "application/json; charset=utf-8",
+              "etag": "W/\"3d-qAyoKH3qLpglE/SUjAdae7o63Fw\""
+            }
+          }
+        ],
+        "before": "59d8d9e60be3ef6f6c8af9c828f1c5eb38641982183311c27700e16ab1a1aadb",
+        "after": "f03a044661b3f39aee352de60115df7703a179f1e12367813350d04244f26fe5"
+      },
+      {
+        "id": "receipt.lost-response",
+        "status": "pass",
+        "detail": "ok",
+        "requests": [
+          {
+            "root": "root-a",
+            "method": "POST",
+            "path": "/_/save",
+            "status": 200,
+            "headers": {
+              "content-type": "application/json; charset=utf-8",
+              "etag": "W/\"3d-zs5UL0ysLB2kdFIPTccKjLMxjrM\""
+            }
+          },
+          {
+            "root": "root-a",
+            "method": "GET",
+            "path": "/_/meta",
+            "status": 200,
+            "headers": {
+              "content-type": "application/json; charset=utf-8",
+              "etag": "W/\"20b-C9h9FWyswVHcIC2XlGihA8Tu9HA\"",
+              "cache-control": "private, no-store"
+            }
+          },
+          {
+            "root": "root-a",
+            "method": "POST",
+            "path": "/_/save",
+            "status": 412,
+            "headers": {
+              "content-type": "application/json; charset=utf-8",
+              "etag": "W/\"dd-gfrRY5g1AWk3V7JlpoURWkqeZos\""
+            }
+          }
+        ],
+        "before": "bcf863400d154faf27ff25b383c49a8d42a8ac85302e72b385b4228bff5bb2db",
+        "after": "ff90a75c922c67decb64e4577fddd78852d1190e89fbab7c3c937ff044052fc9"
+      },
+      {
+        "id": "receipt.foreign-save-not-overwritten",
+        "status": "pass",
+        "detail": "ok",
+        "requests": [
+          {
+            "root": "root-a",
+            "method": "POST",
+            "path": "/_/save",
+            "status": 200,
+            "headers": {
+              "content-type": "application/json; charset=utf-8",
+              "etag": "W/\"3d-wYLQhndjcFqInomzS1E6y8dK4D4\""
+            }
+          },
+          {
+            "root": "root-a",
+            "method": "GET",
+            "path": "/_/meta",
+            "status": 200,
+            "headers": {
+              "content-type": "application/json; charset=utf-8",
+              "etag": "W/\"20a-JHLfbdFqGGGWDhoe9zXmNBk2zgc\"",
+              "cache-control": "private, no-store"
+            }
+          },
+          {
+            "root": "root-a",
+            "method": "POST",
+            "path": "/_/save",
+            "status": 200,
+            "headers": {
+              "content-type": "application/json; charset=utf-8",
+              "etag": "W/\"3d-9O+yiuLvTIx5RXiV3GgwmyjAuuo\""
+            }
+          },
+          {
+            "root": "root-a",
+            "method": "POST",
+            "path": "/_/save",
+            "status": 412,
+            "headers": {
+              "content-type": "application/json; charset=utf-8",
+              "etag": "W/\"b9-AFt2qcrZeHHK0IvzMiD5zoD0xlI\""
+            }
+          }
+        ],
+        "before": "0f1a04a43d55355307b89d88912c0bdeb38bfc777513f5c86edc3faed14e4dd7",
+        "after": "e5e99327846e1c99846fb6209a8d093da7823914959d52d09f28ff5248aadae8"
+      },
+      {
+        "id": "workspace.iframe-credential",
+        "status": "pass",
+        "detail": "ok",
+        "requests": [
+          {
+            "root": "root-a",
+            "method": "GET",
+            "path": "/iframe/credential.html",
+            "status": 200,
+            "headers": {
+              "content-type": "text/html; charset=utf-8",
+              "etag": "W/\"9d-GrxYgq8M4w74/853BAlP6sjQGkc\"",
+              "vary": "Clay-Source"
+            }
+          },
+          {
+            "root": "root-a",
+            "method": "POST",
+            "path": "/_/save",
+            "status": 200,
+            "headers": {
+              "content-type": "application/json; charset=utf-8",
+              "etag": "W/\"5f-E94q9xnivGobYw6bLS+SkSo4ayc\""
+            }
+          }
+        ],
+        "before": "b18ba245a503a8738926db17f377259433047c4bf5dff7b5ed90757617cddcfc",
+        "after": "8b90c1129d9637c1b88eb2bb3270cb4e923a924320a931d283ae82c39c1c8010"
+      },
+      {
+        "id": "upload.root-relative-url",
+        "status": "pass",
+        "detail": "ok",
+        "requests": [
+          {
+            "root": "root-a",
+            "method": "POST",
+            "path": "/_/upload",
+            "status": 200,
+            "headers": {
+              "content-type": "application/json; charset=utf-8",
+              "etag": "W/\"a1-8HdQXdIXXZlXK63GOQeYaxLq8rE\""
+            }
+          }
+        ],
+        "before": "02d70e93d96e3f1da25486c54d29653e9d9be7088d0d19e32445213b0d9eb226",
+        "after": "02d70e93d96e3f1da25486c54d29653e9d9be7088d0d19e32445213b0d9eb226"
+      },
+      {
+        "id": "upload.binary-bytes",
+        "status": "pass",
+        "detail": "ok",
+        "requests": [
+          {
+            "root": "root-a",
+            "method": "POST",
+            "path": "/_/upload",
+            "status": 200,
+            "headers": {
+              "content-type": "application/json; charset=utf-8",
+              "etag": "W/\"9d-geHBhMt3MHFsBPbYyPYwMxDtBoM\""
+            }
+          }
+        ],
+        "before": "3e65d389db4ae3c4593b6ae48ff186c2233f8056236e8347788df1dc222d7caa",
+        "after": "3e65d389db4ae3c4593b6ae48ff186c2233f8056236e8347788df1dc222d7caa"
+      },
+      {
+        "id": "upload.nested-directories",
+        "status": "pass",
+        "detail": "ok",
+        "requests": [
+          {
+            "root": "root-a",
+            "method": "POST",
+            "path": "/_/upload",
+            "status": 200,
+            "headers": {
+              "content-type": "application/json; charset=utf-8",
+              "etag": "W/\"8e-/RqOXHjoFRkk50IrnSn8Iz/26IM\""
+            }
+          }
+        ],
+        "before": "f660a7996deacfbc7560e4240054a8ad82eb02fe25a95064257e07084bcacb85",
+        "after": "f660a7996deacfbc7560e4240054a8ad82eb02fe25a95064257e07084bcacb85"
+      },
+      {
+        "id": "upload.missing-404",
+        "status": "pass",
+        "detail": "ok",
+        "requests": [
+          {
+            "root": "root-a",
+            "method": "GET",
+            "path": "/_/uploads/assets-missing/no-such-file.png",
+            "status": 404,
+            "headers": {
+              "content-type": "text/html; charset=utf-8",
+              "etag": "W/\"e-oi6cO2qfXHDeT3akZIEOy6H7l8M\""
+            }
+          },
+          {
+            "root": "root-a",
+            "method": "POST",
+            "path": "/_/upload",
+            "status": 404,
+            "headers": {
+              "content-type": "application/json; charset=utf-8",
+              "etag": "W/\"4c-z2yyi9lKV3PZX0wg1o5a3a1E36s\""
+            }
+          }
+        ],
+        "before": null,
+        "after": null
+      },
+      {
+        "id": "upload.html-not-privileged",
+        "status": "pass",
+        "detail": "ok",
+        "requests": [
+          {
+            "root": "root-a",
+            "method": "POST",
+            "path": "/_/upload",
+            "status": 415,
+            "headers": {
+              "content-type": "application/json; charset=utf-8",
+              "etag": "W/\"5b-PcG30Wjyoys6PWrez2zgwqYyLDs\""
+            }
+          }
+        ],
+        "before": "5b412c9f6faf9f019c791fab408d1e42c83479a98ee0df1adcaae4f2ef931911",
+        "after": "5b412c9f6faf9f019c791fab408d1e42c83479a98ee0df1adcaae4f2ef931911"
+      },
+      {
+        "id": "root.isolation-document-url",
+        "status": "pass",
+        "detail": "ok",
+        "requests": [
+          {
+            "root": "root-a",
+            "method": "POST",
+            "path": "/_/save",
+            "status": 200,
+            "headers": {
+              "content-type": "application/json; charset=utf-8",
+              "etag": "W/\"3d-ULHCoUg7ikhejt9YYJmWhdPMjjw\""
+            }
+          },
+          {
+            "root": "root-a",
+            "method": "POST",
+            "path": "/_/save",
+            "status": 200,
+            "headers": {
+              "content-type": "application/json; charset=utf-8",
+              "etag": "W/\"3d-gLJd1O5Cg4q1CsZbdKPBjW1sIH8\""
+            }
+          }
+        ],
+        "before": "b06c865df62e7c9d53a6899504f024adbca6ae372d8b1f657e3caaded8ed8df1",
+        "after": "104d15dc360431a6c5c175c765bc4aa393ab3e75a8c1bee63bf8a2bd3f3d9aa6"
+      },
+      {
+        "id": "history.list-read-restore",
+        "status": "pass",
+        "detail": "ok",
+        "requests": [
+          {
+            "root": "root-a",
+            "method": "GET",
+            "path": "/_/versions/history/sample.html",
+            "status": 200,
+            "headers": {
+              "content-type": "application/json; charset=utf-8",
+              "etag": "W/\"8f-L/+S97v8Ry0WO1Zq96N6ObXQT/4\"",
+              "cache-control": "no-store"
+            }
+          },
+          {
+            "root": "root-a",
+            "method": "GET",
+            "path": "/_/version/history/sample.html/2026-11-09-14-29-11-561-0500.html",
+            "status": 200,
+            "headers": {
+              "content-type": "text/html; charset=utf-8",
+              "etag": "W/\"85-vX5AdKv0onL9b2B9FWteP0esnBU\"",
+              "cache-control": "no-store"
+            }
+          },
+          {
+            "root": "root-a",
+            "method": "POST",
+            "path": "/_/restore/history/sample.html/2026-11-09-14-29-11-561-0500.html",
+            "status": 200,
+            "headers": {
+              "content-type": "application/json; charset=utf-8",
+              "etag": "W/\"52-mY2jIGvY3bi3M37o6D9wViZCBfs\"",
+              "cache-control": "no-store"
+            }
+          },
+          {
+            "root": "root-a",
+            "method": "GET",
+            "path": "/_/versions/history/sample.html",
+            "status": 200,
+            "headers": {
+              "content-type": "application/json; charset=utf-8",
+              "etag": "W/\"153-pFB3KbTyDW43e1QK7cl1p5fE0BI\"",
+              "cache-control": "no-store"
+            }
+          }
+        ],
+        "before": "75d44a381acba48a8b61821ef5080f0ac891a6a1da8764fbf261c4aa989872fd",
+        "after": "01a083d5377679d5ead619441ce1d82f5ef0d86fab5edcbbe63308eb2bbc1833"
+      },
+      {
+        "id": "history.restore-no-stale-save-id",
+        "status": "pass",
+        "detail": "ok",
+        "requests": [
+          {
+            "root": "root-a",
+            "method": "POST",
+            "path": "/_/save",
+            "status": 200,
+            "headers": {
+              "content-type": "application/json; charset=utf-8",
+              "etag": "W/\"3d-blmVia5DMjNsc83zwhmN3ERnNaU\""
+            }
+          },
+          {
+            "root": "root-a",
+            "method": "POST",
+            "path": "/_/save",
+            "status": 200,
+            "headers": {
+              "content-type": "application/json; charset=utf-8",
+              "etag": "W/\"5d-lKsWLaWGVqLjRdKZYIOdQMOBDK0\""
+            }
+          },
+          {
+            "root": "root-a",
+            "method": "GET",
+            "path": "/_/meta",
+            "status": 200,
+            "headers": {
+              "content-type": "application/json; charset=utf-8",
+              "etag": "W/\"208-CL6DtqQUkms2aqpJpQ76mSNUTPE\"",
+              "cache-control": "private, no-store"
+            }
+          },
+          {
+            "root": "root-a",
+            "method": "POST",
+            "path": "/_/restore/history/receipt.html/2026-11-09-14-29-11-661-0500.html",
+            "status": 200,
+            "headers": {
+              "content-type": "application/json; charset=utf-8",
+              "etag": "W/\"52-1M9uA5bVrgv/CbvPCtIb3ENXhfM\"",
+              "cache-control": "no-store"
+            }
+          },
+          {
+            "root": "root-a",
+            "method": "GET",
+            "path": "/_/versions/history/receipt.html",
+            "status": 200,
+            "headers": {
+              "content-type": "application/json; charset=utf-8",
+              "etag": "W/\"27a-JFVmbXVK6yPjckvSaWiX1gfjUBA\"",
+              "cache-control": "no-store"
+            }
+          },
+          {
+            "root": "root-a",
+            "method": "GET",
+            "path": "/_/version/history/receipt.html/2026-11-09-14-30-11-679-0500.html",
+            "status": 200,
+            "headers": {
+              "content-type": "text/html; charset=utf-8",
+              "etag": "W/\"85-AyOSkURKzvYOS3e/yOfdSEuh3MI\"",
+              "cache-control": "no-store"
+            }
+          },
+          {
+            "root": "root-a",
+            "method": "GET",
+            "path": "/_/version/history/receipt.html/2026-11-09-14-30-11-669-0500.html",
+            "status": 200,
+            "headers": {
+              "content-type": "text/html; charset=utf-8",
+              "etag": "W/\"7d-3QYCD6X3HegWn8qOOoIUMiWYV+U\"",
+              "cache-control": "no-store"
+            }
+          },
+          {
+            "root": "root-a",
+            "method": "GET",
+            "path": "/_/version/history/receipt.html/2026-11-09-14-30-11-644-0500.html",
+            "status": 200,
+            "headers": {
+              "content-type": "text/html; charset=utf-8",
+              "etag": "W/\"7d-3QYCD6X3HegWn8qOOoIUMiWYV+U\"",
+              "cache-control": "no-store"
+            }
+          },
+          {
+            "root": "root-a",
+            "method": "GET",
+            "path": "/_/version/history/receipt.html/2026-11-09-14-30-11-621-0500.html",
+            "status": 200,
+            "headers": {
+              "content-type": "text/html; charset=utf-8",
+              "etag": "W/\"7d-PWo3S93+KfYWjKkx48YGwctMBDM\"",
+              "cache-control": "no-store"
+            }
+          },
+          {
+            "root": "root-a",
+            "method": "GET",
+            "path": "/_/version/history/receipt.html/2026-11-09-14-30-11-610-0500.html",
+            "status": 200,
+            "headers": {
+              "content-type": "text/html; charset=utf-8",
+              "etag": "W/\"7f-li79Zfk4evyEBjodvVDevhhYf4c\"",
+              "cache-control": "no-store"
+            }
+          },
+          {
+            "root": "root-a",
+            "method": "GET",
+            "path": "/_/version/history/receipt.html/2026-11-09-14-29-11-661-0500.html",
+            "status": 200,
+            "headers": {
+              "content-type": "text/html; charset=utf-8",
+              "etag": "W/\"85-AyOSkURKzvYOS3e/yOfdSEuh3MI\"",
+              "cache-control": "no-store"
+            }
+          },
+          {
+            "root": "root-a",
+            "method": "GET",
+            "path": "/_/meta",
+            "status": 200,
+            "headers": {
+              "content-type": "application/json; charset=utf-8",
+              "etag": "W/\"1e8-z3iGd11bdzoBKIyZG3wAT/vuOYE\"",
+              "cache-control": "private, no-store"
+            }
+          },
+          {
+            "root": "root-a",
+            "method": "POST",
+            "path": "/_/save",
+            "status": 412,
+            "headers": {
+              "content-type": "application/json; charset=utf-8",
+              "etag": "W/\"9a-vG174Mp3vZGaJRD5yLhfBOwRpxk\""
+            }
+          }
+        ],
+        "before": "bcf863400d154faf27ff25b383c49a8d42a8ac85302e72b385b4228bff5bb2db",
+        "after": "394fbe57673bef69c848d32de644e3ee23ab964932dff6d63b4ec2675bc3663e"
+      },
+      {
+        "id": "page.api-requires-both-preconditions",
+        "status": "pass",
+        "detail": "ok",
+        "requests": [
+          {
+            "root": "root-a",
+            "method": "GET",
+            "path": "/_/api/page/preconditions-395d5a14.html",
+            "status": 200,
+            "headers": {
+              "content-type": "application/json; charset=utf-8",
+              "etag": "0de96d1b2afe05eb",
+              "page-revision": "c6103b88df0d7d27a3abc6a480dd66e70585ae0f5398f2657bbe64ea46ac022e"
+            }
+          },
+          {
+            "root": "root-a",
+            "method": "POST",
+            "path": "/_/api/page/preconditions-395d5a14.html",
+            "status": 428,
+            "headers": {
+              "content-type": "application/json; charset=utf-8",
+              "etag": "0de96d1b2afe05eb"
+            }
+          },
+          {
+            "root": "root-a",
+            "method": "POST",
+            "path": "/_/api/page/preconditions-395d5a14.html",
+            "status": 428,
+            "headers": {
+              "content-type": "application/json; charset=utf-8",
+              "etag": "0de96d1b2afe05eb"
+            }
+          },
+          {
+            "root": "root-a",
+            "method": "POST",
+            "path": "/_/api/page/preconditions-395d5a14.html",
+            "status": 428,
+            "headers": {
+              "content-type": "application/json; charset=utf-8",
+              "etag": "0de96d1b2afe05eb"
+            }
+          },
+          {
+            "root": "root-a",
+            "method": "POST",
+            "path": "/_/api/page/preconditions-395d5a14.html",
+            "status": 200,
+            "headers": {
+              "content-type": "application/json; charset=utf-8",
+              "etag": "880817f52b4ba476",
+              "page-revision": "986777f9c91f699b842ae4ceb7edbcecefdf01f1e6a1ff6422c42e196762b0ba"
+            }
+          }
+        ],
+        "before": "0de96d1b2afe05eb5979d7a21c2b02300c7f4e5e65f16ae6b1fc6f8b3e5bb656",
+        "after": "f9d9526cd5808b35c73498f25f8ae631296d8041d40bbfc0d4efe39108656b58"
+      },
+      {
+        "id": "page.api-stale-refused",
+        "status": "pass",
+        "detail": "ok",
+        "requests": [
+          {
+            "root": "root-a",
+            "method": "GET",
+            "path": "/_/api/page/stale-395d5a14.html",
+            "status": 200,
+            "headers": {
+              "content-type": "application/json; charset=utf-8",
+              "etag": "0de96d1b2afe05eb",
+              "page-revision": "c6103b88df0d7d27a3abc6a480dd66e70585ae0f5398f2657bbe64ea46ac022e"
+            }
+          },
+          {
+            "root": "root-a",
+            "method": "POST",
+            "path": "/_/api/page/stale-395d5a14.html",
+            "status": 200,
+            "headers": {
+              "content-type": "application/json; charset=utf-8",
+              "etag": "12af4d246e2be1bc",
+              "page-revision": "440bb8829d447863e4d2ddc2e69ec40a20af955f4b32cd3b6bb287d2e94ede39"
+            }
+          },
+          {
+            "root": "root-a",
+            "method": "GET",
+            "path": "/_/api/page/stale-395d5a14.html",
+            "status": 200,
+            "headers": {
+              "content-type": "application/json; charset=utf-8",
+              "etag": "12af4d246e2be1bc",
+              "page-revision": "440bb8829d447863e4d2ddc2e69ec40a20af955f4b32cd3b6bb287d2e94ede39"
+            }
+          },
+          {
+            "root": "root-a",
+            "method": "POST",
+            "path": "/_/api/page/stale-395d5a14.html",
+            "status": 409,
+            "headers": {
+              "content-type": "application/json; charset=utf-8",
+              "etag": "12af4d246e2be1bc",
+              "page-revision": "440bb8829d447863e4d2ddc2e69ec40a20af955f4b32cd3b6bb287d2e94ede39"
+            }
+          }
+        ],
+        "before": "0de96d1b2afe05eb5979d7a21c2b02300c7f4e5e65f16ae6b1fc6f8b3e5bb656",
+        "after": "76ccf1a37a9cae2dd8df4fe4c537cafafd0122c6ce8be92d881c70c102746f57"
+      },
+      {
+        "id": "page.api-preserves-dirty-room",
+        "status": "pass",
+        "detail": "ok",
+        "requests": [
+          {
+            "root": "root-a",
+            "method": "GET",
+            "path": "/_/api/page/dirty-395d5a14.html",
+            "status": 200,
+            "headers": {
+              "content-type": "application/json; charset=utf-8",
+              "etag": "0de96d1b2afe05eb",
+              "page-revision": "34c3d641f7a6e6c487980257e635724bd794d80b2360f20f990037568bbb7c51"
+            }
+          },
+          {
+            "root": "root-a",
+            "method": "POST",
+            "path": "/_/api/page/dirty-395d5a14.html",
+            "status": 200,
+            "headers": {
+              "content-type": "application/json; charset=utf-8",
+              "etag": "c499488321e75eb5",
+              "page-revision": "80235f57ba7f23d3d9e7b9303fd65191d5321ee14e8a0831a8c3e18d5fbfb0b4"
+            }
+          }
+        ],
+        "before": "0de96d1b2afe05eb5979d7a21c2b02300c7f4e5e65f16ae6b1fc6f8b3e5bb656",
+        "after": "11a0ead1523858740068c94825d560296cde76c0d6ff6f227fbe92e2bb59a5ca"
+      },
+      {
+        "id": "checkpoint.last-participant-leaves",
+        "status": "pass",
+        "detail": "ok",
+        "requests": [],
+        "before": "0389fda29695055e21b34900f0b43f9b8eb4498659e19ac1ca1eb1df292b6d50",
+        "after": "8f24f6b864001a5e4658d339f4c9ecdd77e35d5cfb277be6aba1f6e559f819ce"
+      },
+      {
+        "id": "checkpoint.survives-restart",
+        "status": "pass",
+        "detail": "ok",
+        "requests": [
+          {
+            "root": "root-a",
+            "method": "GET",
+            "path": "/checkpoint/restart-ed7500da.html",
+            "status": 200,
+            "headers": {
+              "content-type": "text/html; charset=utf-8",
+              "etag": "W/\"456-CdneYCoxiXuibJpjxjzwrqotq1g\"",
+              "vary": "Clay-Source"
+            }
+          }
+        ],
+        "before": "0389fda29695055e21b34900f0b43f9b8eb4498659e19ac1ca1eb1df292b6d50",
+        "after": "64a70123fdca05d45465e7d83cc0900c5983a50babe553d9750707e60f1a730e"
+      },
+      {
+        "id": "alias.frozen-client",
+        "status": "pass",
+        "detail": "ok",
+        "requests": [
+          {
+            "root": "root-a",
+            "method": "GET",
+            "path": "/alias/frozen-client.html",
+            "status": 200,
+            "headers": {
+              "content-type": "text/html; charset=utf-8",
+              "etag": "W/\"2e9-xf6PPYUIl6ePRWzBOWW9HOABEus\"",
+              "vary": "Clay-Source"
+            }
+          },
+          {
+            "root": "root-a",
+            "method": "POST",
+            "path": "/_/save/no-token",
+            "status": 404,
+            "headers": {
+              "content-type": "text/html; charset=utf-8",
+              "etag": "W/\"e-oi6cO2qfXHDeT3akZIEOy6H7l8M\""
+            }
+          }
+        ],
+        "before": "4a09ed8b8e15690f3957934e5ccc0453fdfa7c66d9c16cbc7c5fbed7cededde8",
+        "after": "4a09ed8b8e15690f3957934e5ccc0453fdfa7c66d9c16cbc7c5fbed7cededde8"
+      }
+    ],
+    "pending": [],
+    "summary": {
+      "pass": 30,
+      "fail": 0,
+      "pending": 0
+    },
+    "complete": true
+  }
+}
