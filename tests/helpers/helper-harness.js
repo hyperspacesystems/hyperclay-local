@@ -134,6 +134,7 @@ function fakeHelpers(state, options, account) {
       enabled: () => (typeof enabled === 'function' ? enabled() : enabled ?? true),
       run: aiEdit.run || (async () => ({ html: '<p>edited</p>', model: 'mock', stopReason: 'end_turn' })),
     },
+    ...(options.pageTool ? { pageTool: options.pageTool } : {}),
   };
 }
 

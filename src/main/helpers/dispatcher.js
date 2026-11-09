@@ -35,6 +35,7 @@ const WAITING_TEXT = 'Waiting for your approval in Hyperclay Local';
 const DENIED_TEXT = 'You denied this program for this document. Change it in Options > Helper Programs.';
 const NOT_ALLOWED_TEXT = 'You did not allow this program for this document.';
 const AI_EDIT_OFF_TEXT = "AI Editing is off. Turn it on in Hyperclay Local's Options.";
+const AI_TOOL_UNAVAILABLE_TEXT = 'AI tools are not available here right now.';
 
 // helperProgramAvailable, helper.go:519-525: a program that is not a regular
 // file, or that lost its execute bit, answers no request and reads as
@@ -117,6 +118,17 @@ function createHelperDispatcher({ baseDir, helpers, backupBaseline, logger = con
       .map(name => ({ name, state: stateOf(settings, filePath, name, account) }));
     if (HELPER_DOCUMENT.test(filePath)) {
       list.push({ name: 'ai-edit', state: aiEditReady() ? 'ready' : 'unavailable' });
+      // page-tool is built in too, but only where the vendored runtime carries
+      // the prompt files it needs: a host without them must not offer it.
+      if (helpers.pageTool) {
+        let prompts = null;
+        try {
+          prompts = await helpers.pageTool.prompts();
+        } catch {
+          prompts = null;
+        }
+        if (prompts) list.push({ name: 'page-tool', state: aiEditReady() ? 'ready' : 'unavailable' });
+      }
     }
     return list;
   }
@@ -330,6 +342,93 @@ function createHelperDispatcher({ baseDir, helpers, backupBaseline, logger = con
       } catch (err) {
         if (controller.signal.aborted) {
           refuse(publish, env, 'helper_cancelled', 'helper cancelled');
+        } else {
+          const code = typeof err?.code === 'string' && err.code ? err.code : 'helper_failed';
+          publishFrame(publish, env, {
+            type: 'wire/error',
+            text: String(err?.message || err),
+            payload: { source: 'application', code },
+          });
+        }
+      } finally {
+        clearTimeout(budget);
+        live.delete(liveKey);
+        aiEditRunning.delete(filePath);
+      }
+      return;
+    }
+
+    // page-tool is built in beside ai-edit: the same toggle, the same
+    // one-run-per-document guard, and no approval. Its request and reply are
+    // checked by the ported contract, not by the page.
+    if (name === 'page-tool') {
+      if (!aiEditReady()) {
+        refuse(publish, env, 'helper_not_granted', AI_EDIT_OFF_TEXT);
+        return;
+      }
+      if (env.type === 'wire/describe') {
+        refuse(publish, env, 'invalid_type', 'page-tool does not support wire/describe');
+        return;
+      }
+      if (document === 'edit') {
+        refuse(publish, env, 'helper_protocol_unsupported', 'a tool request cannot ask for the page itself');
+        return;
+      }
+      if (!helpers.pageTool) {
+        refuse(publish, env, 'helper_unavailable', AI_TOOL_UNAVAILABLE_TEXT);
+        return;
+      }
+      let prompts = null;
+      try {
+        prompts = await helpers.pageTool.prompts();
+      } catch {
+        prompts = null;
+      }
+      if (!prompts) {
+        refuse(publish, env, 'helper_unavailable', AI_TOOL_UNAVAILABLE_TEXT);
+        return;
+      }
+      if (live.has(liveKey)) {
+        refuse(publish, env, 'duplicate_request', 'a request with this id is already running');
+        return;
+      }
+      if (aiEditRunning.has(filePath)) {
+        refuse(publish, env, 'helper_busy', 'an AI edit is already running on this document');
+        return;
+      }
+      publishFrame(publish, env, { type: 'wire/ack', payload: { mode: 'jsonl', budgetMs } });
+      const controller = new AbortController();
+      live.set(liveKey, controller);
+      aiEditRunning.add(filePath);
+      onCancel(env.id, () => controller.abort());
+      let timedOut = false;
+      const budget = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, budgetMs);
+      try {
+        publishFrame(publish, env, { type: 'wire/status', text: 'Making your tool…' });
+        const result = await helpers.pageTool.run(env.payload, {
+          file: filePath,
+          baseDir,
+          settings: helpers.settings(),
+          signal: controller.signal,
+          progress: createProgress(publish, env),
+          prompts,
+        });
+        publishFrame(publish, env, {
+          type: 'wire/done',
+          payload: {
+            requestId: result.requestId ?? env.payload?.requestId ?? env.id,
+            artifact: result.artifact,
+            state: result.state,
+            model: result.model,
+          },
+        });
+      } catch (err) {
+        if (controller.signal.aborted) {
+          if (timedOut) refuse(publish, env, 'helper_timeout', 'helper timed out');
+          else refuse(publish, env, 'helper_cancelled', 'helper cancelled');
         } else {
           const code = typeof err?.code === 'string' && err.code ? err.code : 'helper_failed';
           publishFrame(publish, env, {

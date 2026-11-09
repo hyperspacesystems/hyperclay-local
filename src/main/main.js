@@ -31,6 +31,7 @@ const { servedRootsPath, writeServedRoots, removeServedRoots } = require('./serv
 const { extractOpenPaths, handleOpenPath, htmlClayLauncher } = require('./open-path');
 const { removeProgram, forgetDecisions } = require('./helpers/store');
 const { runAiEdit } = require('./helpers/ai-edit');
+const { runPageTool, loadPrompts } = require('./helpers/page-tool');
 const { rootAccountFor } = require('./helpers/root-account');
 const { aiEditEnabled, toggledAiEdit } = require('./helpers/ai-edit-setting');
 const { currentPerson, cachedCloudPerson, withDiscoveredActor, withoutCloudPerson, withProfile, connected } = require('./profile-state');
@@ -567,6 +568,10 @@ function helpersFor(root) {
     aiEdit: {
       enabled: () => aiEditEnabled(settings),
       run: runAiEdit,
+    },
+    pageTool: {
+      prompts: () => loadPrompts(),
+      run: runPageTool,
     },
   };
 }

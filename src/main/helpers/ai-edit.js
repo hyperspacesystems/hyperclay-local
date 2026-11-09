@@ -216,8 +216,8 @@ function codexArgs(dir, outFile) {
 
 // An agent CLI may start children of its own. On Unix it leads its own process
 // group, and cancel kills the group, so nothing it started outlives the request.
-function spawnAgent(command, args, options, signal) {
-  const child = spawn(command, args, { ...options, detached: process.platform !== 'win32' });
+function spawnAgent(command, args, options, signal, spawner = spawn) {
+  const child = spawner(command, args, { ...options, detached: process.platform !== 'win32' });
   if (!signal) return child;
   const kill = () => {
     try {
@@ -475,4 +475,4 @@ async function runAiEdit(payload, { file, baseDir, settings, signal, progress })
   return { html: result.html, stopReason: result.stopReason, model: result.model };
 }
 
-module.exports = { runAiEdit, resolveEngines, routeEngine, buildUserPrompt, claudeArgs, codexArgs };
+module.exports = { runAiEdit, resolveEngines, routeEngine, buildUserPrompt, claudeArgs, codexArgs, spawnAgent, stripFences };
