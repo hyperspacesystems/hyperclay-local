@@ -16,7 +16,6 @@ const {
   readFile,
   fileExists,
   ensureDirectory,
-  moveFile,
   getLocalUploads,
   readFileBuffer,
   calculateBufferChecksum
@@ -28,7 +27,7 @@ const { SYNC_CONFIG } = require('./constants');
 const nodeMap = require('./node-map');
 const { getConsentRegistry, resolveWritePath } = require('../main/utils/path-resolver');
 const { withStructureChange } = require('../main/utils/write-queue');
-const { withLocalDocumentWrite, withLocalDirectoryChange, withLocalStructureDelete, claimLocalDocumentTarget, structureEntryFor, documentHostFor } = require('./local-boundary');
+const { withLocalDocumentWrite, withLocalDirectoryChange, withLocalStructureDelete, claimLocalDocumentTarget, structureEntryFor, documentHostFor, restructureMove, restructureTrash, requireCommitted } = require('./local-boundary');
 const {
   readPageRecord, applyPageRecord, moveDocumentPageState, moveFolderPageState,
   dropDocumentPageState, dropFolderPageState
@@ -365,12 +364,11 @@ module.exports = {
     const localFilename = entry?.path || fullPath;
     this.resolveContainedPath(localFilename);
     const localPath = path.join(this.syncFolder, localFilename);
-    const trashPath = path.join(this.syncFolder, '.trash', localFilename);
+    const trashRel = path.join('.trash', localFilename);
 
-    const authorityResult = this.localAuthority ? await withLocalStructureDelete(this, localFilename, async (source) => {
-      await ensureDirectory(path.dirname(trashPath));
-      await this._applyRemoteFsChange([localFilename], () => moveFile(source, trashPath));
-    }) : null;
+    const authorityResult = this.localAuthority
+      ? await this._applyRemoteFsChange([localFilename], () => withLocalStructureDelete(this, localFilename, trashRel))
+      : null;
     if (authorityResult?.stale) return;
     if (authorityResult?.missing || (!this.localAuthority && !(await fileExists(localPath)))) {
       console.log(`[SYNC] SSE node-deleted: ${localFilename} not found locally`);
@@ -379,8 +377,7 @@ module.exports = {
     }
 
     if (!this.localAuthority) {
-      await ensureDirectory(path.dirname(trashPath));
-      await this._applyRemoteFsChange([localFilename], () => moveFile(localPath, trashPath));
+      await this._applyRemoteFsChange([localFilename], async () => requireCommitted(await restructureTrash(this, localFilename, trashRel)));
     }
 
     await this.repo.delete(nodeId);
@@ -395,7 +392,8 @@ module.exports = {
     const localFolderPath = entry?.path || fullPath;
     this.resolveContainedPath(localFolderPath);
     const localPath = path.join(this.syncFolder, localFolderPath);
-    const trashPath = path.join(this.syncFolder, '.trash', localFolderPath);
+    const trashRel = path.join('.trash', localFolderPath);
+    const fallbackRel = `${trashRel}.${Date.now()}`;
 
     const descendants = this.repo.walkDescendants(localFolderPath);
 
@@ -403,20 +401,10 @@ module.exports = {
       localFolderPath,
       ...descendants.map(({ entry: e }) => e.path)
     ];
-    const moveToTrash = async (source) => {
-      await ensureDirectory(path.dirname(trashPath));
-      await this._applyRemoteFsChange(oldSidePaths, async () => {
-        try {
-          await moveFile(source, trashPath);
-        } catch (error) {
-          const timestampedTrashPath = `${trashPath}.${Date.now()}`;
-          console.warn(`[SYNC] SSE node-deleted: trash collision, using ${timestampedTrashPath}`);
-          await moveFile(source, timestampedTrashPath);
-        }
-      });
-    };
     const authorityResult = this.localAuthority
-      ? await withLocalStructureDelete(this, localFolderPath, moveToTrash, { isDir: true })
+      ? await this._applyRemoteFsChange(oldSidePaths, () => withLocalStructureDelete(
+        this, localFolderPath, trashRel, { isDir: true, fallbackRel }
+      ))
       : null;
     if (authorityResult?.stale) return;
     if (authorityResult?.missing || (!this.localAuthority && !(await fileExists(localPath)))) {
@@ -430,7 +418,16 @@ module.exports = {
       return;
     }
 
-    if (!this.localAuthority) await moveToTrash(localPath);
+    if (!this.localAuthority) {
+      await this._applyRemoteFsChange(oldSidePaths, async () => {
+        const first = await restructureTrash(this, localFolderPath, trashRel);
+        if (first.outcome === 'failed') {
+          console.warn(`[SYNC] SSE node-deleted: trash collision, using ${fallbackRel}`);
+          return requireCommitted(await restructureTrash(this, localFolderPath, fallbackRel));
+        }
+        return requireCommitted(first);
+      });
+    }
 
     await this.repo.apply(async (map) => {
       for (const { nodeId: descId } of descendants) {
@@ -471,7 +468,8 @@ module.exports = {
       aside = `${stem} (conflicted copy ${n})${ext}`;
     }
     this.cascade.mark([relPath, aside]);
-    await moveFile(full, path.join(this.syncFolder, aside));
+    const result = await restructureMove(this, relPath, aside);
+    if (result.outcome !== 'committed') throw result.error;
     console.warn(`[SYNC] ${relPath} was occupied; moved the occupant to ${aside}`);
     this.emit('file-synced', { file: aside, action: 'conflict-copy', source: 'relocate' });
     return aside;
@@ -511,43 +509,32 @@ module.exports = {
         if (!aside) throw new Error(`No conflicted-copy path available for ${toRel}`);
       }
       const steps = [];
-      if (aside) steps.push({
-        from: destination,
-        to: { location: aside.location, canonical: aside.canonical },
-        fromRel: toRel,
-        toRel: asideRel,
-      });
-      steps.push({
+      const entries = [];
+      if (aside) {
+        steps.push({ from: toRel, to: asideRel });
+        entries.push({
+          from: destination,
+          to: { location: aside.location, canonical: aside.canonical },
+        });
+      }
+      steps.push({ from: fromRel, to: toRel });
+      entries.push({
         from: source,
         to: { location: destination.location, canonical: destination.location },
-        fromRel,
-        toRel,
       });
-      const plan = authority.prepareStructure(token, { rootId: this.rootId, steps });
-      let completed = 0;
-      const copiedSteps = [];
-      let error = null;
-      try {
-        if (aside) {
-          this.cascade.mark([toRel, asideRel]);
-          const moved = await moveFile(destination.location, aside.location);
-          if (moved?.copied) copiedSteps.push(0);
-          completed = 1;
-        }
-        this.cascade.mark([fromRel, toRel]);
-        const moved = await moveFile(source.location, destination.location);
-        if (moved?.copied) copiedSteps.push(steps.length - 1);
-        completed = steps.length;
-      } catch (caught) {
-        error = caught;
-      } finally {
-        try {
-          if (completed) authority.commitStructure(plan, completed, token, { copiedSteps });
-        } finally {
-          authority.releaseStructure(plan, token);
-        }
-      }
-      return { moved: completed === steps.length, aside: completed && asideRel, error };
+      if (aside) this.cascade.mark([toRel, asideRel]);
+      this.cascade.mark([fromRel, toRel]);
+      const restructured = await documentHostFor(this).restructure({
+        kind: 'sync-move',
+        rootId: this.rootId,
+        steps,
+        context: { token, entries },
+      });
+      return {
+        moved: restructured.outcome === 'committed',
+        aside: restructured.completed && asideRel,
+        error: restructured.error ?? null,
+      };
     });
     if (result.aside) {
       console.warn(`[SYNC] ${toRel} was occupied; moved the occupant to ${result.aside}`);
@@ -609,8 +596,8 @@ module.exports = {
     this.cascade.mark([currentPath, newPath]);
 
     if (!(await this._isSameEntry(currentPath, newPath))) await this._moveOccupantAside(newPath);
-    await ensureDirectory(path.dirname(newLocalPath));
-    await moveFile(localPath, newLocalPath);
+    const moved = await restructureMove(this, currentPath, newPath);
+    if (moved.outcome !== 'committed') throw moved.error;
 
     const inode = await nodeMap.getInode(newLocalPath);
     await moveDocumentPageState(this, currentPath, newPath);
@@ -633,7 +620,6 @@ module.exports = {
     }
 
     const localOldPath = path.join(this.syncFolder, oldPath);
-    const localNewPath = path.join(this.syncFolder, newPath);
 
     const descendants = this.repo.walkDescendants(oldPath);
 
@@ -685,9 +671,8 @@ module.exports = {
 
     if (!(await this._isSameEntry(oldPath, newPath))) await this._moveOccupantAside(newPath);
 
-    await ensureDirectory(path.dirname(localNewPath));
-
-    await moveFile(localOldPath, localNewPath);
+    const moved = await restructureMove(this, oldPath, newPath);
+    if (moved.outcome !== 'committed') throw moved.error;
 
     await moveFolderPageState(this, oldPath, newPath);
 

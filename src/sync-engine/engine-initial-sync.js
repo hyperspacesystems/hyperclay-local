@@ -18,10 +18,10 @@ const {
   getLocalFiles,
   getLocalFolders,
   fileExists,
-  moveFile,
   getLocalUploads,
   getFileStats
 } = require('./file-operations');
+const { restructureMove } = require('./local-boundary');
 const { calculateFileChecksum } = require('./utils');
 const { ERROR_PRIORITY } = require('./constants');
 const { decide, decideFolder, A } = require('./reconcile/decide');
@@ -423,8 +423,6 @@ module.exports = {
     // A teammate moved a node this disk no longer has at its old path: restore, never delete.
     if (!localFiles.has(knownPath)) (this.movedRemotely ||= new Set()).add(nid);
     if (localFiles.has(knownPath)) {
-      const oldFullPath = path.join(this.syncFolder, knownPath);
-      const newFullPath = path.join(this.syncFolder, relativePath);
       try {
         this.live.markBrowserSave(relativePath);
         if (this.localAuthority) {
@@ -442,7 +440,8 @@ module.exports = {
               localFiles.delete(relativePath);
             }
           }
-          await moveFile(oldFullPath, newFullPath);
+          const moved = await restructureMove(this, knownPath, relativePath);
+          if (moved.outcome !== 'committed') throw moved.error;
         }
 
         const localInfo = localFiles.get(knownPath);

@@ -28,18 +28,18 @@ jest.mock('../../src/main/utils/utils', () => ({
   getServerBaseUrl: (url) => url || 'http://localhyperclay.com'
 }));
 
-jest.mock('../../src/main/utils/backup', () => ({
+jest.mock('../../src/main/utils/backup', () => (require('../helpers/mock-exports').mockExports('src/main/utils/backup', {
   createBackupIfExists: jest.fn().mockResolvedValue(),
   createBinaryBackupIfExists: jest.fn().mockResolvedValue()
-}));
+})));
 
 jest.mock('../../src/main/utils/derived-artifacts', () => ({
   refreshDerivedArtifacts: jest.fn().mockResolvedValue()
 }));
 
-jest.mock('../../src/main/data-loss-guard', () => ({
+jest.mock('../../src/main/data-loss-guard', () => (require('../helpers/mock-exports').mockExports('src/main/data-loss-guard', {
   runDataLossGuard: jest.fn().mockResolvedValue(undefined)
-}));
+})));
 
 jest.mock('../../src/sync-engine/utils', () => ({
   ...jest.requireActual('../../src/sync-engine/utils'),

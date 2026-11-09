@@ -116,7 +116,7 @@ let firstDiscoveryForKey = true;
 let notifyNewTeam = null;
 
 const localAuthority = createLocalAuthority({ withDocument: withDocumentWrite });
-const localCheckpoint = createLocalCheckpoint({ authority: localAuthority, withDocument: withDocumentWrite });
+const localCheckpoint = createLocalCheckpoint({ authority: localAuthority });
 localAuthority.setCheckpointService(localCheckpoint);
 
 const pool = new RootServerPool({

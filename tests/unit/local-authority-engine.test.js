@@ -3,13 +3,14 @@ const os = require('os');
 const path = require('upath');
 const { testPosix } = require('../helpers/platform');
 const { createRooms, serializeLive, stampOf, splitPage } = require('@panphora/clayjs/server/rooms');
-const { readPageState } = require('../../src/main/page-state-store');
+const { readPageState, writePageState } = require('../../src/main/page-state-store');
 const { createLocalAuthority } = require('../../src/main/local-authority');
 const { validateSegments } = require('../../src/main/utils/path-resolver');
 const { withDocumentWrite, withStructureChange } = require('../../src/main/utils/write-queue');
 const { withLocalDocumentWrite } = require('../../src/sync-engine/local-boundary');
 const { executeDecision } = require('../../src/sync-engine/reconcile/execute');
 const CascadeSuppression = require('../../src/sync-engine/state/cascade-suppression');
+const Outbox = require('../../src/sync-engine/state/outbox');
 
 // C2: the engine's own remote writers through the shared boundary. Real temp
 // files, the real document boundary and the real rooms package, so every count
@@ -18,9 +19,9 @@ jest.mock('../../src/sync-engine/api-client');
 jest.mock('../../src/main/utils/derived-artifacts', () => ({
   refreshDerivedArtifacts: jest.fn().mockResolvedValue(),
 }));
-jest.mock('../../src/main/data-loss-guard', () => ({
+jest.mock('../../src/main/data-loss-guard', () => (require('../helpers/mock-exports').mockExports('src/main/data-loss-guard', {
   runDataLossGuard: jest.fn().mockResolvedValue(undefined),
-}));
+})));
 
 const EventEmitter = require('events');
 const NodeRepository = require('../../src/sync-engine/state/node-repository');
@@ -724,6 +725,37 @@ describe('C2: the engine remote writers through the shared boundary', () => {
     expect(live.calls).toHaveLength(0);
     expect(synced).not.toHaveBeenCalled();
     expect(engine.repo.has(42)).toBe(false);
+  });
+
+  test('a download of bytes that are not UTF-8 stores them exactly in a parent that does not exist yet', async () => {
+    const bytes = Buffer.from([0xff, 0xfe, 0x00, 0x41]);
+    const relativePath = 'nested/media/photo.png';
+    const filePath = path.join(dir, relativePath);
+
+    const { authority } = createAuthority();
+    const live = broadcastsTo();
+    const engine = createEngine({ syncFolder: dir, rootId: 'root-a', live: live.live, authority });
+
+    apiClient.getNodeContent.mockResolvedValueOnce({
+      content: bytes,
+      modifiedAt: '2026-04-08T12:00:00Z',
+      checksum: 'cs-remote',
+      nodeType: 'upload',
+      size: bytes.length,
+    });
+
+    const synced = [];
+    engine.on('file-synced', (info) => synced.push(info));
+    const errors = [];
+    engine.on('sync-error', (info) => errors.push(info));
+
+    await engine.downloadUploadFile(relativePath, 42);
+
+    expect(errors).toEqual([]);
+    expect(synced).toContainEqual({ file: relativePath, action: 'download', type: 'upload' });
+    expect(fs.readFileSync(filePath)).toEqual(bytes);
+    expect(fs.existsSync(path.dirname(filePath))).toBe(true);
+    expect(fs.statSync(filePath).mtime.toISOString()).toBe('2026-04-08T12:00:00.000Z');
   });
 
   test('a queued generation change skips the site write, the room and the repo', async () => {
@@ -1538,4 +1570,94 @@ describe('D2c3b: a confirmed remote create at a retired absent name', () => {
     expect(after.canonicalRevision).toBe(before.canonicalRevision);
     expect(after.logicalRevision).toBe(before.logicalRevision);
   });
+});
+
+describe('D3: a trash the disk refused records nothing', () => {
+  function engineFor({ withAuthority }) {
+    const rooms = createRooms({});
+    const authority = createLocalAuthority({ rooms, withDocument: withDocumentWrite });
+    authority.registerRoot({ id: 'root-a', path: dir, canonicalPath: dir }, { owner: 'server' });
+    const instance = createEngine({
+      syncFolder: dir,
+      rootId: 'root-a',
+      live: { broadcast: jest.fn(), markBrowserSave: jest.fn() },
+      authority: withAuthority ? authority : null,
+    });
+    instance.outbox = new Outbox();
+    return { authority, instance };
+  }
+
+  // The real host's move fails the way a locked document fails on Windows.
+  function refuseRename(from) {
+    const rename = fs.promises.rename;
+    return jest.spyOn(fs.promises, 'rename').mockImplementation(async (source, target) => {
+      if (source === from) throw Object.assign(new Error('fixture: temporarily locked document'), { code: 'EACCES' });
+      return rename(source, target);
+    });
+  }
+
+  function recordEvents(instance) {
+    const events = { synced: [], errors: [] };
+    instance.on('file-synced', (event) => events.synced.push(event));
+    instance.on('sync-error', (error) => events.errors.push(error));
+    return events;
+  }
+
+  function expectNoTrash(events) {
+    expect(events.errors).toHaveLength(1);
+    expect(events.synced.filter((event) => event.action === 'trash')).toEqual([]);
+  }
+
+  for (const withAuthority of [true, false]) {
+    const pathName = withAuthority ? 'authority' : 'bare engine';
+
+    test(`a ${pathName} file trash the disk refused keeps the entry, page state and file`, async () => {
+      const { authority, instance } = engineFor({ withAuthority });
+      const file = path.join(dir, 'a.html');
+      authority.bindTarget({ rootId: 'root-a', logicalPath: 'a.html', canonicalPath: file });
+      await instance.repo.set(7, { type: 'site', path: 'a.html' });
+      await writePageState(dir, 'a.html', { rev: 'r1', tag: 'saved merge state' });
+      const events = recordEvents(instance);
+
+      const refused = refuseRename(file);
+      try {
+        await instance.handleNodeDeletedInLane({ nodeId: 7, nodeType: 'site', path: 'a.html' });
+      } finally {
+        refused.mockRestore();
+      }
+
+      expectNoTrash(events);
+      expect(instance.repo.has(7)).toBe(true);
+      expect(await readPageState(dir, 'a.html')).toBeTruthy();
+      expect(fs.readFileSync(file, 'utf8')).toBe('<html>a</html>');
+      expect(fs.existsSync(path.join(dir, '.trash', 'a.html'))).toBe(false);
+    });
+
+    test(`a ${pathName} folder trash the disk refused keeps the entries, page state and folder`, async () => {
+      const { authority, instance } = engineFor({ withAuthority });
+      const folder = path.join(dir, 'work');
+      const child = path.join(folder, 'child.html');
+      fs.mkdirSync(folder);
+      fs.writeFileSync(child, '<html>child</html>');
+      authority.bindTarget({ rootId: 'root-a', logicalPath: 'work/child.html', canonicalPath: child });
+      await instance.repo.set(7, { type: 'folder', path: 'work' });
+      await instance.repo.set(8, { type: 'site', path: 'work/child.html' });
+      await writePageState(dir, 'work/child.html', { rev: 'r1', tag: 'saved merge state' });
+      const events = recordEvents(instance);
+
+      const refused = refuseRename(folder);
+      try {
+        await instance.handleNodeDeletedInLane({ nodeId: 7, nodeType: 'folder', path: 'work' });
+      } finally {
+        refused.mockRestore();
+      }
+
+      expectNoTrash(events);
+      expect(instance.repo.has(7)).toBe(true);
+      expect(instance.repo.has(8)).toBe(true);
+      expect(await readPageState(dir, 'work/child.html')).toBeTruthy();
+      expect(fs.readFileSync(child, 'utf8')).toBe('<html>child</html>');
+      expect(fs.readdirSync(path.join(dir, '.trash'))).toEqual([]);
+    });
+  }
 });

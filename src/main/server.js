@@ -3,7 +3,7 @@ const fs = require('fs').promises;
 const path = require('upath');
 const nativePath = require('path');
 const { Eta } = require('eta');
-const { createBackup, publishRecoveredCopy } = require('./utils/backup.js');
+const { createBackup } = require('./utils/backup.js');
 const {
   PathError,
   RESERVED_ROOT_SEGMENTS,
@@ -48,7 +48,7 @@ const roomsPackage = () => require('@panphora/clayjs/server/rooms');
 const cheerio = require('cheerio');
 const { createRootDocumentHost, canonicalForWrite } = require('./document-host.js');
 
-const KIND_BY_ORIGIN = { save: 'browser-save', api: 'data-api', checkpoint: 'checkpoint' };
+const KIND_BY_ORIGIN = { save: 'browser-save', api: 'data-api' };
 
 // Initialize Eta
 const eta = new Eta({
@@ -2089,14 +2089,14 @@ function createApp(ctxOrDir, devHooks = null, isKnownPath = null) {
         bytes: content,
         kind: KIND_BY_ORIGIN[origin],
         context: { target, token },
-        hooks: { answer },
       });
       if (result.outcome === 'indeterminate') throw result.error;
+      if (answer) answer.html = result.file;
       return result.content;
     }
 
     if (ctx.localCheckpoint) {
-      ctx.localCheckpoint.registerWriter(ctx.root.id, (write) => commitDocument(write));
+      ctx.localCheckpoint.registerHost(ctx.root.id, documentHost);
     }
 
     // Spec §3: /_/save takes the document as text, and this route has exactly one
@@ -2423,14 +2423,15 @@ function createApp(ctxOrDir, devHooks = null, isKnownPath = null) {
     // view-mode tabs, then refresh everything derived from the bytes. Non-fatal on
     // the derived artifacts, for the same reason the save route is: the document is
     // already written, backed up and broadcast by that point.
-    // Returns the composed document, which is what the stamp describes.
-    const publishHostWrite = async ({ name, filePath, html, target = null, token = null, beforeWrite = null, edit = false, kind = 'restore' }) => {
+    // Returns the commit result, whose `content` is the composed document the
+    // stamp describes.
+    const publishHostWrite = async ({ name, filePath, html, target = null, token = null, safety = false, edit = false, kind = 'restore' }) => {
       const result = await documentHost.commit({
-        kind, name, filePath, bytes: html, edit,
-        context: { target, token }, hooks: { beforeWrite },
+        kind, name, filePath, bytes: html, edit, safety,
+        context: { target, token },
       });
       if (result.outcome === 'indeterminate') throw result.error;
-      return result.outcome === 'committed' ? result.content : null;
+      return result;
     };
 
     // GET /_/meta — discovery (spec §5). Both lanes require the `/_/` prefix, the
@@ -2861,8 +2862,10 @@ function createApp(ctxOrDir, devHooks = null, isKnownPath = null) {
       res.set('Cache-Control', 'no-store');
       const resolved = await resolveGuardFile(req);
       if (!resolved) return res.json({ event: null });
-      let currentHtml = '';
-      try { currentHtml = await fs.readFile(resolved.filePath, 'utf8'); } catch {}
+      let currentBytes = null;
+      try { currentBytes = await fs.readFile(resolved.filePath); } catch {}
+      const currentHtml = currentBytes ? currentBytes.toString('utf8') : '';
+      if (currentBytes) await dataGuard.catchUpOutsideEdit(baseDir, resolved.name, currentBytes, currentHtml, live);
       const event = await dataGuard.getGuardEvent(baseDir, resolved.name, currentHtml, live);
       return res.json({ event: event || null });
     });
@@ -3113,45 +3116,19 @@ function createApp(ctxOrDir, devHooks = null, isKnownPath = null) {
 
         const authorityWrite = Boolean(ctx.localAuthority && target && token);
         const published = await publishHostWrite({
-          name: rel, filePath: canonicalPath, html, target, token, edit,
-          beforeWrite: async () => {
-            if (current === null) return true;
-            const backupName = rel.replace(/\.(html|htmlclay)$/i, '');
-            let safetyHtml;
-            try {
-              // An edit of the page keeps the room: its unsaved edits stay in it and
-              // merge the restored article, so the backup is the plain document and
-              // the room's own edits are rendered into a recovered copy below.
-              safetyHtml = edit || !ctx.localCheckpoint
-                ? current.toString('utf8')
-                : await ctx.localCheckpoint.safetyBackup(canonicalPath, current.toString('utf8'));
-            } catch (error) {
-              console.error(`Refusing to restore ${rel}: live room cannot be backed up`, error);
-              refusal = { status: 500, message: 'live room cannot be backed up' };
-              return false;
-            }
-            const safety = await createBackup(baseDir, backupName, safetyHtml);
-            if (!safety) {
-              console.error(`Refusing to restore ${rel}: safety backup failed`);
-              refusal = { status: 500, message: 'could not create a safety backup' };
-              return false;
-            }
-            // The room keeps its unsaved edits through an edit-restore, so they are
-            // written to a recovered copy too: they survive even if no tab adopts
-            // the restored article. A rendering failure never stops the restore.
-            if (edit && ctx.localCheckpoint && ctx.localCheckpoint.dirty(ctx.localAuthority?.rooms.get(canonicalPath))) {
-              try {
-                const unsaved = await ctx.localCheckpoint.safetyBackup(canonicalPath, current.toString('utf8'));
-                await publishRecoveredCopy(baseDir, rel, unsaved);
-              } catch (error) {
-                console.error(`Recovered copy of ${rel} failed (non-fatal):`, error && error.message ? error.message : error);
-              }
-            }
-            return true;
-          },
+          name: rel, filePath: canonicalPath, html, target, token, edit, safety: true,
         });
-        if (refusal) return;
-        restoredEtag = documentEtag(published);
+        if (published.outcome === 'refused') {
+          if (published.reason === 'room-unavailable') {
+            console.error(`Refusing to restore ${rel}: live room cannot be backed up`);
+            refusal = { status: 500, message: 'live room cannot be backed up' };
+          } else if (published.reason === 'backup-failed') {
+            console.error(`Refusing to restore ${rel}: safety backup failed`);
+            refusal = { status: 500, message: 'could not create a safety backup' };
+          }
+          if (refusal) return;
+        }
+        restoredEtag = documentEtag(published.content);
         // publishHostWrite morphs view-mode tabs on the saved lane (once per alias
         // already, when an authority published it), but an edit-mode tab is not
         // listening there, so the restore is announced the way any other host-side
@@ -3159,7 +3136,7 @@ function createApp(ctxOrDir, devHooks = null, isKnownPath = null) {
         // published, so this must not send a second, duplicate one.
         ctx.observer?.publishExternal(
           rel,
-          Buffer.from(published, 'utf8'),
+          Buffer.from(published.content, 'utf8'),
           `${path.basename(rel)} was restored from a backup`,
           { saved: !authorityWrite }
         );

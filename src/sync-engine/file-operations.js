@@ -94,42 +94,6 @@ async function ensureDirectory(dirPath) {
 }
 
 /**
- * Copy file from source to destination
- */
-async function copyFile(source, destination) {
-  await fs.copyFile(source, destination);
-}
-
-/**
- * Move file from source to destination, creating parent directories as needed.
- * Falls back to copy+delete for cross-device moves.
- */
-async function moveFile(source, destination) {
-  const dir = path.dirname(destination);
-  await fs.mkdir(dir, { recursive: true });
-
-  try {
-    await fs.rename(source, destination);
-    return { copied: false };
-  } catch (error) {
-    if (error.code === 'EXDEV') {
-      await fs.copyFile(source, destination);
-      await fs.unlink(source);
-      return { copied: true };
-    } else {
-      throw error;
-    }
-  }
-}
-
-/**
- * Delete file
- */
-async function deleteFile(filePath) {
-  await fs.unlink(filePath);
-}
-
-/**
  * Read directory contents
  */
 async function readDirectory(dirPath) {
@@ -257,9 +221,6 @@ module.exports = {
   fileExists,
   getFileStats,
   ensureDirectory,
-  copyFile,
-  moveFile,
-  deleteFile,
   readDirectory,
   // Upload-specific
   getLocalUploads,

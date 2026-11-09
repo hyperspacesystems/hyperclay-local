@@ -11,6 +11,7 @@ const request = require('supertest');
 const writeQueue = require('../../src/main/utils/write-queue');
 const { atomicWriteFile, withDocumentWrite } = writeQueue;
 const { createApp } = require('../../src/main/server.js');
+const { createRootDocumentHost } = require('../../src/main/document-host');
 const { createLocalAuthority } = require('../../src/main/local-authority');
 const { createLocalCheckpoint } = require('../../src/main/local-checkpoint');
 const { RootObserver } = require('../../src/main/root-observer');
@@ -100,6 +101,11 @@ describe('a live-room checkpoint is only reported done once its bytes are durabl
     server = await listenLoopback(createApp({
       root, live, observer, localAuthority: authority, localCheckpoint: checkpoint,
       devHooks: null, isKnownPath: null
+    }));
+    // The default loader is a dynamic import, which jest's runtime refuses.
+    checkpoint.registerHost(root.id, createRootDocumentHost({
+      ctx: { root, localAuthority: authority }, live,
+      loadCheckpoint: async () => require('@panphora/clayjs/server/checkpoint'),
     }));
     await fs.writeFile(filePath(), await storePageState(dir, NAME, FIXTURE.html));
   });

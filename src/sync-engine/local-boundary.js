@@ -17,6 +17,7 @@ function documentHostFor(engine) {
     engine.documentHost = createRootDocumentHost({
       ctx: { root: { id: engine.rootId, path: engine.syncFolder }, localAuthority: engine.localAuthority },
       live: engine.live, emit: engine.emit.bind(engine), logger: engine.logger,
+      getObserver: () => engine._subscribedObserver ?? engine.observer,
     });
   }
   return engine.documentHost;
@@ -135,7 +136,44 @@ async function withLocalDirectoryChange(engine, rel, fn, { generation = engine.g
   }
 }
 
-async function withLocalStructureDelete(engine, rel, move, { generation = engine.generation, isDir = false } = {}) {
+function relocateEntryFor(engine, rel) {
+  const location = path.join(engine.syncFolder, rel);
+  return { location, canonical: location };
+}
+
+async function restructureMove(engine, fromRel, toRel) {
+  return documentHostFor(engine).restructure({
+    kind: 'sync-move',
+    rootId: engine.rootId,
+    steps: [{ from: fromRel, to: toRel }],
+    context: {
+      token: null,
+      entries: [{ from: relocateEntryFor(engine, fromRel), to: relocateEntryFor(engine, toRel) }],
+    },
+  });
+}
+
+async function restructureTrash(engine, rel, trashRel) {
+  return documentHostFor(engine).restructure({
+    kind: 'sync-trash',
+    rootId: engine.rootId,
+    steps: [{ from: rel, to: null }],
+    context: {
+      token: null,
+      entries: [{ from: relocateEntryFor(engine, rel), to: relocateEntryFor(engine, trashRel) }],
+    },
+  });
+}
+
+// A sync structure change either completes or throws, so the engine never records a move or a
+// trash the disk did not make. The host reports a failure as a result; this turns it back into
+// the error the old fs call would have thrown.
+function requireCommitted(result) {
+  if (result.outcome === 'committed') return result;
+  throw result.error ?? new Error(`the document host reported this structure change as ${result.outcome}`);
+}
+
+async function withLocalStructureDelete(engine, rel, trashRel, { generation = engine.generation, isDir = false, fallbackRel = null } = {}) {
   const authority = engine.localAuthority;
   if (!authority) return { legacy: true };
   return withStructureChange(async (token) => {
@@ -152,18 +190,22 @@ async function withLocalStructureDelete(engine, rel, move, { generation = engine
       });
       return { missing: true };
     }
-    const plan = authority.prepareStructure(token, {
-      rootId: engine.rootId,
-      steps: [{ from: source, fromRel: rel, to: null }],
-    });
-    try {
-      await move(source.location);
-      authority.commitStructure(plan, 1, token);
-      return { moved: true };
-    } finally {
-      authority.releaseStructure(plan, token);
-    }
+    const trash = async (toRel) => {
+      const destination = relocateEntryFor(engine, toRel);
+      return documentHostFor(engine).restructure({
+        kind: 'sync-trash',
+        rootId: engine.rootId,
+        steps: [{ from: rel, to: null }],
+        context: {
+          token,
+          entries: [{ from: source, to: { location: destination.location, canonical: destination.location } }],
+        },
+      });
+    };
+    const first = await trash(trashRel);
+    if (first.outcome !== 'failed' || !fallbackRel) return requireCommitted(first);
+    return requireCommitted(await trash(fallbackRel));
   });
 }
 
-module.exports = { withLocalDocumentWrite, withLocalDirectoryChange, withLocalStructureDelete, claimLocalDocumentTarget, structureEntryFor, documentHostFor };
+module.exports = { withLocalDocumentWrite, withLocalDirectoryChange, withLocalStructureDelete, claimLocalDocumentTarget, structureEntryFor, documentHostFor, restructureMove, restructureTrash, requireCommitted };

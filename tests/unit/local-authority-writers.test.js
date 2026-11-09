@@ -60,6 +60,30 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
+// A save runs the guard without waiting for it. Tracking that work lets each test end only after
+// its own guard has finished, so a guard started in one test never reaches the next test's mocks.
+const guardWork = new Set();
+
+function trackGuardWork() {
+  for (const key of ['runDataLossGuard', 'noteSeen']) {
+    if (jest.isMockFunction(dataGuard[key])) continue;
+    const real = dataGuard[key];
+    jest.spyOn(dataGuard, key).mockImplementation((...args) => {
+      const work = Promise.resolve(real(...args));
+      guardWork.add(work);
+      work.then(() => guardWork.delete(work), () => guardWork.delete(work));
+      return work;
+    });
+  }
+}
+
+async function settleGuardWork() {
+  while (guardWork.size) await Promise.allSettled([...guardWork]);
+}
+
+beforeEach(trackGuardWork);
+afterEach(settleGuardWork);
+
 function harness({ file = 'doc.html', initial = doc({ n: 0 }) } = {}) {
   const dir = tempDir();
   const canonicalPath = path.join(dir, file);
@@ -226,6 +250,7 @@ describe('B4: the root data API through the shared boundary', () => {
   });
 
   afterEach(async () => {
+    await settleGuardWork();
     await closeLoopback();
     jest.restoreAllMocks();
   });
@@ -328,11 +353,14 @@ describe('B4: the root data API through the shared boundary', () => {
     await new Promise((resolve) => setImmediate(resolve));
 
     // Held: the refresh has not read or extracted anything yet.
-    expect(extractViaTag).not.toHaveBeenCalled();
+    try {
+      expect(extractViaTag).not.toHaveBeenCalled();
 
-    const newer = doc({ n: 1 });
-    fs.writeFileSync(indexPath, newer);
-    release();
+      const newer = doc({ n: 1 });
+      fs.writeFileSync(indexPath, newer);
+    } finally {
+      release();
+    }
     await holder;
 
     const res = await pending;
@@ -391,6 +419,7 @@ describe('B5: the authority Restore and data-loss writeBack', () => {
   });
 
   afterEach(async () => {
+    await settleGuardWork();
     await closeLoopback();
     jest.restoreAllMocks();
   });
@@ -770,6 +799,7 @@ describe('B6: the authority upload and standalone Tailwind cache miss', () => {
   });
 
   afterEach(async () => {
+    await settleGuardWork();
     await closeLoopback();
     jest.restoreAllMocks();
   });

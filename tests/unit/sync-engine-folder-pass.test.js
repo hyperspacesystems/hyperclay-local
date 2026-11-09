@@ -31,11 +31,11 @@ jest.mock('livesync-hyperclay', () => ({
   }
 }));
 
-jest.mock('../../src/main/utils/backup', () => ({
+jest.mock('../../src/main/utils/backup', () => (require('../helpers/mock-exports').mockExports('src/main/utils/backup', {
   createBackup: jest.fn(),
   createBackupIfExists: jest.fn(),
   createBinaryBackupIfExists: jest.fn()
-}));
+})));
 
 jest.mock('../../src/main/utils/utils', () => ({
   getServerBaseUrl: (url) => url || 'http://localhyperclay.com'
@@ -129,7 +129,6 @@ beforeEach(() => {
   };
 
   fileOps.ensureDirectory.mockResolvedValue();
-  fileOps.moveFile.mockResolvedValue();
   fileOps.readFile.mockResolvedValue('<html>content</html>');
   fileOps.readFileBuffer.mockImplementation(async (filePath) => Buffer.from(await fileOps.readFile(filePath)));
   fileOps.calculateBufferChecksum.mockImplementation(realBufferChecksum);

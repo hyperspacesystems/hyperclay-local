@@ -25,18 +25,19 @@ jest.mock('../../src/main/utils/utils', () => ({
   getServerBaseUrl: (url) => url || 'http://localhyperclay.com'
 }));
 
-jest.mock('../../src/main/utils/backup', () => ({
+jest.mock('../../src/main/utils/backup', () => (require('../helpers/mock-exports').mockExports('src/main/utils/backup', {
+  createBackup: jest.fn().mockResolvedValue(),
   createBackupIfExists: jest.fn().mockResolvedValue(),
   createBinaryBackupIfExists: jest.fn().mockResolvedValue()
-}));
+})));
 
 jest.mock('../../src/main/utils/derived-artifacts', () => ({
   refreshDerivedArtifacts: jest.fn().mockResolvedValue()
 }));
 
-jest.mock('../../src/main/data-loss-guard', () => ({
+jest.mock('../../src/main/data-loss-guard', () => (require('../helpers/mock-exports').mockExports('src/main/data-loss-guard', {
   runDataLossGuard: jest.fn().mockResolvedValue(undefined)
-}));
+})));
 
 // init() validates the key against the platform; these tests are about the
 // session wiring around it, not the handshake.
@@ -58,6 +59,7 @@ const apiClient = require('../../src/sync-engine/api-client');
 const nodeMapModule = require('../../src/sync-engine/node-map');
 const { createRootLive } = require('../../src/main/utils/root-live');
 const { stubDocumentHost } = require('../helpers/document-host-stub');
+const { createRootDocumentHost } = require('../../src/main/document-host');
 const { SyncEngine } = require('../../src/sync-engine/index');
 
 const flush = async () => {
@@ -102,6 +104,16 @@ async function startEngine(opts) {
   return engine;
 }
 
+function useRealDocumentHost(live) {
+  const host = createRootDocumentHost({
+    ctx: { root: { id: 'engine-generation', path: syncFolder }, localAuthority: null },
+    live,
+  });
+  jest.spyOn(host, 'commit');
+  engine.documentHost = host;
+  return host;
+}
+
 beforeEach(() => {
   jest.clearAllMocks();
 
@@ -133,10 +145,14 @@ afterEach(async () => {
 
 describe('per-root live keys', () => {
   it('keys a team session through its root id', async () => {
-    await startEngine({ live: createRootLive({ id: 'r1', kind: 'team' }) });
+    const live = createRootLive({ id: 'r1', kind: 'team' });
+    jest.spyOn(live, 'markBrowserSave');
+    await startEngine({ live });
+    useRealDocumentHost(live);
 
     await engine.downloadFile(7, 'index.html');
 
+    expect(live.markBrowserSave).toHaveBeenCalledWith('index.html');
     expect(liveSync.markBrowserSave).toHaveBeenCalledWith('r1:index.html');
     expect(engine.documentHost.commit).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -149,9 +165,12 @@ describe('per-root live keys', () => {
 
   it('keeps the bare relative path when no opts.live is given', async () => {
     await startEngine();
+    jest.spyOn(engine.live, 'markBrowserSave');
+    useRealDocumentHost(engine.live);
 
     await engine.downloadFile(7, 'index.html');
 
+    expect(engine.live.markBrowserSave).toHaveBeenCalledWith('index.html');
     expect(liveSync.markBrowserSave).toHaveBeenCalledWith('index.html');
   });
 });

@@ -2,6 +2,7 @@ const fs = require('fs').promises;
 const path = require('upath');
 const cheerio = require('cheerio');
 const { atomicWriteFile } = require('../utils/write-queue');
+const { createRootDocumentHost } = require('../document-host');
 
 const UNTITLED = /^untitled(?:-\d+)?\.html$/i;
 
@@ -63,6 +64,15 @@ function createAutoNamer({ appDataPath, authority, checkpoint, rootFor, rename, 
   const sameFile = (a, b) => a && b && a.ino !== '0' && b.ino !== '0' &&
     a.dev === b.dev && a.ino === b.ino && a.size === b.size && a.mtimeNs === b.mtimeNs;
   const statFor = (root, rel) => fs.lstat(path.join(root.path, rel), { bigint: true });
+  const hosts = new Map();
+  const hostOf = root => {
+    let host = hosts.get(root.id);
+    if (!host) {
+      host = createRootDocumentHost({ ctx: { root, localAuthority: authority } });
+      hosts.set(root.id, host);
+    }
+    return host;
+  };
 
   async function record(root, rel, template) {
     if (template !== 'page' || !UNTITLED.test(path.basename(rel))) return;
@@ -193,8 +203,9 @@ function createAutoNamer({ appDataPath, authority, checkpoint, rootFor, rename, 
         await change(() => { entries.delete(recordKey); active.delete(recordKey); });
         return;
       }
-      const html = await fs.readFile(key, 'utf8');
-      const heading = headingOf(html);
+      const read = await hostOf(root).read(entry.path, key);
+      if (!read) return;
+      const heading = headingOf(read.bytes.toString('utf8'));
       if (!heading) return;
       const base = tidyName(heading);
       if (!base) return;
@@ -230,6 +241,7 @@ function createAutoNamer({ appDataPath, authority, checkpoint, rootFor, rename, 
   }
 
   async function removeRoot(rootId) {
+    hosts.delete(rootId);
     await change(() => {
       for (const [key, entry] of entries) if (entry.rootId === rootId) {
         if (removed.has(key)) { clearTimeout(removed.get(key)); removed.delete(key); }

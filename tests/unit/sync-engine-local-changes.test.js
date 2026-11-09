@@ -29,11 +29,11 @@ jest.mock('livesync-hyperclay', () => ({
   }
 }));
 
-jest.mock('../../src/main/utils/backup', () => ({
+jest.mock('../../src/main/utils/backup', () => (require('../helpers/mock-exports').mockExports('src/main/utils/backup', {
   createBackup: jest.fn(),
   createBackupIfExists: jest.fn(),
   createBinaryBackupIfExists: jest.fn()
-}));
+})));
 
 jest.mock('../../src/main/utils/utils', () => ({
   getServerBaseUrl: (url) => url || 'http://localhyperclay.com'
@@ -107,7 +107,6 @@ beforeEach(() => {
   };
 
   fileOps.ensureDirectory.mockResolvedValue();
-  fileOps.moveFile.mockResolvedValue();
   fileOps.readFile.mockResolvedValue('<html>content</html>');
   fileOps.getFileStats.mockResolvedValue({ mtime: new Date('2024-01-01'), size: 100 });
   fileOps.fileExists.mockResolvedValue(true);
@@ -305,7 +304,7 @@ describe('SSE echo suppression', () => {
       name: 'my-site.html', path: 'my-site.html'
     });
 
-    expect(fileOps.moveFile).not.toHaveBeenCalled();
+    expect(syncEngine.documentHost.restructure).not.toHaveBeenCalled();
     expect(syncEngine.outbox.has('delete', 42)).toBe(false);
   });
 
@@ -319,7 +318,7 @@ describe('SSE echo suppression', () => {
       oldPath: 'old.html', newPath: 'new.html'
     });
 
-    expect(fileOps.moveFile).not.toHaveBeenCalled();
+    expect(syncEngine.documentHost.restructure).not.toHaveBeenCalled();
     expect(syncEngine.outbox.has('rename', 42)).toBe(false);
   });
 
@@ -332,7 +331,7 @@ describe('SSE echo suppression', () => {
       oldPath: 'my-site.html', newPath: 'blog/my-site.html'
     });
 
-    expect(fileOps.moveFile).not.toHaveBeenCalled();
+    expect(syncEngine.documentHost.restructure).not.toHaveBeenCalled();
     expect(syncEngine.outbox.has('move', 42)).toBe(false);
   });
 
@@ -345,7 +344,7 @@ describe('SSE echo suppression', () => {
       name: 'my-site.html', path: 'my-site.html'
     });
 
-    expect(fileOps.moveFile).toHaveBeenCalled();
+    expect(syncEngine.documentHost.restructure).toHaveBeenCalled();
     expect(syncEngine.repo.has('42')).toBe(false);
   });
 });

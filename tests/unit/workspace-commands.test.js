@@ -4,7 +4,7 @@ jest.mock('livesync-hyperclay', () => ({ liveSync: {
   markBrowserSave: jest.fn(), wasBrowserSave: jest.fn(() => false), notify: jest.fn(), broadcast: jest.fn(),
   subscribeUser: jest.fn(), unsubscribeUser: jest.fn(), broadcastFileSaved: jest.fn(), broadcastToUser: jest.fn(),
 } }));
-jest.mock('../../src/main/utils/backup', () => ({ createBackupIfExists: jest.fn(), createBinaryBackupIfExists: jest.fn() }));
+jest.mock('../../src/main/utils/backup', () => (require('../helpers/mock-exports').mockExports('src/main/utils/backup', { createBackup: jest.fn(), createBackupIfExists: jest.fn(), createBinaryBackupIfExists: jest.fn() })));
 jest.mock('../../src/main/utils/utils', () => ({ getServerBaseUrl: url => url || 'http://localhyperclay.com' }));
 jest.mock('../../src/sync-engine/api-client');
 jest.mock('../../src/sync-engine/file-operations', () => jest.requireActual('../../src/sync-engine/file-operations'));
@@ -280,6 +280,39 @@ test('create admits and confirms a new document through the authority writer', a
   expect(authority.identityAt(file)).not.toBeNull();
   expect(authority.confirmedStamp(file)).not.toBeNull();
   expect(await fs.stat(path.join(h.dir, '.hyperclay')).catch(() => null)).toBeNull();
+});
+
+test('a create reaches the document host once with the create lane and the exact bytes', async () => {
+  const { executeCommand } = require('../../src/main/workspace/commands');
+  const { createRootDocumentHost } = require('../../src/main/document-host');
+  const templateManifest = require('../../src/main/document-templates/manifest.json');
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'workspace-create-'));
+  try {
+    const root = { id: 'root-a', path: dir };
+    const host = createRootDocumentHost({ ctx: { root } });
+    const commit = jest.spyOn(host, 'commit');
+    const changed = jest.fn();
+
+    const result = await executeCommand({
+      root, request: { command: 'create', parent: null, name: 'New.html', template: 'blank' },
+      tree: { scan: jest.fn() }, moved: jest.fn(), changed, documentHost: host,
+    });
+
+    expect(result).toEqual({ path: 'New.html' });
+    expect(commit).toHaveBeenCalledTimes(1);
+    const request = commit.mock.calls[0][0];
+    const template = templateManifest.find(item => item.id === 'blank');
+    const html = await fs.readFile(path.join(__dirname, '../../src/main/document-templates', template.file), 'utf8');
+    expect(request.kind).toBe('create');
+    expect(request.name).toBe('New.html');
+    expect(request.bytes).toBe(html);
+    expect(request.expected).toEqual({ type: 'absent' });
+    expect(request.filePath).toBe(path.join(await fs.realpath(dir), 'New.html'));
+    expect(changed).toHaveBeenCalledWith('root-a', ['New.html']);
+    expect((await fs.readFile(request.filePath, 'utf8')).length).toBeGreaterThan(0);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
 });
 
 test('the existing sync engine sees a workspace command as one rename by inode', async () => {

@@ -10,6 +10,7 @@ const { createLocalAuthority } = require('../../src/main/local-authority');
 const { createLocalCheckpoint } = require('../../src/main/local-checkpoint');
 const { withDocumentWrite, withStructureChange } = require('../../src/main/utils/write-queue');
 const { pageFixture } = require('./page-fixture');
+const { checkpointHost } = require('./checkpoint-host');
 
 async function run() {
   const dir = path.resolve(await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'local-checkpoint-'))));
@@ -122,14 +123,15 @@ async function run() {
     const started = new Promise((resolve) => { writerStarted = resolve; });
     let releaseWriter;
     const waiting = new Promise((resolve) => { releaseWriter = resolve; });
-    checkpoint.registerWriter(root.id, async (write) => {
-      assert.equal(write.filePath, latePath);
-      writerStarted();
-      await waiting;
-      await fs.writeFile(latePath, write.content);
-      await authority.confirmKnownWrite(write.target, write.content, write.token);
-      return write.content;
-    });
+    checkpoint.registerHost(root.id, checkpointHost({
+      dir, authority,
+      write: async (filePath, bytes) => {
+        assert.equal(filePath, latePath);
+        writerStarted();
+        await waiting;
+        await fs.writeFile(filePath, bytes);
+      },
+    }));
     const inFlight = checkpoint.attempt(latePath);
     await started;
     const lateEdit = authority.rooms.apply(lateRoom, 'd', {

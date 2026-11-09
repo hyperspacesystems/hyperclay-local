@@ -15,7 +15,7 @@ jest.mock('../../src/sync-engine/api-client', () => ({
   getPageState: async () => mockRemoteRecord,
 }));
 jest.mock('../../src/main/utils/derived-artifacts', () => ({ refreshDerivedArtifacts: async () => {} }));
-jest.mock('../../src/main/data-loss-guard', () => ({ runDataLossGuard: async () => {} }));
+jest.mock('../../src/main/data-loss-guard', () => (require('../helpers/mock-exports').mockExports('src/main/data-loss-guard', { runDataLossGuard: async () => {} })));
 const { createRooms, splitPage } = require('@panphora/clayjs/server/rooms');
 const { createLocalAuthority } = require('../../src/main/local-authority');
 const { createLocalCheckpoint } = require('../../src/main/local-checkpoint');

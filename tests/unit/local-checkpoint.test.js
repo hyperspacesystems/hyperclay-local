@@ -25,15 +25,13 @@ test('an arrival cancels departure and retries stop after 1, 5 and 30 seconds', 
   };
   const service = createLocalCheckpoint({
     authority,
-    withDocument: async () => { throw new Error('temporary disk failure'); },
-    loadCore: async () => ({}),
     immediate: (fn) => { scheduled.push(fn); return fn; },
     cancelImmediate: (fn) => { scheduled.splice(scheduled.indexOf(fn), 1); },
     setTimer: (fn, ms) => { const timer = { fn, ms }; timers.push(timer); return timer; },
     clearTimer: (timer) => { const index = timers.indexOf(timer); if (index >= 0) timers.splice(index, 1); },
     logError: (...args) => errors.push(args),
   });
-  service.registerWriter('root-a', async () => {});
+  service.registerHost('root-a', { checkpoint: async () => { throw new Error('temporary disk failure'); } });
   expect(service.departed(room)).toBe(true);
   expect(service.departed(room)).toBe(false);
   expect(scheduled).toHaveLength(1);
@@ -80,11 +78,9 @@ test('shutdown bounds a stuck checkpoint and reports the dirty room', async () =
   };
   const service = createLocalCheckpoint({
     authority,
-    withDocument: () => new Promise(() => {}),
-    loadCore: async () => ({}),
     logError: (...args) => errors.push(args),
   });
-  service.registerWriter('root-a', async () => {});
+  service.registerHost('root-a', { checkpoint: () => new Promise(() => {}) });
   const result = await service.flushDirty({ timeoutMs: 5 });
   expect(result).toEqual({ attempted: 1, unsaved: [room.key], timedOut: true });
   expect(errors).toEqual([[expect.stringContaining('room still unsaved'), { key: room.key, nodeId: room.nodeId }]]);
@@ -109,11 +105,12 @@ test('a departure during a running checkpoint schedules the remaining dirty fram
     reconcileDisk: async () => ({ kind: 'current' }),
   };
   const checkpoint = createLocalCheckpoint({
-    authority, withDocument: async (_, fn) => { started(); await gate; return fn(null, {}); },
-    loadCore: async () => ({ captureCheckpoint: () => ({}), isCheckpointCurrent: () => true }),
+    authority,
     immediate: fn => { tasks.push(fn); return fn; }, cancelImmediate: () => {}, logError: () => {},
   });
-  checkpoint.registerWriter('root-a', () => {});
+  checkpoint.registerHost('root-a', {
+    checkpoint: async () => { started(); await gate; return { kind: 'current' }; },
+  });
   try {
     const first = checkpoint.attempt(key);
     await writing;
@@ -140,11 +137,9 @@ test('a permanently refused dirty room expires after the retention period', asyn
   rooms.apply(room, 'tab', { name: 'count', n: 1, ops: [{ op: 'add', path: ['n'], n: 1 }] });
   rooms.leave(room, 'tab', []);
   const errors = [];
-  const checkpoint = createLocalCheckpoint({ authority, withDocument: withDocumentWrite,
-    loadCore: async () => ({ captureCheckpoint: () => { throw new Error('not a page'); } }),
-    logError: (...args) => errors.push(args) });
+  const checkpoint = createLocalCheckpoint({ authority, logError: (...args) => errors.push(args) });
   authority.setCheckpointService(checkpoint);
-  checkpoint.registerWriter('root-a', () => {});
+  checkpoint.registerHost('root-a', { checkpoint: async () => ({ kind: 'refused', reason: 'invalid-document' }) });
   try {
     expect((await checkpoint.attempt(key)).reason).toBe('invalid-document');
     expect(checkpoint.mayExpire(room)).toBe(true);
@@ -177,14 +172,14 @@ test('a non-page document writes no rendered backup, and a page document that ca
   const room = { key: '/tmp/todo.html', nodeId: 'todo', stores: new Map() };
   const authority = { rooms: { get: () => room }, roomIsDirty: () => true };
   const core = reason => ({ captureCheckpoint: () => ({}), renderCheckpoint: () => ({ kind: 'refused', reason }) });
-  const service = createLocalCheckpoint({ authority, withDocument: async () => {},
+  const service = createLocalCheckpoint({ authority,
     loadCore: async () => core('invalid-document') });
   await expect(service.safetyBackup('/tmp/todo.html', html)).resolves.toBe(html);
 
   const page = '<!doctype html><html><body><article data-page="1"></article></body></html>';
   await expect(service.safetyBackup('/tmp/todo.html', page))
     .rejects.toThrow('Cannot back up live room: invalid-document');
-  const refusing = createLocalCheckpoint({ authority, withDocument: async () => {},
+  const refusing = createLocalCheckpoint({ authority,
     loadCore: async () => core('needs-adoption') });
   await expect(refusing.safetyBackup('/tmp/todo.html', page))
     .rejects.toThrow('Cannot back up live room: needs-adoption');

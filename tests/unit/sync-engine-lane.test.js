@@ -26,10 +26,10 @@ jest.mock('livesync-hyperclay', () => ({
   }
 }));
 
-jest.mock('../../src/main/utils/backup', () => ({
+jest.mock('../../src/main/utils/backup', () => (require('../helpers/mock-exports').mockExports('src/main/utils/backup', {
   createBackupIfExists: jest.fn(),
   createBinaryBackupIfExists: jest.fn()
-}));
+})));
 
 jest.mock('../../src/main/utils/utils', () => ({
   getServerBaseUrl: (url) => url || 'http://localhyperclay.com'

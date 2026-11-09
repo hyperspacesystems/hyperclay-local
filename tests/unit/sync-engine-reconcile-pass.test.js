@@ -33,11 +33,11 @@ jest.mock('livesync-hyperclay', () => ({
   }
 }));
 
-jest.mock('../../src/main/utils/backup', () => ({
+jest.mock('../../src/main/utils/backup', () => (require('../helpers/mock-exports').mockExports('src/main/utils/backup', {
   createBackup: jest.fn(),
   createBackupIfExists: jest.fn(),
   createBinaryBackupIfExists: jest.fn()
-}));
+})));
 
 jest.mock('../../src/main/utils/utils', () => ({
   getServerBaseUrl: (url) => url || 'http://localhyperclay.com'
@@ -53,6 +53,10 @@ const apiClient = require('../../src/sync-engine/api-client');
 const nodeMapModule = require('../../src/sync-engine/node-map');
 const store = require('../../src/sync-engine/reconcile/conflicts');
 const { stubDocumentHost } = require('../helpers/document-host-stub');
+
+const structureMoves = () => syncEngine.documentHost.restructure.mock.calls
+  .flatMap(([request]) => request.context.entries
+    .map((entry) => [entry.from.location, entry.to.canonical]));
 
 jest.mock('../../src/sync-engine/file-operations');
 jest.mock('../../src/sync-engine/utils', () => {
@@ -132,7 +136,6 @@ beforeEach(() => {
   };
 
   fileOps.ensureDirectory.mockResolvedValue();
-  fileOps.moveFile.mockResolvedValue();
   fileOps.readFile.mockResolvedValue('<html>content</html>');
   fileOps.readFileBuffer.mockImplementation(async (filePath) => Buffer.from(await fileOps.readFile(filePath)));
   fileOps.calculateBufferChecksum.mockImplementation(realBufferChecksum);
@@ -168,12 +171,12 @@ describe('performInitialSync — the inventory decides, not mtime', () => {
 
     expect(syncEngine.repo.has('10')).toBe(false);
     expect(syncEngine.repo.has('11')).toBe(false);
-    expect(fileOps.moveFile).toHaveBeenCalledWith(
+    expect(structureMoves()).toContainEqual([
       '/test/sync/proj/page.html',
       '/test/sync/.trash/proj/page.html'
-    );
+    ]);
     // Never the folder itself: its local directory stays until it is empty.
-    expect(fileOps.moveFile).not.toHaveBeenCalledWith('/test/sync/proj', expect.anything());
+    expect(structureMoves().some(([from]) => from === '/test/sync/proj')).toBe(false);
   });
 
   test('a legacy list (no complete field) deletes nothing', async () => {
@@ -187,7 +190,7 @@ describe('performInitialSync — the inventory decides, not mtime', () => {
 
     await syncEngine.performInitialSync();
 
-    expect(fileOps.moveFile).not.toHaveBeenCalled();
+    expect(structureMoves()).toEqual([]);
     expect(apiClient.deleteNode).not.toHaveBeenCalled();
     expect(syncEngine.repo.has('99')).toBe(true);
   });

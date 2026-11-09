@@ -8,12 +8,12 @@
  * way the content sync carries on.
  */
 
-const fs = require('fs').promises;
 const path = require('upath');
 const {
   readPageState, writePageState, dropPageState, dropPageStateDir, movePageState, movePageStateDir
 } = require('../main/page-state-store');
 const { getPageState, putPageState } = require('./api-client');
+const { documentHostFor } = require('./local-boundary');
 
 const PAGE_PATTERN = /\.(html|htmlclay)$/i;
 
@@ -24,8 +24,9 @@ async function sendPageState(engine, nodeId, rel) {
   if (!PAGE_PATTERN.test(rel)) return false;
   try {
     // The record for the file on disk, which need not be the newest one the sidecar holds.
-    const fileText = await fs.readFile(path.join(engine.syncFolder, rel), 'utf8');
-    const rev = require('@panphora/clayjs/server/rooms').pageRev(fileText);
+    const file = await documentHostFor(engine).read(rel, path.join(engine.syncFolder, rel));
+    if (!file) return false;
+    const rev = require('@panphora/clayjs/server/rooms').pageRev(file.bytes.toString('utf8'));
     const record = await readPageState(engine.syncFolder, rel, { rev, exact: true });
     if (!record) return false;
     return await putPageState(engine.conn, nodeId, record);

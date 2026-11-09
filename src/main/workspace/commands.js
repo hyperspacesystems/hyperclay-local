@@ -1,11 +1,10 @@
-const fsModule = require('fs');
-const fs = fsModule.promises;
+const fs = require('fs').promises;
 const path = require('upath');
 const { getConsentRegistry, resolveReadPath, resolveWritePath, validateSegments } = require('../utils/path-resolver');
-const { withDocumentWrite, withStructureChange, atomicWriteFile } = require('../utils/write-queue');
-const { storePageState, movePageState, movePageStateDir, dropPageState, dropPageStateDir } = require('../page-state-store');
+const { createRootDocumentHost } = require('../document-host');
+const { withDocumentWrite, withStructureChange } = require('../utils/write-queue');
+const { movePageState, movePageStateDir, dropPageState, dropPageStateDir } = require('../page-state-store');
 const templateManifest = require('../document-templates/manifest.json');
-const { stripCopyBytes } = require('../copy-content');
 
 function refusal(reason, message, status = 400) {
   return Object.assign(new Error(message), { reason, status });
@@ -35,40 +34,6 @@ function safeName(value) {
   return value;
 }
 
-const DOCUMENT_NAME = /\.html(?:clay)?$/i;
-const METADATA_DIR = '.hyperclay';
-
-// A duplicate is a new document, so its documents are filtered before they reach the
-// destination: nothing raw is ever written first for the root watcher to see. Each entry is
-// created exclusively, so an occupied destination is never overwritten, and the source is only
-// ever read. Versions and automatic recovery state keep their bytes.
-async function copyDocumentTree(from, to) {
-  const stat = await fs.lstat(from);
-  if (stat.isDirectory()) {
-    if (path.basename(from) === METADATA_DIR) {
-      await fs.cp(from, to, { recursive: true, errorOnExist: true, force: false });
-      return;
-    }
-    const mode = stat.mode & 0o777;
-    await fs.mkdir(to, { mode });
-    await fs.chmod(to, mode);
-    for (const name of await fs.readdir(from)) await copyDocumentTree(path.join(from, name), path.join(to, name));
-    return;
-  }
-  if (stat.isSymbolicLink()) {
-    await fs.cp(from, to, { errorOnExist: true, force: false });
-    return;
-  }
-  if (DOCUMENT_NAME.test(path.basename(from))) {
-    const mode = stat.mode & 0o777;
-    const bytes = await fs.readFile(from);
-    await fs.writeFile(to, stripCopyBytes(bytes), { flag: 'wx', mode });
-    await fs.chmod(to, mode);
-    return;
-  }
-  await fs.copyFile(from, to, fsModule.constants.COPYFILE_EXCL);
-}
-
 async function exists(file) {
   try { await fs.lstat(file); return true; } catch (error) {
     if (error.code === 'ENOENT') return false;
@@ -92,7 +57,7 @@ function restoredName(original, index) {
   return `${stem} (restored${index ? ` ${index}` : ''})${extension}`;
 }
 
-async function executeCommand({ root, authority, engine, request, tree, moved, changed }) {
+async function executeCommand({ root, authority, engine, request, tree, moved, changed, documentHost = createRootDocumentHost({ ctx: { root, localAuthority: authority } }) }) {
   if (!request || typeof request !== 'object') throw refusal('forbidden', 'Invalid command');
   if (request.command === 'create') {
     const template = templateManifest.find(item => item.id === request.template);
@@ -114,8 +79,11 @@ async function executeCommand({ root, authority, engine, request, tree, moved, c
       const target = authority?.admitWriteTarget(claim, {
         rootId: root.id, logicalPath: rel, canonicalPath, origin: null, live: null,
       }, token, { explicitCreate: true });
-      await atomicWriteFile(canonicalPath, await storePageState(root.path, rel, html), null);
-      if (target) await authority.confirmKnownWrite(target, html, token);
+      const result = await documentHost.commit({
+        kind: 'create', name: rel, filePath: canonicalPath, bytes: html,
+        expected: { type: 'absent' }, context: { target, token },
+      });
+      if (result.outcome === 'refused') throw refusal('conflict', 'Destination exists', 409);
       await tree.scan(rel);
       changed(root.id, [rel]);
       return { path: rel };
@@ -205,45 +173,33 @@ async function executeCommand({ root, authority, engine, request, tree, moved, c
       if (!(await fs.stat(parentPath)).isDirectory()) throw refusal('forbidden', 'Parent is not a folder', 403);
     }
 
-    const structural = request.command !== 'duplicate';
-    const step = {
+    const entry = {
       from: { location: fromLocation, canonical: fromCanonical, isDir: fromStat.isDirectory(), isSymlink: false },
-      to: request.command === 'trash' ? null : { location: path.join(root.path, toRel), canonical: destination },
-      fromRel,
-      toRel: request.command === 'trash' ? null : toRel,
+      to: { location: path.join(root.path, toRel), canonical: destination },
     };
-    const plan = structural && authority ? authority.prepareStructure(token, { rootId: root.id, steps: [step] }) : null;
-    let completed = 0;
-    try {
-      await fs.mkdir(path.dirname(destination), { recursive: true });
-      if (request.command === 'duplicate') {
-        await copyDocumentTree(fromCanonical, destination);
-        authority?.setAdmission(token, { rootId: root.id, logicalPath: toRel, canonicalPath: destination,
-          active: true, prefix: fromStat.isDirectory() });
-      } else {
-        await fs.rename(fromLocation, destination);
-        completed = 1;
-        if (request.command === 'rename' || request.command === 'move') {
-          if (fromStat.isDirectory()) await movePageStateDir(root.path, fromRel, toRel);
-          else await movePageState(root.path, fromRel, toRel);
-        } else if (request.command === 'trash') {
-          if (fromStat.isDirectory()) await dropPageStateDir(root.path, fromRel);
-          else await dropPageState(root.path, fromRel);
-        }
-      }
-    } finally {
-      if (plan) {
-        if (completed) authority.commitStructure(plan, completed, token);
-        authority.releaseStructure(plan, token);
+    const result = await documentHost.restructure({
+      kind: request.command === 'trash' ? 'trash' : request.command === 'duplicate' ? 'duplicate' : 'move',
+      rootId: root.id,
+      steps: [{ from: fromRel, to: toRel }],
+      context: { token, entries: [entry] },
+    });
+    if (result.outcome !== 'committed') throw result.error;
+    if (result.completed === 1) {
+      if (request.command === 'rename' || request.command === 'move') {
+        if (fromStat.isDirectory()) await movePageStateDir(root.path, fromRel, toRel);
+        else await movePageState(root.path, fromRel, toRel);
+      } else if (request.command === 'trash') {
+        if (fromStat.isDirectory()) await dropPageStateDir(root.path, fromRel);
+        else await dropPageState(root.path, fromRel);
       }
     }
-    if (structural) {
+    if (request.command === 'duplicate') {
+      await tree.scan(toRel);
+      changed(root.id, [toRel]);
+    } else {
       tree.moved(fromRel, toRel);
       if (restoring) await tree.scan(toRel);
       moved(root.id, fromRel, toRel);
-    } else {
-      await tree.scan(toRel);
-      changed(root.id, [toRel]);
     }
     return { path: toRel };
   });

@@ -31,14 +31,14 @@ jest.mock('eventsource', () => ({
   EventSource: jest.fn()
 }));
 
-jest.mock('../../src/main/utils/backup', () => ({
+jest.mock('../../src/main/utils/backup', () => (require('../helpers/mock-exports').mockExports('src/main/utils/backup', {
   createBackupIfExists: jest.fn(),
   createBinaryBackupIfExists: jest.fn()
-}));
+})));
 
-jest.mock('../../src/main/data-loss-guard', () => ({
+jest.mock('../../src/main/data-loss-guard', () => (require('../helpers/mock-exports').mockExports('src/main/data-loss-guard', {
   runDataLossGuard: jest.fn(async () => ({}))
-}));
+})));
 
 jest.mock('../../src/main/utils/derived-artifacts', () => ({
   refreshDerivedArtifacts: jest.fn(async () => ({}))

@@ -21,8 +21,8 @@ const {
 const { calculateChecksum } = require('./utils');
 const { classifyPath } = require('./path-helpers');
 const { LOCKED_FOLDER } = require('./locked-folder');
-const fs = require('fs/promises');
 const { RootObserver } = require('../main/root-observer');
+const { restructureMove, documentHostFor } = require('./local-boundary');
 
 // C3.11: the states a session's feed is dropped in. What the user edits while a
 // session is paused, offline, degraded or stopped is reconciled by the pass that
@@ -46,7 +46,9 @@ module.exports = {
     }
 
     this._subscribedObserver = observer;
-    this._disposeObserver = observer.subscribe(({ event, rel }) => this._dispatchRaw(event, rel));
+    this._disposeObserver = documentHostFor(this).events(null, ({ type, event, rel }) => {
+      if (type === 'change') this._dispatchRaw(event, rel);
+    });
     this._onObserverError = (error) => {
       console.error('[SYNC] Watcher error:', error);
       this.stats.errors.push(formatErrorForLog(error, { action: 'watcher' }));
@@ -151,7 +153,8 @@ module.exports = {
         if (outcome.occupied) return 'occupied';
         if (!outcome.moved && !outcome.unchanged) return false;
       } else {
-        await fs.rename(path.join(this.syncFolder, fromRel), target);
+        const moved = await restructureMove(this, fromRel, LOCKED_FOLDER);
+        if (moved.outcome !== 'committed') return false;
       }
       console.log(`[SYNC] ${fromRel} renamed back to ${LOCKED_FOLDER}`);
       if (this.logger) {

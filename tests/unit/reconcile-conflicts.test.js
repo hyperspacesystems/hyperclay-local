@@ -25,21 +25,21 @@ jest.mock('livesync-hyperclay', () => ({
   }
 }));
 
-jest.mock('../../src/main/data-loss-guard', () => ({
+jest.mock('../../src/main/data-loss-guard', () => (require('../helpers/mock-exports').mockExports('src/main/data-loss-guard', {
   runDataLossGuard: jest.fn(() => Promise.resolve({})),
   applyRemoteResolution: jest.fn(),
   provenanceForLocalSave: jest.fn(() => 'ui-unknown')
-}));
+})));
 
 jest.mock('../../src/main/utils/derived-artifacts', () => ({
   refreshDerivedArtifacts: jest.fn(async () => {})
 }));
 
-jest.mock('../../src/main/utils/backup', () => ({
+jest.mock('../../src/main/utils/backup', () => (require('../helpers/mock-exports').mockExports('src/main/utils/backup', {
   createBackup: jest.fn(),
   createBackupIfExists: jest.fn(),
   createBinaryBackupIfExists: jest.fn()
-}));
+})));
 
 const api = require('../../src/sync-engine/api-client');
 jest.mock('../../src/sync-engine/api-client', () => ({

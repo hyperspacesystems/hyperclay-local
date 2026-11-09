@@ -13,6 +13,7 @@
  * Everything here is NON-FATAL to the write: a guard failure logs and returns.
  * See plans/hyperclay-local/data-clobber-guard-plan.md.
  */
+const crypto = require('crypto');
 const fs = require('fs').promises;
 const path = require('upath');
 const cheerio = require('cheerio');
@@ -126,6 +127,11 @@ async function readGuard(baseDir, name) {
   }
 }
 async function writeGuard(baseDir, name, guard) {
+  const unstampedKey = `${baseDir}::${name}`;
+  if (guard.baseline && guard.lastSeen === undefined && unstampedSeen.has(unstampedKey)) {
+    guard.lastSeen = unstampedSeen.get(unstampedKey);
+    unstampedSeen.delete(unstampedKey);
+  }
   const abs = resolveGuardPath(baseDir, name);
   await fs.mkdir(path.dirname(abs), { recursive: true });
   // Atomic write: a crash mid-write would otherwise corrupt the JSON and lose
@@ -259,7 +265,6 @@ async function runDataLossGuard({ baseDir, name, newHtml, prevContent, prov, liv
 
       if (fire) {
         const recoverableHtmlBackup = await captureRecoverPath(baseDir, name, prevContent);
-        const crypto = require('crypto');
         guard.event = {
           id: crypto.randomUUID(),
           recoverableData: base,
@@ -533,6 +538,66 @@ async function getGuardEvent(baseDir, name, currentHtml, live = createRootLive(n
 }
 
 // ---------------------------------------------------------------------------
+// The outside-edit catch-up. The root observer starts with ignoreInitial, so an
+// edit made while Local was closed has no watcher pass behind it and no notice.
+// The compare is the bytes on disk against the last bytes the guard or the host
+// saw — never against the island baseline — so a save that does not advance
+// the baseline (ui-unknown) stops mattering: its bytes are simply the last ones
+// seen.
+//
+// pendingSeen is set synchronously by the host, before it renames new bytes into
+// place, so a page load that reads those bytes while the save is still finishing
+// or before the guard persist lands still sees them as the host's own.
+// ---------------------------------------------------------------------------
+const pendingSeen = new Map();
+
+// A save's stamp that arrived before its document had a guard baseline. The save's own guard pass
+// extracts the island before it takes the lock, so on a new document the stamp lands first and
+// finds nothing to write into. It waits here, and the first write of a baseline records it.
+const unstampedSeen = new Map();
+
+// Called by the host just before it renames new bytes into place, so a page load that reads them
+// while the save is still finishing knows they are the host's own.
+function markPending(baseDir, name, bytes) {
+  pendingSeen.set(`${baseDir}::${name}`, crypto.createHash('sha256').update(bytes).digest('hex'));
+}
+
+function noteSeen(baseDir, name, bytes) {
+  const key = `${baseDir}::${name}`;
+  const hash = crypto.createHash('sha256').update(bytes).digest('hex');
+  pendingSeen.set(key, hash);
+  return withLock(key, async () => {
+    const guard = await readGuard(baseDir, name);
+    if (guard && guard.baseline) {
+      unstampedSeen.delete(key);
+      if (guard.lastSeen !== hash) {
+        guard.lastSeen = hash;
+        await writeGuard(baseDir, name, guard);
+      }
+    } else {
+      unstampedSeen.set(key, hash);
+    }
+  }).catch((e) => console.error('[data-guard] noteSeen failed:', e && e.message ? e.message : e))
+    .finally(() => { if (pendingSeen.get(key) === hash) pendingSeen.delete(key); });
+}
+
+// A guard written before lastSeen existed is seeded on first read and raises
+// nothing: the one edit that could have happened across the upgrade is not
+// flagged. A crash between the rename and the persist makes the next read run
+// one external pass on the host's own bytes, which raises a notice only if
+// those bytes really lost data against the baseline.
+async function catchUpOutsideEdit(baseDir, name, bytes, html, live) {
+  const hash = crypto.createHash('sha256').update(bytes).digest('hex');
+  if (pendingSeen.get(`${baseDir}::${name}`) === hash) return;
+  const guard = await readGuard(baseDir, name);
+  if (!guard || !guard.baseline || guard.lastSeen === hash) return;
+  if (guard.lastSeen !== undefined) {
+    await runDataLossGuard({ baseDir, name, newHtml: html, prevContent: null, prov: 'external', live });
+  }
+  await noteSeen(baseDir, name, bytes);
+}
+
+// ---------------------------------------------------------------------------
 // Resolve (dismiss / revert / restore). writeBack performs the actual save
 // through the caller's backup-then-write helper so resolution is versioned.
 // ---------------------------------------------------------------------------
@@ -658,6 +723,9 @@ module.exports = {
   provenanceForLocalSave,
   userDrivenFromHeader,
   getGuardEvent,
+  noteSeen,
+  markPending,
+  catchUpOutsideEdit,
   resolveGuard,
   applyRemoteResolution,
   restoreDataOntoHtml,

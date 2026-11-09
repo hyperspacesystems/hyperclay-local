@@ -1,17 +1,18 @@
 const fs = require('fs').promises;
 const { calculateChecksum } = require('../sync-engine/utils');
 const path = require('upath');
+const { logicalBytes } = require('./page-state-store.js');
+const { publishRecoveredCopy } = require('./utils/backup.js');
 
 const KINDS = {
   'browser-save': { lane: 'save', origin: 'save' },
   'data-api': { lane: 'save', origin: 'api' },
-  checkpoint: { lane: 'save', origin: 'checkpoint' },
   restore: { lane: 'replace' },
   'guard-restore': { lane: 'replace' },
   'sync-download': { lane: 'exact' },
-  'external-rebase': { lane: null },
+  'external-rebase': { lane: 'external-rebase' },
   workspace: { lane: null },
-  create: { lane: null },
+  create: { lane: 'create' },
 };
 
 const REQUIRED_DEPS = [
@@ -19,7 +20,7 @@ const REQUIRED_DEPS = [
   'canonicalForWrite', 'formatHtml', 'scopeTailwindLink', 'stripSaveToken', 'splitWrite',
   'storePageState', 'writePageState', 'logicalDocument',
   'createBackup', 'createBackupIfExists', 'createBinaryBackupIfExists', 'atomicWriteFile',
-  'assertWriteContext', 'assertStructureContext',
+  'assertWriteContext', 'assertStructureContext', 'stripCopyBytes',
   'writeApiSidecar', 'refreshDerivedArtifacts', 'getTailwindCssName', 'compileTailwind', 'dataGuard', 'documentEtag',
   'rebaseStaleSave', 'newestVersionFiles', 'needsAdoption', 'roomsPackage',
   'MAX_EXTERNAL_HTML', 'VERSIONS_DIR', 'TAILWIND_DIR',
@@ -29,6 +30,8 @@ const REQUIRED_DEPS = [
 const MAX_EXTERNAL_HTML = 12 * 1024 * 1024;
 
 const DOCUMENT_NAME = /\.(html|htmlclay)$/i;
+
+const METADATA_DIR = '.hyperclay';
 
 const roomsPackage = () => require('@panphora/clayjs/server/rooms');
 
@@ -62,6 +65,32 @@ function refused(reason) {
   return { outcome: 'refused', reason, etag: null, stored: null, content: null };
 }
 
+const STRUCTURE_KINDS = {
+  move: { retire: false, copy: false, crossDevice: true },
+  trash: { retire: true, copy: false, crossDevice: true },
+  duplicate: { copy: true },
+  'sync-move': { retire: false, copy: false, crossDevice: true },
+  'sync-trash': { retire: true, copy: false, crossDevice: true },
+};
+
+function withCause(result, error) {
+  if (error) Object.defineProperty(result, 'error', { value: error, enumerable: false });
+  return result;
+}
+
+async function moveEntry(from, to, { crossDevice }) {
+  await fs.mkdir(path.dirname(to), { recursive: true });
+  try {
+    await fs.rename(from, to);
+    return false;
+  } catch (error) {
+    if (!crossDevice || error.code !== 'EXDEV') throw error;
+    await fs.copyFile(from, to);
+    await fs.unlink(from);
+    return true;
+  }
+}
+
 function createDocumentHost(deps) {
   for (const name of REQUIRED_DEPS) {
     if (deps[name] === undefined) throw new TypeError(`createDocumentHost is missing ${name}`);
@@ -70,13 +99,18 @@ function createDocumentHost(deps) {
     ctx, baseDir, live, resolveTailwindWrite, emit, logger,
     canonicalForWrite, formatHtml, scopeTailwindLink, stripSaveToken, splitWrite,
     storePageState, writePageState, logicalDocument, createBackup, createBackupIfExists, createBinaryBackupIfExists,
-    atomicWriteFile, assertWriteContext,
+    atomicWriteFile, assertWriteContext, assertStructureContext, stripCopyBytes,
     writeApiSidecar, refreshDerivedArtifacts, getTailwindCssName, compileTailwind, documentEtag, roomsPackage, TAILWIND_DIR,
     store, rebaseStaleSave, newestVersionFiles, needsAdoption, dataGuard, MAX_EXTERNAL_HTML, VERSIONS_DIR,
+    withDocument = require('./utils/write-queue').withDocumentWrite,
+    loadCheckpoint = require('./utils/page-api').loadCheckpoint,
+    createDocument = null,
+    getObserver = () => null,
   } = deps;
 
   async function placeBytes({ name, filePath, logical, durable, beforeRename }) {
     const stored = await storePageState(baseDir, name, logical, durable);
+    dataGuard.markPending(baseDir, name, stored);
     try {
       await atomicWriteFile(filePath, stored, 'utf8', beforeRename, durable);
     } catch (error) {
@@ -109,6 +143,13 @@ function createDocumentHost(deps) {
       throw error;
     }
     return { bytes, checksum: await calculateChecksum(bytes) };
+  }
+
+  function events(since, listener) {
+    const observer = getObserver();
+    if (!observer) throw new Error('This document host has no observer');
+    if (since !== null) listener({ type: 'gap', since });
+    return observer.subscribe(({ event, rel }) => listener({ type: 'change', event, rel }));
   }
 
   async function preconditionFailed(request) {
@@ -146,6 +187,7 @@ function createDocumentHost(deps) {
       await createBinaryBackupIfExists(filePath, name, baseDir, emit, logger);
     }
     const stored = isDocument ? await storePageState(baseDir, name, bytes) : bytes;
+    if (isDocument) dataGuard.markPending(baseDir, name, stored);
     try {
       await atomicWriteFile(filePath, stored, Buffer.isBuffer(stored) ? null : 'utf8');
     } catch (error) {
@@ -184,9 +226,8 @@ function createDocumentHost(deps) {
   // the derived artifacts, for the same reason the save route is: the document is
   // already written, backed up and broadcast by that point.
   // Returns the composed document, which is what the stamp describes.
-  async function commitReplace({ name, filePath: requestedPath, bytes, edit = false, context = {}, hooks = {} }) {
+  async function commitReplace({ name, filePath: requestedPath, bytes, edit = false, safety = false, context = {} }) {
     const { target = null, token = null } = context;
-    const { beforeWrite = null } = hooks;
     let filePath = requestedPath;
     // Response-scoped root metadata (a save token, this host's own documentetag)
     // comes back from clients and from a stored version, and none of it belongs in
@@ -220,7 +261,48 @@ function createDocumentHost(deps) {
           html: content,
         });
       }
-      if (beforeWrite && await beforeWrite() === false) return refused('declined');
+      if (safety) {
+        let current = null;
+        try {
+          current = await logicalBytes(baseDir, name, await fs.readFile(filePath));
+        } catch (error) {
+          if (error.code !== 'ENOENT') {
+            console.error(`Refusing to replace ${name}: current file cannot be read`);
+            return refused('room-unavailable');
+          }
+        }
+        if (current !== null) {
+          const currentHtml = current.toString('utf8');
+          let safetyHtml;
+          try {
+            // An edit of the page keeps the room: its unsaved edits stay in it and
+            // merge the restored article, so the backup is the plain document and
+            // the room's own edits are rendered into a recovered copy below.
+            safetyHtml = edit || !ctx.localCheckpoint
+              ? currentHtml
+              : await ctx.localCheckpoint.safetyBackup(filePath, currentHtml);
+          } catch (error) {
+            console.error(`Refusing to replace ${name}: live room cannot be backed up`, error);
+            return refused('room-unavailable');
+          }
+          const safetyCopy = await createBackup(baseDir, backupName, safetyHtml);
+          if (!safetyCopy) {
+            console.error(`Refusing to replace ${name}: safety backup failed`);
+            return refused('backup-failed');
+          }
+          // The room keeps its unsaved edits through an edit-restore, so they are
+          // written to a recovered copy too: they survive even if no tab adopts
+          // the restored article. A rendering failure never stops the restore.
+          if (edit && ctx.localCheckpoint && ctx.localCheckpoint.dirty(ctx.localAuthority?.rooms.get(filePath))) {
+            try {
+              const unsaved = await ctx.localCheckpoint.safetyBackup(filePath, currentHtml);
+              await publishRecoveredCopy(baseDir, name, unsaved);
+            } catch (error) {
+              console.error(`Recovered copy of ${name} failed (non-fatal):`, error && error.message ? error.message : error);
+            }
+          }
+        }
+      }
       await createBackup(baseDir, backupName, write.file);
       stored = await placeBytes({ name, filePath, logical: content });
       if (authorityWrite) {
@@ -246,10 +328,9 @@ function createDocumentHost(deps) {
     const {
       name, filePath, bytes, dataLossPrev, userDriven, saveId,
       ifMatch, pageConversion, pageWrite, pageFormat,
-      persistentToken = null, readIdentity = null, context = {}, hooks = {},
+      persistentToken = null, readIdentity = null, context = {},
     } = request;
     const { target = null, token = null } = context;
-    const { answer = null } = hooks;
     let content = bytes;
     // ANCILLARY DISK CONVENTION: versions dir and backups use baseName without
     // extension (matches platform's versions/{baseName}/ layout).
@@ -279,10 +360,6 @@ function createDocumentHost(deps) {
     const write = await splitWrite(baseDir, name, content, { keepState: !pageConversion });
     let fileContent = write.file;
     content = write.logical;
-    // A caller that has to hand a client the document it can safely edit asks for
-    // the file part here: the composed form above carries merge state that belongs
-    // in the sidecar, never in a buffer somebody types into.
-    if (answer) answer.html = fileContent;
 
     const authority = ctx.localAuthority;
     const authorityWrite = Boolean(authority && target && token);
@@ -308,7 +385,6 @@ function createDocumentHost(deps) {
         const format = checkPageFormatAdmission({ currentHtml, html: content, capability, admitted });
         content = format.html;
         fileContent = withPageFormatFloor(fileContent, format.floor);
-        if (answer) answer.html = fileContent;
         if (admission === 'initial') {
           pageToken = rooms.reservePageInitial(filePath, {
             nodeId: target.identity, currentHtml, html: content, ifMatch,
@@ -535,13 +611,124 @@ function createDocumentHost(deps) {
           timestamp: Date.now()
         });
       }
-      return { outcome: 'committed', reason: null, etag: documentEtag(content), stored, content };
+      return { outcome: 'committed', reason: null, etag: documentEtag(content), stored, content, file: fileContent };
     } finally {
       if (pageToken) authority.rooms.releasePage(pageToken);
     }
   }
 
+  async function commitCreate({ name, filePath: requestedPath, bytes, context = {} }) {
+    const { target = null, token = null } = context;
+    const filePath = target ? target.canonicalPath : requestedPath;
+    if (target) assertWriteContext(token, filePath);
+    const stored = await storePageState(baseDir, name, bytes);
+    dataGuard.markPending(baseDir, name, stored);
+    await atomicWriteFile(filePath, stored, null);
+    if (target) await ctx.localAuthority.confirmKnownWrite(target, bytes, token);
+    return { outcome: 'committed', reason: null, etag: documentEtag(bytes), checksum: null, stored, content: bytes };
+  }
+
+  async function commitRebase({ name, filePath: requestedPath, bytes, context = {} }) {
+    const { target, token } = context;
+    assertWriteContext(token, target.canonicalPath);
+    await ctx.localAuthority.recoverUnsavedEdits(target, token);
+    await createBackup(baseDir, name.replace(DOCUMENT_NAME, ''), roomsPackage().splitPage(bytes).file);
+    const stored = await storePageState(baseDir, name, bytes);
+    dataGuard.markPending(baseDir, name, stored);
+    await atomicWriteFile(target.canonicalPath, stored);
+    await ctx.localAuthority.confirmKnownWrite(target, Buffer.from(bytes, 'utf8'), token, { sender: 'file-watcher', publish: false });
+    return { outcome: 'committed', reason: null, etag: documentEtag(bytes), checksum: null, stored, content: bytes };
+  }
+
+  // A duplicate is a new document, so its documents are filtered before they reach the
+  // destination: nothing raw is ever written first for the root watcher to see. Each entry is
+  // created exclusively, so an occupied destination is never overwritten, and the source is only
+  // ever read. Versions and automatic recovery state keep their bytes.
+  async function copyStructure(from, to) {
+    const stat = await fs.lstat(from);
+    if (stat.isDirectory()) {
+      if (path.basename(from) === METADATA_DIR) {
+        await fs.cp(from, to, { recursive: true, errorOnExist: true, force: false });
+        return;
+      }
+      const mode = stat.mode & 0o777;
+      await fs.mkdir(to, { mode });
+      await fs.chmod(to, mode);
+      for (const name of await fs.readdir(from)) await copyStructure(path.join(from, name), path.join(to, name));
+      return;
+    }
+    if (stat.isSymbolicLink()) {
+      await fs.cp(from, to, { errorOnExist: true, force: false });
+      return;
+    }
+    if (DOCUMENT_NAME.test(path.basename(from))) {
+      const mode = stat.mode & 0o777;
+      const bytes = await fs.readFile(from);
+      await fs.writeFile(to, stripCopyBytes(bytes), { flag: 'wx', mode });
+      await fs.chmod(to, mode);
+      return;
+    }
+    await fs.copyFile(from, to, fs.constants.COPYFILE_EXCL);
+  }
+
+  async function restructure({ kind, rootId = null, steps, context = {} }) {
+    if (!Object.hasOwn(STRUCTURE_KINDS, kind)) throw new TypeError(`Unknown structure kind: ${kind}`);
+    const policy = STRUCTURE_KINDS[kind];
+    const { token = null, entries } = context;
+    const authority = ctx.localAuthority;
+    if (authority) assertStructureContext(token);
+    if (policy.copy) {
+      let completed = 0;
+      let failure = null;
+      try {
+        for (const [index, entry] of entries.entries()) {
+          await fs.mkdir(path.dirname(entry.to.canonical), { recursive: true });
+          await copyStructure(entry.from.location, entry.to.canonical);
+          if (authority) {
+            authority.setAdmission(token, { rootId, logicalPath: steps[index].to,
+              canonicalPath: entry.to.canonical, active: true, prefix: entry.from.isDir });
+          }
+          completed = index + 1;
+        }
+      } catch (error) {
+        failure = error;
+      }
+      const outcome = !failure ? 'committed' : completed ? 'partial' : 'failed';
+      return withCause({ outcome, completed, reason: failure ? (failure.code ?? 'failed') : null }, failure);
+    }
+    const plan = authority ? authority.prepareStructure(token, {
+      rootId,
+      steps: steps.map((step, index) => ({
+        from: entries[index].from, fromRel: step.from,
+        to: policy.retire ? null : entries[index].to, toRel: policy.retire ? null : step.to,
+      })),
+    }) : null;
+    let completed = 0;
+    let failure = null;
+    const copiedSteps = [];
+    try {
+      for (const [index, entry] of entries.entries()) {
+        if (await moveEntry(entry.from.location, entry.to.canonical, policy)) copiedSteps.push(index);
+        completed = index + 1;
+      }
+    } catch (error) {
+      failure = error;
+    } finally {
+      if (plan) {
+        try {
+          if (completed) authority.commitStructure(plan, completed, token, { copiedSteps });
+        } finally {
+          authority.releaseStructure(plan, token);
+        }
+      }
+    }
+    const outcome = !failure ? 'committed' : completed ? 'partial' : 'failed';
+    return withCause({ outcome, completed, reason: failure ? (failure.code ?? 'failed') : null }, failure);
+  }
+
   const LANES = {
+    create: commitCreate,
+    'external-rebase': commitRebase,
     exact: commitExact,
     replace: commitReplace,
     save: commitSave,
@@ -551,24 +738,88 @@ function createDocumentHost(deps) {
     if (!request || !Object.hasOwn(KINDS, request.kind)) {
       throw new TypeError(`Unknown document write kind: ${request && request.kind}`);
     }
+    if (request.hooks) throw new TypeError('hooks ended in M16');
     const policy = KINDS[request.kind];
     const lane = LANES[policy.lane];
     if (!lane) throw new Error(`Document write kind ${request.kind} is not migrated yet`);
     if (await preconditionFailed(request)) return refused('changed');
     try {
-      return await lane(request, policy);
+      const result = await lane(request, policy);
+      // The bytes the guard must treat as the last ones seen. Not awaited: a save
+      // gains no step, and pendingSeen is set synchronously so a page load that
+      // lands before the persist still reads them as seen.
+      if (result.outcome === 'committed') dataGuard.noteSeen(baseDir, request.name, result.stored);
+      return result;
     } catch (error) {
       if (error && error.indeterminate) {
-        return { outcome: 'indeterminate', reason: null, etag: null, stored: null, content: null, error };
+        return withCause({ outcome: 'indeterminate', reason: error.code ?? 'after-rename', etag: null, stored: null, content: null }, error);
       }
       throw error;
     }
   }
 
-  return { commit, read };
+  // A dirty room's unsaved edits, rendered and stored through the save lane. The
+  // caller hands in the room it means and the page generation it was made at, and
+  // the save lane runs inside the boundary this call already holds.
+  async function checkpoint({ name, filePath: key }, { roomIdentity, generation }, { target, room }) {
+    let core;
+    try { core = await loadCheckpoint(); }
+    catch (error) { return { kind: 'refused', reason: 'checkpoint-unavailable', message: error.message }; }
+    const authority = ctx.localAuthority;
+    const claim = authority.captureAdmission(target);
+    return withDocument(() => ({ canonicalPath: key }), async (_locked, token) => {
+      authority.validateAdmission(claim, target, token);
+      if (authority.rooms.get(key) !== room || String(room.nodeId) !== String(roomIdentity)) {
+        return { kind: 'refused', reason: 'invalid-identity' };
+      }
+      let currentHtml;
+      let readIdentity;
+      try {
+        const handle = await fs.open(key, 'r');
+        try {
+          readIdentity = await handle.stat({ bigint: true });
+          currentHtml = await handle.readFile('utf8');
+        } finally { await handle.close(); }
+      }
+      catch (error) {
+        if (error.code === 'ENOENT') return { kind: 'refused', reason: 'invalid-identity' };
+        throw error;
+      }
+      if (authority.logicalHtml) currentHtml = await authority.logicalHtml(target, currentHtml);
+      const observed = await authority.reconcileDisk(target, currentHtml, token);
+      if (observed.kind === 'replacement' || authority.rooms.get(key) !== room ||
+          (room.pageTransition?.id ?? null) !== generation) {
+        return { kind: 'refused', reason: 'invalid-identity' };
+      }
+      let capture;
+      try { capture = core.captureCheckpoint(room, { nodeId: target.identity, roomKey: key }); }
+      catch (error) { return { kind: 'refused', reason: 'invalid-document', error }; }
+      if (!authority.roomIsDirty(room)) return { kind: 'clean' };
+      if (core.isCheckpointCurrent(currentHtml, capture)) {
+        authority.rooms.markSaved(room, capture);
+        return { kind: 'current' };
+      }
+      const { JSDOM } = require('jsdom');
+      const rendered = core.renderCheckpoint(currentHtml, capture, {
+        createDocument: createDocument ?? (() => new JSDOM('<!doctype html><html><body></body></html>', {
+          runScripts: undefined, resources: undefined,
+        }).window.document),
+      });
+      if (rendered.kind !== 'ok') return { kind: 'refused', reason: rendered.reason ?? 'invalid-document' };
+      const written = await commitSave({
+        name, filePath: key, bytes: rendered.html, dataLossPrev: currentHtml,
+        userDriven: false, saveId: '', readIdentity, context: { target, token },
+      }, { origin: 'checkpoint' });
+      if (written.outcome === 'indeterminate') throw written.error;
+      if (written.outcome === 'committed') dataGuard.noteSeen(baseDir, name, written.stored);
+      return { kind: 'ok', revision: rendered.revision, written: written.content };
+    });
+  }
+
+  return { commit, read, restructure, checkpoint, events };
 }
 
-function createRootDocumentHost({ ctx, live = require('./utils/root-live.js').createRootLive(ctx.root), emit = () => {}, logger = null }) {
+function createRootDocumentHost({ ctx, live = require('./utils/root-live.js').createRootLive(ctx.root), emit = () => {}, logger = null, loadCheckpoint, getObserver = () => null }) {
   const { getConsentRegistry, resolveWritePath, validateSegments } = require('./utils/path-resolver.js');
   const { snapshotStoreFor } = require('./utils/snapshot-store.js');
   const { TAILWIND_DIR, VERSIONS_DIR } = require('./utils/artifact-paths.js');
@@ -580,6 +831,7 @@ function createRootDocumentHost({ ctx, live = require('./utils/root-live.js').cr
   const { compileTailwind, getTailwindCssName } = require('tailwind-hyperclay');
   const { scopeTailwindLink } = require('./utils/tailwind-scoping.js');
   const { stripSaveToken } = require('./utils/root-attrs.js');
+  const { stripCopyBytes } = require('./copy-content.js');
   const dataGuard = require('./data-loss-guard.js');
   const { documentEtag } = require('./spec-wire.js');
   const { rebaseStaleSave, newestVersionFiles, needsAdoption } = require('./page-rebase.js');
@@ -597,10 +849,10 @@ function createRootDocumentHost({ ctx, live = require('./utils/root-live.js').cr
     canonicalForWrite, formatHtml, scopeTailwindLink, stripSaveToken, splitWrite,
     storePageState, writePageState, logicalDocument,
     createBackup, createBackupIfExists, createBinaryBackupIfExists,
-    atomicWriteFile, assertWriteContext, assertStructureContext,
+    atomicWriteFile, assertWriteContext, assertStructureContext, stripCopyBytes,
     writeApiSidecar, refreshDerivedArtifacts, getTailwindCssName, compileTailwind,
     dataGuard, documentEtag, rebaseStaleSave, newestVersionFiles, needsAdoption, roomsPackage,
-    MAX_EXTERNAL_HTML, VERSIONS_DIR, TAILWIND_DIR,
+    MAX_EXTERNAL_HTML, VERSIONS_DIR, TAILWIND_DIR, loadCheckpoint, getObserver,
   });
 }
 

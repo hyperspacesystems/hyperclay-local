@@ -32,11 +32,11 @@ jest.mock('livesync-hyperclay', () => ({
   }
 }));
 
-jest.mock('../../src/main/utils/backup', () => ({
+jest.mock('../../src/main/utils/backup', () => (require('../helpers/mock-exports').mockExports('src/main/utils/backup', {
   createBackup: jest.fn(),
   createBackupIfExists: jest.fn(),
   createBinaryBackupIfExists: jest.fn()
-}));
+})));
 
 jest.mock('../../src/main/utils/utils', () => ({
   getServerBaseUrl: (url) => url || 'http://localhyperclay.com'
@@ -121,7 +121,6 @@ beforeEach(() => {
   };
 
   fileOps.ensureDirectory.mockResolvedValue();
-  fileOps.moveFile.mockResolvedValue();
   fileOps.readFile.mockResolvedValue('<html>content</html>');
   fileOps.readFileBuffer.mockImplementation(async (filePath) => Buffer.from(await fileOps.readFile(filePath)));
   fileOps.calculateBufferChecksum.mockImplementation(realBufferChecksum);
@@ -169,6 +168,14 @@ function fsInit(fileMap) {
 function mkdirs(r) { if (!r) return; dirs.add(r); parentsOf(r).forEach(d => dirs.add(d)); }
 function installFs() {
   const enoent = () => Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+  const moveOnDisk = (from, to) => {
+    const rs = rel(from), rd = rel(to);
+    mkdirs(parentsOf(rd).pop());
+    if (files.has(rs)) { files.set(rd, files.get(rs)); files.delete(rs); return; }
+    if (!dirs.has(rs)) throw enoent();
+    for (const [f, c] of [...files]) if (f.startsWith(rs + '/')) { files.delete(f); files.set(rd + f.slice(rs.length), c); }
+    for (const x of [...dirs]) if (x === rs || x.startsWith(rs + '/')) { dirs.delete(x); dirs.add(rd + x.slice(rs.length)); }
+  };
   fileOps.fileExists.mockImplementation((a) => rel(a) === '' || files.has(rel(a)) || dirs.has(rel(a)));
   fileOps.getFileStats.mockImplementation(async (a) => {
     const r = rel(a);
@@ -194,15 +201,14 @@ function installFs() {
         stored: bytes, content: bytes
       };
     }),
-  });
-  fileOps.deleteFile.mockImplementation(async (a) => { files.delete(rel(a)); });
-  fileOps.moveFile.mockImplementation(async (s, d) => {
-    const rs = rel(s), rd = rel(d);
-    mkdirs(parentsOf(rd).pop());
-    if (files.has(rs)) { files.set(rd, files.get(rs)); files.delete(rs); return; }
-    if (!dirs.has(rs)) throw enoent();
-    for (const [f, c] of [...files]) if (f.startsWith(rs + '/')) { files.delete(f); files.set(rd + f.slice(rs.length), c); }
-    for (const x of [...dirs]) if (x === rs || x.startsWith(rs + '/')) { dirs.delete(x); dirs.add(rd + x.slice(rs.length)); }
+    restructure: jest.fn(async ({ context }) => {
+      let completed = 0;
+      for (const entry of context.entries) {
+        moveOnDisk(entry.from.location, entry.to.canonical);
+        completed += 1;
+      }
+      return { outcome: 'committed', completed, reason: null };
+    }),
   });
   const isSite = (f) => /\.(html|htmlclay)$/i.test(f);
   fileOps.getLocalFiles.mockImplementation(async () => new Map([...files.keys()].filter(isSite).map(f => [f, localFile(f)])));
@@ -239,7 +245,10 @@ async function pass() {
 
 const disk = () => [...files.keys()].sort();
 const diskDirs = () => [...dirs].sort();
-const moves = () => fileOps.moveFile.mock.calls.map(([s, d]) => [rel(s), rel(d)]);
+const moves = () => syncEngine.documentHost.restructure.mock.calls
+  .map(([request]) => request)
+  .filter((request) => request.kind === 'sync-move')
+  .flatMap((request) => request.context.entries.map((entry) => [rel(entry.from.location), rel(entry.to.canonical)]));
 const ensured = () => fileOps.ensureDirectory.mock.calls.map(([d]) => rel(d));
 const mapPaths = () => Object.fromEntries([...syncEngine.repo].map(([id, entry]) => [id, entry.path]));
 
@@ -458,14 +467,16 @@ describe('a server move this disk cannot follow', () => {
       sv(13, 'upload', 'x.png', 'proj2/sub', 12, 'X'), sv(11, 'site', 't.html', 'proj2', 10, 'T')
     ];
     jest.clearAllMocks(); installFs();
-    const realMove = fileOps.moveFile.getMockImplementation();
+    const realRestructure = syncEngine.documentHost.restructure.getMockImplementation();
     let failed = false;
-    fileOps.moveFile.mockImplementation(async (s, d) => {
-      if (!failed && rel(s) === 'proj' && rel(d) === 'proj2') {
+    syncEngine.documentHost.restructure.mockImplementation(async (request) => {
+      const movesProj = request.context.entries
+        .some((entry) => rel(entry.from.location) === 'proj' && rel(entry.to.canonical) === 'proj2');
+      if (!failed && movesProj) {
         failed = true;
         throw Object.assign(new Error('EBUSY'), { code: 'EBUSY' });
       }
-      return realMove(s, d);
+      return realRestructure(request);
     });
     spyPlans();
 
@@ -492,7 +503,7 @@ describe('a server move this disk cannot follow', () => {
     fsInit({ 'x.png': 'X' });
     server = [sv(13, 'upload', 'y.png', '', 0, 'X')];
     jest.clearAllMocks(); installFs();
-    fileOps.moveFile.mockRejectedValue(Object.assign(new Error('EBUSY'), { code: 'EBUSY' }));
+    syncEngine.documentHost.restructure.mockRejectedValue(Object.assign(new Error('EBUSY'), { code: 'EBUSY' }));
 
     const plans = spyPlans();
     await syncEngine.reconcileAll(inv(), { generation: 1 });

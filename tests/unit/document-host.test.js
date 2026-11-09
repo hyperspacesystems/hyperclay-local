@@ -1,10 +1,12 @@
 const fs = require('fs');
 const os = require('os');
 const upath = require('upath');
-const { createDocumentHost } = require('../../src/main/document-host');
+const { createDocumentHost, createRootDocumentHost } = require('../../src/main/document-host');
 const writeQueue = require('../../src/main/utils/write-queue');
-const { atomicWriteFile, withFileLock } = require('../../src/main/utils/write-queue');
+const { atomicWriteFile, withFileLock, withStructureChange, assertStructureContext } = require('../../src/main/utils/write-queue');
+const { createLocalAuthority } = require('../../src/main/local-authority');
 const { calculateChecksum } = require('../../src/sync-engine/utils');
+const { mockExports } = require('../helpers/mock-exports');
 
 const dirs = [];
 
@@ -72,13 +74,13 @@ function makeHost(overrides = {}) {
     writeApiSidecar: async () => { calls.push('writeApiSidecar'); },
     getTailwindCssName: () => null,
     compileTailwind: async () => { calls.push('compileTailwind'); return ''; },
-    dataGuard: {
+    dataGuard: mockExports('src/main/data-loss-guard', {
       provenanceForLocalSave: (userDriven) => 'prov:' + userDriven,
       runDataLossGuard: jest.fn(() => {
         calls.push('runDataLossGuard');
         return Promise.resolve();
       }),
-    },
+    }),
     documentEtag: (html) => 'etag:' + html,
     rebaseStaleSave: async () => null,
     newestVersionFiles: async () => [],
@@ -89,6 +91,7 @@ function makeHost(overrides = {}) {
     createBackupIfExists: async (...args) => { calls.push('createBackupIfExists'); return args; },
     createBinaryBackupIfExists: async (...args) => { calls.push('createBinaryBackupIfExists'); return args; },
     assertStructureContext: (token) => { calls.push('assertStructureContext'); },
+    stripCopyBytes: (bytes) => bytes,
     refreshDerivedArtifacts: async (...args) => { calls.push('refreshDerivedArtifacts'); return args; },
     emit: () => { calls.push('emit'); },
     logger: null,
@@ -361,6 +364,135 @@ test('the current checksum as expected commits', async () => {
   expect(fs.readFileSync(filePath).equals(bytes)).toBe(true);
 });
 
+test('create writes the bytes through page-state storage and commits', async () => {
+  const { host, calls, filePath, state } = makeHost();
+  const html = '<html><body>new</body></html>';
+
+  const result = await host.commit({
+    kind: 'create', name: 'page.html', filePath, bytes: html, expected: { type: 'absent' },
+  });
+
+  expect(result.outcome).toBe('committed');
+  expect(calls).toContain('storePageState');
+  expect(state.contentAtStore).toBeNull();
+  expect(fs.readFileSync(filePath, 'utf8')).toBe(html);
+});
+
+test('create over an existing file with expected absent refuses and leaves it unchanged', async () => {
+  const { host, filePath } = makeHost();
+  fs.writeFileSync(filePath, 'occupant');
+
+  const result = await host.commit({
+    kind: 'create', name: 'page.html', filePath, bytes: '<html>new</html>', expected: { type: 'absent' },
+  });
+
+  expect(result.outcome).toBe('refused');
+  expect(result.reason).toBe('changed');
+  expect(fs.readFileSync(filePath, 'utf8')).toBe('occupant');
+});
+
+function structureHost(root) {
+  let ids = 0;
+  const authority = createLocalAuthority({
+    withDocument: (resolveTarget, fn) => Promise.resolve().then(async () => fn(await resolveTarget())),
+    readSaved: async () => '<html></html>',
+    now: () => 1000,
+    newId: () => `id${++ids}`,
+  });
+  authority.registerRoot({ id: 'root-a', canonicalPath: root, path: root }, { owner: 'server' });
+  const { host } = makeHost({ baseDir: root, ctx: { localAuthority: authority }, assertStructureContext });
+  return { authority, host };
+}
+
+test('a structure transaction whose second rename fails commits the first step and releases', async () => {
+  const root = tempDir();
+  const from = upath.join(root, 'a.html');
+  const renamed = upath.join(root, 'c.html');
+  const missing = upath.join(root, 'missing.html');
+  const untouched = upath.join(root, 'd.html');
+  fs.writeFileSync(from, 'a');
+  const { authority, host } = structureHost(root);
+  const release = jest.spyOn(authority, 'releaseStructure');
+  const before = authority.captureAdmission({ rootId: 'root-a', logicalPath: 'd.html', canonicalPath: untouched });
+
+  const result = await withStructureChange(token => host.restructure({
+    kind: 'move',
+    rootId: 'root-a',
+    steps: [{ from: 'a.html', to: 'c.html' }, { from: 'missing.html', to: 'd.html' }],
+    context: {
+      token,
+      entries: [
+        { from: { location: from, canonical: from, isDir: false, isSymlink: false }, to: { location: renamed, canonical: renamed } },
+        { from: { location: missing, canonical: missing, isDir: false, isSymlink: false }, to: { location: untouched, canonical: untouched } },
+      ],
+    },
+  }));
+
+  expect(result.outcome).toBe('partial');
+  expect(result.completed).toBe(1);
+  expect(result.reason).toBe('ENOENT');
+  expect(result.error.code).toBe('ENOENT');
+  expect(fs.existsSync(renamed)).toBe(true);
+  expect(fs.existsSync(from)).toBe(false);
+  expect(release).toHaveBeenCalledTimes(1);
+  expect(authority.captureAdmission({ rootId: 'root-a', logicalPath: 'd.html', canonicalPath: untouched })).toEqual(before);
+});
+
+test('a retired structure step gives the authority to null while the file reaches .trash/', async () => {
+  const root = tempDir();
+  fs.mkdirSync(upath.join(root, '.trash'));
+  const from = upath.join(root, 'gone.html');
+  const trashed = upath.join(root, '.trash', 'gone.html');
+  fs.writeFileSync(from, 'gone');
+  const { authority, host } = structureHost(root);
+  const prepare = jest.spyOn(authority, 'prepareStructure');
+  const release = jest.spyOn(authority, 'releaseStructure');
+
+  const result = await withStructureChange(token => host.restructure({
+    kind: 'trash',
+    rootId: 'root-a',
+    steps: [{ from: 'gone.html', to: '.trash/gone.html' }],
+    context: {
+      token,
+      entries: [{ from: { location: from, canonical: from, isDir: false, isSymlink: false }, to: { location: trashed, canonical: trashed } }],
+    },
+  }));
+
+  expect(result).toMatchObject({ outcome: 'committed', completed: 1, reason: null });
+  expect(prepare).toHaveBeenCalledTimes(1);
+  const plan = prepare.mock.results[0].value;
+  expect(plan.preview.steps[0].to).toBeNull();
+  expect(plan.preview.steps[0].toRel).toBeNull();
+  expect(fs.readFileSync(trashed, 'utf8')).toBe('gone');
+  expect(fs.existsSync(from)).toBe(false);
+  expect(release).toHaveBeenCalledTimes(1);
+});
+
+test('a real sync-move puts the file at its destination and removes it from the source', async () => {
+  const root = tempDir();
+  const source = upath.join(root, 'page.html');
+  const destination = upath.join(root, 'blog', 'page.html');
+  fs.writeFileSync(source, '<p>moved</p>');
+  const host = createRootDocumentHost({ ctx: { root: { id: 'root-a', path: root }, localAuthority: null } });
+
+  const result = await host.restructure({
+    kind: 'sync-move',
+    rootId: 'root-a',
+    steps: [{ from: 'page.html', to: 'blog/page.html' }],
+    context: {
+      token: null,
+      entries: [{
+        from: { location: source, canonical: source, isDir: false, isSymlink: false },
+        to: { location: destination, canonical: destination },
+      }],
+    },
+  });
+
+  expect(result).toMatchObject({ outcome: 'committed', completed: 1, reason: null });
+  expect(fs.readFileSync(destination, 'utf8')).toBe('<p>moved</p>');
+  expect(fs.existsSync(source)).toBe(false);
+});
+
 test('two racing writes with the same expected checksum: one commits, one is refused', async () => {
   const { host, filePath } = makeHost();
   fs.writeFileSync(filePath, 'old bytes');
@@ -410,18 +542,33 @@ test('restore and guard-restore never run the data-loss guard', async () => {
   expect(calls).not.toContain('runDataLossGuard');
 });
 
-test('beforeWrite returning false declines without a backup or a write', async () => {
-  const { host, calls, filePath } = makeHost();
+test('a safety replace the room cannot back up refuses without a backup or a write', async () => {
+  const { host, calls, filePath } = makeHost({
+    ctx: { localCheckpoint: { safetyBackup: async () => { throw new Error('no room backup'); } } },
+  });
   fs.writeFileSync(filePath, 'old bytes');
 
   const result = await host.commit({
-    kind: 'restore', name: 'page.html', filePath, bytes: '<html>new</html>',
-    hooks: { beforeWrite: async () => false },
+    kind: 'restore', name: 'page.html', filePath, bytes: '<html>new</html>', safety: true,
   });
 
   expect(result.outcome).toBe('refused');
-  expect(result.reason).toBe('declined');
+  expect(result.reason).toBe('room-unavailable');
   expect(calls).not.toContain('createBackup');
+  expect(fs.readFileSync(filePath, 'utf8')).toBe('old bytes');
+});
+
+test('a safety replace whose safety backup fails refuses without a write', async () => {
+  const { host, calls, filePath } = makeHost({ createBackup: async () => null });
+  fs.writeFileSync(filePath, 'old bytes');
+
+  const result = await host.commit({
+    kind: 'restore', name: 'page.html', filePath, bytes: '<html>new</html>', safety: true,
+  });
+
+  expect(result.outcome).toBe('refused');
+  expect(result.reason).toBe('backup-failed');
+  expect(calls).not.toContain('storePageState');
   expect(fs.readFileSync(filePath, 'utf8')).toBe('old bytes');
 });
 
@@ -566,13 +713,79 @@ test('browser-save stores the page state before the bytes land and marks after t
   expect(calls.indexOf('storePageState')).toBeLessThan(calls.indexOf('markBrowserSave'));
 });
 
-test('browser-save hands the hook the file part of the answer', async () => {
+test('browser-save returns the file part of the document as `file`', async () => {
+  const { host, filePath } = makeHost({
+    splitWrite: async (baseDir, name, formatted) => ({ file: `${formatted}-file`, logical: `${formatted}-logical` }),
+  });
+
+  const result = await host.commit({ kind: 'browser-save', name: 'page.html', filePath, bytes: '<html>saved</html>' });
+
+  expect(result.file).toBe('<html>saved</html>-file');
+  expect(result.content).toBe('<html>saved</html>-logical');
+});
+
+test('commit refuses a caller still passing hooks', async () => {
   const { host, filePath } = makeHost();
-  const answer = {};
 
-  await host.commit({ kind: 'browser-save', name: 'page.html', filePath, bytes: '<html>saved</html>', hooks: { answer } });
+  await expect(host.commit({
+    kind: 'browser-save', name: 'page.html', filePath, bytes: '<html>saved</html>', hooks: {},
+  })).rejects.toThrow('hooks ended in M16');
+});
 
-  expect(answer.html).toBe('<html>saved</html>');
+test('every commit and restructure result survives a JSON round trip and hides its cause', async () => {
+  const pick = (result) => ({
+    outcome: result.outcome, reason: result.reason, etag: result.etag, checksum: result.checksum,
+  });
+  const entry = (from, to) => ({
+    from: { location: from, canonical: from, isDir: false, isSymlink: false },
+    to: { location: to, canonical: to },
+  });
+  const dir = tempDir();
+  const filePath = upath.join(dir, 'page.html');
+  fs.writeFileSync(filePath, 'old bytes');
+  const { host } = makeHost({ baseDir: dir, filePath });
+
+  const committed = await host.commit({
+    kind: 'sync-download', name: 'page.html', filePath, bytes: Buffer.from('new bytes'),
+  });
+  const refusedResult = await host.commit({
+    kind: 'sync-download', name: 'page.html', filePath, bytes: Buffer.from('third bytes'),
+    expected: { type: 'checksum', value: 'wrong' },
+  });
+  jest.spyOn(fs.promises, 'utimes').mockRejectedValueOnce(new Error('utimes failed'));
+  const indeterminate = await host.commit({
+    kind: 'sync-download', name: 'page.html', filePath, bytes: Buffer.from('fourth bytes'), modifiedAt: 1000,
+  });
+  const movedTo = upath.join(dir, 'moved.html');
+  const movedStructure = await host.restructure({
+    kind: 'sync-move',
+    steps: [{ from: 'page.html', to: 'moved.html' }],
+    context: { token: null, entries: [entry(filePath, movedTo)] },
+  });
+  const missing = upath.join(dir, 'missing.html');
+  const partialStructure = await host.restructure({
+    kind: 'move',
+    steps: [{ from: 'moved.html', to: 'partial.html' }, { from: 'missing.html', to: 'other.html' }],
+    context: {
+      token: null,
+      entries: [entry(movedTo, upath.join(dir, 'partial.html')), entry(missing, upath.join(dir, 'other.html'))],
+    },
+  });
+  const failedStructure = await host.restructure({
+    kind: 'move',
+    steps: [{ from: 'missing.html', to: 'never.html' }],
+    context: { token: null, entries: [entry(missing, upath.join(dir, 'never.html'))] },
+  });
+
+  const results = [committed, refusedResult, indeterminate, movedStructure, partialStructure, failedStructure];
+
+  expect(results.map((result) => result.outcome))
+    .toEqual(['committed', 'refused', 'indeterminate', 'committed', 'partial', 'failed']);
+  expect(indeterminate.reason).toBe('after-rename');
+  for (const result of results) {
+    expect(JSON.parse(JSON.stringify(pick(result)))).toEqual(pick(result));
+    expect(Object.keys(result)).not.toContain('error');
+  }
 });
 
 test('a page conversion rebases nothing and splits without keeping state', async () => {
@@ -648,10 +861,10 @@ test('the guard runs with the save provenance, an external one for the data API,
     expect(deps.dataGuard.runDataLossGuard).toHaveBeenLastCalledWith(expect.objectContaining({ prov: 'external' }));
 
     const rejecting = makeHost({
-      dataGuard: {
+      dataGuard: mockExports('src/main/data-loss-guard', {
         provenanceForLocalSave: (userDriven) => 'prov:' + userDriven,
         runDataLossGuard: () => Promise.reject(new Error('guard blew up')),
-      },
+      }),
     });
     const result = await rejecting.host.commit({
       kind: 'browser-save', name: 'page.html', filePath: rejecting.filePath, bytes: '<html>c</html>', userDriven: false,
@@ -722,22 +935,69 @@ test('a read identity that no longer matches the file rejects and writes nothing
   expect(fs.readFileSync(filePath, 'utf8')).toBe('old bytes');
 });
 
-test('a durable write that fails its directory sync is indeterminate, a plain one is not', async () => {
+test('a checkpoint refuses when the room it was asked for is no longer the one at its key', async () => {
+  const room = { nodeId: 'node-1' };
+  const authority = {
+    captureAdmission: () => ({}),
+    validateAdmission: () => {},
+    rooms: { get: () => ({ nodeId: 'node-1' }) },
+    reconcileDisk: jest.fn(),
+  };
+  const { host, filePath } = makeHost({
+    ctx: { localAuthority: authority },
+    withDocument: async (resolveTarget, fn) => fn(await resolveTarget(), 'tok'),
+    loadCheckpoint: async () => ({ captureCheckpoint: () => ({}) }),
+  });
+  fs.writeFileSync(filePath, '<html>old</html>');
+
+  const result = await host.checkpoint(
+    { name: 'page.html', filePath },
+    { roomIdentity: 'node-1', generation: null },
+    { target: { identity: 'node-1', canonicalPath: filePath }, room },
+  );
+
+  expect(result).toEqual({ kind: 'refused', reason: 'invalid-identity' });
+  expect(authority.reconcileDisk).not.toHaveBeenCalled();
+  expect(fs.readFileSync(filePath, 'utf8')).toBe('<html>old</html>');
+});
+
+test('a durable checkpoint that fails its directory sync is indeterminate, a plain save is not', async () => {
   const dir = tempDir();
   const checkpointPath = upath.join(dir, 'checkpoint.html');
   const browserPath = upath.join(dir, 'browser.html');
+  fs.writeFileSync(checkpointPath, '<html>old</html>');
   const original = writeQueue.syncDirectory;
   const spy = jest.spyOn(writeQueue, 'syncDirectory')
     .mockRejectedValue(Object.assign(new Error('x'), { code: 'EIO' }));
   try {
-    const checkpoint = makeHost({ baseDir: dir, filePath: checkpointPath });
-
-    const result = await checkpoint.host.commit({
-      kind: 'checkpoint', name: 'checkpoint.html', filePath: checkpointPath, bytes: '<html>cp</html>',
+    const room = { nodeId: 'node-1' };
+    const authority = {
+      rooms: { get: () => room, markSaved: () => {} },
+      roomIsDirty: () => true,
+      captureAdmission: () => ({}),
+      validateAdmission: () => {},
+      reconcileDisk: async () => ({ kind: 'current' }),
+      admittedFormats: () => [],
+      confirmKnownWrite: async () => {},
+    };
+    const checkpoint = makeHost({
+      baseDir: dir, filePath: checkpointPath,
+      ctx: { localAuthority: authority },
+      withDocument: writeQueue.withDocumentWrite,
+      loadCheckpoint: async () => ({
+        captureCheckpoint: () => ({}),
+        isCheckpointCurrent: () => false,
+        renderCheckpoint: () => ({ kind: 'ok', html: '<html>cp</html>', revision: 'rev-1' }),
+      }),
     });
 
-    expect(result.outcome).toBe('indeterminate');
-    expect(result.error).toBeTruthy();
+    const result = await checkpoint.host.checkpoint(
+      { name: 'checkpoint.html', filePath: checkpointPath },
+      { roomIdentity: 'node-1', generation: null },
+      { target: { identity: 'node-1', canonicalPath: checkpointPath }, room },
+    ).catch((error) => error);
+
+    expect(result.indeterminate).toBe(true);
     expect(fs.readFileSync(checkpointPath, 'utf8')).toBe('<html>cp</html>');
 
     const browser = makeHost({ baseDir: dir, filePath: browserPath });
@@ -794,4 +1054,33 @@ test('a page-state failure after the rename is not an indeterminate document wri
     .rejects.toThrow('sidecar failed');
 
   expect(fs.readFileSync(filePath, 'utf8')).toBe('old bytes');
+});
+
+test('events subscribe through the observer and report a gap first when given a cursor', () => {
+  const listeners = [];
+  const observer = { subscribe: (listener) => { listeners.push(listener); return () => {}; } };
+  const { host } = makeHost({ getObserver: () => observer });
+  const seen = [];
+
+  const dispose = host.events('cursor-1', (event) => seen.push(event));
+  expect(seen).toEqual([{ type: 'gap', since: 'cursor-1' }]);
+  listeners[0]({ event: 'change', rel: 'page.html' });
+  expect(seen[1]).toEqual({ type: 'change', event: 'change', rel: 'page.html' });
+  expect(typeof dispose).toBe('function');
+});
+
+test('events subscribe without a gap when the cursor is null', () => {
+  const listeners = [];
+  const observer = { subscribe: (listener) => { listeners.push(listener); return () => {}; } };
+  const { host } = makeHost({ getObserver: () => observer });
+  const seen = [];
+
+  host.events(null, (event) => seen.push(event));
+  listeners[0]({ event: 'unlink', rel: 'page.html' });
+  expect(seen).toEqual([{ type: 'change', event: 'unlink', rel: 'page.html' }]);
+});
+
+test('a host without an observer refuses to subscribe', () => {
+  const { host } = makeHost();
+  expect(() => host.events(null, () => {})).toThrow('This document host has no observer');
 });

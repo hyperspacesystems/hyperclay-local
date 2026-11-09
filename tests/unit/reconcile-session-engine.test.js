@@ -27,10 +27,10 @@ jest.mock('livesync-hyperclay', () => ({
   }
 }));
 
-jest.mock('../../src/main/utils/backup', () => ({
+jest.mock('../../src/main/utils/backup', () => (require('../helpers/mock-exports').mockExports('src/main/utils/backup', {
   createBackupIfExists: jest.fn(),
   createBinaryBackupIfExists: jest.fn()
-}));
+})));
 
 jest.mock('../../src/main/utils/utils', () => ({
   getServerBaseUrl: (url) => url || 'http://localhyperclay.com'
@@ -105,7 +105,6 @@ beforeEach(() => {
   syncEngine.repo.seed();
 
   fileOps.ensureDirectory.mockResolvedValue();
-  fileOps.moveFile.mockResolvedValue();
   fileOps.readFile.mockResolvedValue(LOCAL_HTML);
   fileOps.readFileBuffer.mockResolvedValue(Buffer.from(LOCAL_HTML));
   fileOps.calculateBufferChecksum.mockImplementation(
@@ -180,7 +179,7 @@ describe('refreshNode', () => {
     const action = await syncEngine.refreshNode(11, { generation: 3 });
 
     expect(action).toBe('trash-local');
-    expect(fileOps.moveFile).toHaveBeenCalled();
+    expect(syncEngine.documentHost.restructure).toHaveBeenCalled();
   });
 
   it('writes nothing when the generation ends while it is listing', async () => {
@@ -201,7 +200,7 @@ describe('refreshNode', () => {
     await expect(pending).resolves.toBeNull();
     expect(apiClient.getNodeContent).not.toHaveBeenCalled();
     expect(syncEngine.documentHost.commit).not.toHaveBeenCalled();
-    expect(fileOps.moveFile).not.toHaveBeenCalled();
+    expect(syncEngine.documentHost.restructure).not.toHaveBeenCalled();
   });
 
   it('does nothing at all when its signal is stale', async () => {
@@ -213,7 +212,7 @@ describe('refreshNode', () => {
 
     expect(apiClient.listNodes).not.toHaveBeenCalled();
     expect(syncEngine.documentHost.commit).not.toHaveBeenCalled();
-    expect(fileOps.moveFile).not.toHaveBeenCalled();
+    expect(syncEngine.documentHost.restructure).not.toHaveBeenCalled();
   });
 });
 

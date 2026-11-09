@@ -1,14 +1,13 @@
-const fs = require('fs').promises;
 const { loadCheckpoint } = require('./utils/page-api');
 
 const RETRY_MS = Object.freeze([1000, 5000, 30000]);
 function createLocalCheckpoint({
-  authority, withDocument, immediate = setImmediate, cancelImmediate = clearImmediate,
+  authority, immediate = setImmediate, cancelImmediate = clearImmediate,
   setTimer = setTimeout, clearTimer = clearTimeout, retryMs = RETRY_MS,
   logError = console.error, loadCore = loadCheckpoint, createDocument = null,
 } = {}) {
-  if (!authority || typeof withDocument !== 'function') throw new TypeError('Checkpoint needs authority and document boundary');
-  const writers = new Map();
+  if (!authority) throw new TypeError('Checkpoint needs authority');
+  const hosts = new Map();
   const running = new Map();
   const scheduled = new Map();
   const retries = new Map();
@@ -76,64 +75,19 @@ function createLocalCheckpoint({
   }
 
   async function perform(key, room) {
-    const target = authority.checkpointTargets(key).find((item) => writers.has(item.rootId));
+    const target = authority.checkpointTargets(key).find((item) => hosts.has(item.rootId));
     if (!target || !dirty(room)) return target ? { kind: 'clean' } : refusal(room, 'invalid-identity');
     const generation = room.pageTransition?.id ?? null;
-    let core;
-    try { core = await loadCore(); }
-    catch (error) { return refusal(room, 'checkpoint-unavailable', error); }
-    const claim = authority.captureAdmission(target);
     try {
-      const result = await withDocument(() => ({ canonicalPath: key }), async (_locked, token) => {
-        authority.validateAdmission(claim, target, token);
-        if (authority.rooms.get(key) !== room || String(room.nodeId) !== String(target.identity)) {
-          return { kind: 'refused', reason: 'invalid-identity' };
-        }
-        let currentHtml;
-        let readIdentity;
-        try {
-          const handle = await fs.open(key, 'r');
-          try {
-            readIdentity = await handle.stat({ bigint: true });
-            currentHtml = await handle.readFile('utf8');
-          } finally { await handle.close(); }
-        }
-        catch (error) {
-          if (error.code === 'ENOENT') return { kind: 'refused', reason: 'invalid-identity' };
-          throw error;
-        }
-        if (authority.logicalHtml) currentHtml = await authority.logicalHtml(target, currentHtml);
-        const observed = await authority.reconcileDisk(target, currentHtml, token);
-        if (observed.kind === 'replacement' || authority.rooms.get(key) !== room ||
-            (room.pageTransition?.id ?? null) !== generation) {
-          return { kind: 'refused', reason: 'invalid-identity' };
-        }
-        let capture;
-        try { capture = core.captureCheckpoint(room, { nodeId: target.identity, roomKey: key }); }
-        catch (error) { return { kind: 'refused', reason: 'invalid-document', error }; }
-        if (!dirty(room)) return { kind: 'clean' };
-        if (core.isCheckpointCurrent(currentHtml, capture)) {
-          authority.rooms.markSaved(room, capture);
-          return { kind: 'current' };
-        }
-        const { JSDOM } = require('jsdom');
-        const rendered = core.renderCheckpoint(currentHtml, capture, {
-          createDocument: createDocument ?? (() => new JSDOM('<!doctype html><html><body></body></html>', {
-            runScripts: undefined, resources: undefined,
-          }).window.document),
-        });
-        if (rendered.kind !== 'ok') return { kind: 'refused', reason: rendered.reason ?? 'invalid-document' };
-        const written = await writers.get(target.rootId)({
-          name: target.logicalPath, filePath: key, content: rendered.html, dataLossPrev: currentHtml,
-          userDriven: false, saveId: '', origin: 'checkpoint', target, token, readIdentity,
-        });
-        return { kind: 'ok', revision: rendered.revision, written };
-      });
+      const result = await hosts.get(target.rootId).checkpoint(
+        { name: target.logicalPath, filePath: key },
+        { roomIdentity: target.identity, generation },
+        { target, room });
       if (result.kind === 'ok' || result.kind === 'current') {
         clearRetry(identityOf(room));
         permanentRefusals.delete(room);
       }
-      if (result.kind === 'refused') return refusal(room, result.reason, result.error);
+      if (result.kind === 'refused') return refusal(room, result.reason, result.error ?? (result.message ? { message: result.message } : undefined));
       return result;
     } catch (error) {
       if (error.code === 'moved' || error.code === 'moved-or-deleted') return refusal(room, 'invalid-identity', error);
@@ -169,8 +123,8 @@ function createLocalCheckpoint({
   }
 
   const service = {
-    registerWriter(rootId, write) { writers.set(rootId, write); },
-    unregisterWriter(rootId) { writers.delete(rootId); },
+    registerHost(rootId, host) { hosts.set(rootId, host); },
+    unregisterWriter(rootId) { hosts.delete(rootId); },
     setAutoNamer(service) { autoNamer = service; },
     confirmedWrite(key, stamp) { return autoNamer?.confirmedWrite(key, stamp); },
     mayExpire(room) { return permanentRefusals.has(room); },

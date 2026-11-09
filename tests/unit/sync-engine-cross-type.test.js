@@ -19,11 +19,11 @@ jest.mock('livesync-hyperclay', () => ({
   }
 }));
 
-jest.mock('../../src/main/utils/backup', () => ({
+jest.mock('../../src/main/utils/backup', () => (require('../helpers/mock-exports').mockExports('src/main/utils/backup', {
   createBackup: jest.fn().mockResolvedValue(),
   createBackupIfExists: jest.fn().mockResolvedValue(),
   createBinaryBackupIfExists: jest.fn().mockResolvedValue()
-}));
+})));
 
 jest.mock('../../src/main/utils/utils', () => ({
   getServerBaseUrl: (url) => url || 'http://localhyperclay.com'
@@ -61,6 +61,10 @@ const utils = require('../../src/sync-engine/utils');
 const apiClient = require('../../src/sync-engine/api-client');
 const nodeMapModule = require('../../src/sync-engine/node-map');
 const { stubDocumentHost } = require('../helpers/document-host-stub');
+
+const structureMoves = () => syncEngine.documentHost.restructure.mock.calls
+  .flatMap(([request]) => request.context.entries
+    .map((entry) => [entry.from.location, entry.to.canonical]));
 const Outbox = require('../../src/sync-engine/state/outbox');
 const CascadeSuppression = require('../../src/sync-engine/state/cascade-suppression');
 
@@ -80,7 +84,6 @@ beforeEach(() => {
   syncEngine.outbox = new Outbox();
   syncEngine.cascade = new CascadeSuppression();
 
-  fileOps.moveFile.mockResolvedValue();
   fileOps.ensureDirectory.mockResolvedValue();
   fileOps.fileExists.mockResolvedValue(false);
   fileOps.readFile.mockResolvedValue('<html>content</html>');
@@ -163,11 +166,11 @@ describe('Cross-type: SSE folder rename cascades over mixed children', () => {
       newPath: 'new'
     });
 
-    expect(fileOps.moveFile).toHaveBeenCalledTimes(1);
-    expect(fileOps.moveFile).toHaveBeenCalledWith(
+    expect(structureMoves()).toHaveLength(1);
+    expect(structureMoves()).toContainEqual([
       path.join('/tmp/test-sync', 'old'),
       path.join('/tmp/test-sync', 'new')
-    );
+    ]);
 
     expect(syncEngine.repo.get('10').path).toBe('new');
     expect(syncEngine.repo.get('11').path).toBe('new/page.html');

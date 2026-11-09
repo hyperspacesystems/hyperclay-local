@@ -18,12 +18,12 @@ const path = require('upath');
 const { SYNC_CONFIG } = require('../sync-engine/constants');
 const { documentEtag } = require('./spec-wire');
 const dataGuard = require('./data-loss-guard');
-const { withDocumentWrite, withStructureChange, atomicWriteFile } = require('./utils/write-queue');
+const { withDocumentWrite, withStructureChange } = require('./utils/write-queue');
 const { getConsentRegistry, resolveWritePath } = require('./utils/path-resolver');
-const { logicalBytes, storePageState } = require('./page-state-store');
-const { createBackup } = require('./utils/backup');
+const { logicalBytes } = require('./page-state-store');
 const { rebaseStaleSave, newestVersionFiles } = require('./page-rebase');
-const { MAX_EXTERNAL_HTML } = require('./document-host');
+const { calculateChecksum } = require('../sync-engine/utils');
+const { createRootDocumentHost, MAX_EXTERNAL_HTML } = require('./document-host');
 
 const EMPTY_QUIET_MS = 3000;
 const IGNORED = [
@@ -44,6 +44,17 @@ class RootObserver extends EventEmitter {
     this.emptyTimers = new Map();
     this.retryTimers = new Set();
     this.isRemoteApply = () => false;
+    this.documentHost = null;
+  }
+
+  _host() {
+    if (!this.documentHost) {
+      this.documentHost = createRootDocumentHost({
+        ctx: { root: this.root, localAuthority: this.localAuthority },
+        live: this.live,
+      });
+    }
+    return this.documentHost;
   }
 
   start() {
@@ -238,7 +249,9 @@ class RootObserver extends EventEmitter {
       { stored: this.localAuthority.confirmedDocument?.(canonicalPath) ?? null });
     if (rebased) {
       observed = await logicalBytes(this.root.path, rel, Buffer.from(rebased.html, 'utf8'));
-      await this._writeRebased(canonicalPath, rel, target, token, observed);
+      const written = await this._writeRebased(rel, target, token, observed,
+        { type: 'checksum', value: await calculateChecksum(bytes) });
+      if (written.kind === 'unstable') return written;
     }
 
     const changed = await this.localAuthority.observeExternal(target, observed.toString('utf8'), token);
@@ -255,15 +268,12 @@ class RootObserver extends EventEmitter {
   // the next event for those bytes our own. Without it the disk keeps the older
   // copy while the authority records the merged one, so every later event is
   // classified external again and every reader sees the stale document.
-  async _writeRebased(canonicalPath, rel, target, token, merged) {
-    const { splitPage } = require('@panphora/clayjs/server/rooms');
+  async _writeRebased(rel, target, token, merged, expected) {
     const html = merged.toString('utf8');
-    // The room's unsaved edits are published first, while the room's own baseline
-    // is still the document it was built on: the merged bytes do not carry them.
-    await this.localAuthority.recoverUnsavedEdits(target, token);
-    await createBackup(this.root.path, rel.replace(/\.(html|htmlclay)$/i, ''), splitPage(html).file);
-    await atomicWriteFile(canonicalPath, await storePageState(this.root.path, rel, html));
-    await this.localAuthority.confirmKnownWrite(target, merged, token, { sender: 'file-watcher', publish: false });
+    const result = await this._host().commit({
+      kind: 'external-rebase', name: rel, bytes: html, expected, context: { target, token },
+    });
+    return result.outcome === 'committed' ? { kind: 'rebased' } : { kind: 'unstable' };
   }
 
   async _observeUnlink(rel) {
@@ -370,7 +380,8 @@ class RootObserver extends EventEmitter {
   _runDataGuard(rel, bytes) {
     dataGuard.runDataLossGuard({
       baseDir: this.root.path, name: rel, newHtml: bytes.toString('utf8'), prevContent: null, prov: 'external', live: this.live,
-    }).catch((err) => console.error('[data-guard] observer guard error:', err && err.message ? err.message : err));
+    }).then(() => dataGuard.noteSeen(this.root.path, rel, bytes))
+      .catch((err) => console.error('[data-guard] observer guard error:', err && err.message ? err.message : err));
   }
 
   _notifyExternal(rel, bytes, msg, { saved = true, reason, recovered, continues = false } = {}) {

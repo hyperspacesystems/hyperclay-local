@@ -335,3 +335,275 @@ test('getGuardEvent re-validates on read: clears a stale event once the current 
   assert.strictEqual(g.event, null);
   assert.deepStrictEqual(g.baseline.data.api.items, ['a', 'b', 'c']);
 });
+// --- The outside-edit catch-up (M10's deferred item) -------------------------
+// An edit made while Local was closed has no watcher pass behind it. The page
+// load judges the bytes on disk against the last bytes the guard or the host
+// saw, so the first read after such an edit raises the same notice a live
+// external write would. The saves below go through the real document host, so
+// the stamp they leave is the one the commit wrapper takes, not a test's copy.
+
+const crypto = require('crypto');
+const { createDocumentHost } = require('../../src/main/document-host');
+const { atomicWriteFile } = require('../../src/main/utils/write-queue');
+
+const sha256 = (bytes) => crypto.createHash('sha256').update(bytes).digest('hex');
+
+// The save lane's dependencies, as small as a committed save allows. Everything
+// incidental is a no-op; the guard, the clock and the disk are real.
+function saveHost(dir, overrides = {}) {
+  return createDocumentHost({
+    ctx: {},
+    baseDir: dir,
+    live: { markBrowserSave: () => {}, broadcast: () => {}, notify: () => {}, wasBrowserSave: () => false },
+    store: { etags: new Map(), snapshots: new Map() },
+    resolveTailwindWrite: async (tailwindName) => path.join(dir, 'tailwind', `${tailwindName}.css`),
+    canonicalForWrite: (html) => html,
+    formatHtml: (html) => html,
+    scopeTailwindLink: (name, html) => html,
+    stripSaveToken: (bytes) => bytes,
+    splitWrite: async (baseDir, name, formatted) => ({ file: formatted, logical: formatted }),
+    storePageState: async (baseDir, name, logical) => logical,
+    writePageState: async () => {},
+    logicalDocument: async (baseDir, name, file) => file,
+    createBackup: async () => true,
+    createBackupIfExists: async () => true,
+    createBinaryBackupIfExists: async () => true,
+    atomicWriteFile,
+    assertWriteContext: () => {},
+    assertStructureContext: () => {},
+    stripCopyBytes: (bytes) => bytes,
+    writeApiSidecar: async () => {},
+    refreshDerivedArtifacts: async () => {},
+    getTailwindCssName: () => null,
+    compileTailwind: async () => '',
+    dataGuard: guard,
+    documentEtag: (html) => `etag:${html}`,
+    rebaseStaleSave: async () => null,
+    newestVersionFiles: async () => [],
+    needsAdoption: () => false,
+    roomsPackage: () => ({ splitPage: (html) => ({ file: html }) }),
+    MAX_EXTERNAL_HTML: 1024 * 1024,
+    VERSIONS_DIR: '.hyperclay/versions',
+    TAILWIND_DIR: '.hyperclay/tailwindcss',
+    emit: () => {},
+    logger: null,
+    ...overrides,
+  });
+}
+
+async function waitFor(predicate, what) {
+  for (let attempt = 0; attempt < 400; attempt += 1) {
+    if (await predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.fail(what);
+}
+
+function save(baseDir, html, { userDriven, prev, deps } = {}) {
+  return saveHost(baseDir, deps).commit({
+    kind: 'browser-save', name: NAME, filePath: path.join(baseDir, NAME), bytes: html, userDriven, dataLossPrev: prev,
+  });
+}
+
+// The first save on a document with no guard yet only seeds the baseline (cold
+// start, first sight), so there is nothing to stamp: seed with one save and let
+// hostSave prove the stamp on the next.
+async function seedDocument(baseDir, html) {
+  await fsp.writeFile(path.join(baseDir, NAME), html);
+  assert.strictEqual((await save(baseDir, html, { userDriven: true, prev: html })).outcome, 'committed');
+  await waitFor(async () => Boolean(((await guard._readGuard(baseDir, NAME)) || {}).baseline), 'the guard never seeded a baseline');
+}
+
+// A real save that must leave the bytes it committed as the guard's last seen.
+// The commit wrapper takes the stamp without awaiting it, so this waits for it
+// to land before reading.
+async function hostSave(baseDir, html, { userDriven, prev } = {}) {
+  const result = await save(baseDir, html, { userDriven, prev });
+  assert.strictEqual(result.outcome, 'committed');
+  await waitFor(
+    async () => (((await guard._readGuard(baseDir, NAME)) || {}).lastSeen === sha256(result.stored)),
+    'the host never stamped the bytes it committed as seen',
+  );
+  return result;
+}
+
+// What GET /data-loss does: read the file as bytes, judge any outside edit, then
+// serve whatever event the guard holds.
+async function pageLoad(baseDir) {
+  const bytes = await fsp.readFile(path.join(baseDir, NAME));
+  const html = bytes.toString('utf8');
+  await guard.catchUpOutsideEdit(baseDir, NAME, bytes, html);
+  return { bytes, event: await guard.getGuardEvent(baseDir, NAME, html) };
+}
+
+test('an outside edit made while Local was closed raises a notice on the next page load', async () => {
+  const baseDir = await freshBaseDir();
+  const orig = page({ items: ['a', 'b', 'c'] });
+  await seedDocument(baseDir, orig);
+  await hostSave(baseDir, orig, { userDriven: true, prev: orig });
+
+  // Local is closed: a helper empties the list straight to disk.
+  await fsp.writeFile(path.join(baseDir, NAME), page({ items: [] }));
+
+  const { event } = await pageLoad(baseDir);
+  assert.ok(event, 'the first read after the outside edit must raise');
+  assert.strictEqual(event.lossSummary.provenance, 'external');
+  const row = event.preview.find((entry) => entry.key === 'items');
+  assert.ok(row, 'the preview must name the lost list');
+  assert.strictEqual(row.now, '\u2014 empty \u2014');
+  assert.strictEqual(row.yours, 'a, b, c');
+});
+
+test('a ui-unknown save that removes one item leaves no event on the next page load', async () => {
+  const baseDir = await freshBaseDir();
+  const orig = page({ items: ['a', 'b', 'c'] });
+  await seedDocument(baseDir, orig);
+  await hostSave(baseDir, orig, { userDriven: true, prev: orig });
+
+  // Below the big-clobber bar and with no userDriven bit: nothing fires, and the
+  // baseline does not advance. The bytes it wrote are simply the last ones seen.
+  const smaller = page({ items: ['a', 'b'] });
+  await hostSave(baseDir, smaller, { userDriven: undefined, prev: orig });
+  const g = await guard._readGuard(baseDir, NAME);
+  assert.strictEqual(g.event, null);
+  assert.deepStrictEqual(g.baseline.data.api.items, ['a', 'b', 'c']);
+
+  const { event } = await pageLoad(baseDir);
+  assert.strictEqual(event, null);
+});
+
+test('a guard restore leaves no new event on the next page load', async () => {
+  const baseDir = await freshBaseDir();
+  const orig = page({ items: ['a', 'b', 'c'] });
+  await seedDocument(baseDir, orig);
+  await hostSave(baseDir, orig, { userDriven: true, prev: orig });
+  const clobbered = page({ items: ['a'] });
+  await fsp.writeFile(path.join(baseDir, NAME), clobbered);
+
+  const { event } = await pageLoad(baseDir);
+  assert.ok(event);
+
+  // The restore goes through the host, so its bytes are the last ones seen too.
+  const res = await guard.resolveGuard({
+    baseDir, name: NAME, id: event.id, choice: 'restore', currentHtml: clobbered,
+    writeBack: async (html) => { await hostSave(baseDir, html, { userDriven: true }); },
+  });
+  assert.strictEqual(res.ok, true);
+  assert.strictEqual((await guard._readGuard(baseDir, NAME)).event, null);
+
+  const after = await pageLoad(baseDir);
+  assert.strictEqual(after.event, null);
+});
+
+test('a guard written before lastSeen existed is seeded on the first read and raises nothing', async () => {
+  const baseDir = await freshBaseDir();
+  const orig = page({ items: ['a', 'b', 'c'] });
+  // The pre-upgrade write path: a guard pass, no stamp.
+  await fsp.writeFile(path.join(baseDir, NAME), orig);
+  await guard.runDataLossGuard({ baseDir, name: NAME, newHtml: orig, prevContent: orig, prov: 'ui-gestured' });
+  assert.strictEqual((await guard._readGuard(baseDir, NAME)).lastSeen, undefined);
+
+  const emptied = page({ items: [] });
+  await fsp.writeFile(path.join(baseDir, NAME), emptied);
+
+  const { event } = await pageLoad(baseDir);
+  assert.strictEqual(event, null);
+  assert.strictEqual((await guard._readGuard(baseDir, NAME)).lastSeen, sha256(Buffer.from(emptied, 'utf8')));
+});
+
+test('a page load that races a just-finished commit before its persist raises no event', async () => {
+  const baseDir = await freshBaseDir();
+  const orig = page({ items: ['a', 'b', 'c'] });
+  await seedDocument(baseDir, orig);
+  await hostSave(baseDir, orig, { userDriven: true, prev: orig });
+
+  // The commit has written the bytes and set pendingSeen, but its persist has not
+  // landed yet. A page load must not re-judge its own bytes.
+  const emptied = page({ items: [] });
+  await fsp.writeFile(path.join(baseDir, NAME), emptied);
+  const pending = guard.noteSeen(baseDir, NAME, Buffer.from(emptied, 'utf8'));
+
+  const { event } = await pageLoad(baseDir);
+  assert.strictEqual(event, null);
+
+  await pending;
+  const g = await guard._readGuard(baseDir, NAME);
+  assert.strictEqual(g.event, null);
+  assert.strictEqual(g.lastSeen, sha256(Buffer.from(emptied, 'utf8')));
+});
+
+// The reviewer's first-save reproduction: one save through the real root host has
+// to leave lastSeen behind, or the next read treats an outside edit as a
+// pre-upgrade guard and stamps it silently.
+test('one save through the root host stamps lastSeen, so an outside edit while closed raises a notice', async () => {
+  const baseDir = await freshBaseDir();
+  const initial = page({ items: ['a', 'b', 'c'] });
+  await fsp.writeFile(path.join(baseDir, NAME), initial);
+
+  const { createRootDocumentHost } = require('../../src/main/document-host');
+  const host = createRootDocumentHost({
+    ctx: { root: { id: baseDir, path: baseDir } },
+    live: { markBrowserSave: () => {}, broadcast: () => {}, notify: () => {}, wasBrowserSave: () => false },
+  });
+  const saved = await host.commit({
+    kind: 'browser-save', name: NAME, filePath: path.join(baseDir, NAME), bytes: initial,
+    dataLossPrev: initial, userDriven: true,
+  });
+  assert.strictEqual(saved.outcome, 'committed');
+
+  await waitFor(async () => Boolean(((await guard._readGuard(baseDir, NAME)) || {}).baseline), 'the guard never seeded a baseline');
+  await waitFor(
+    async () => ((await guard._readGuard(baseDir, NAME)) || {}).lastSeen !== undefined,
+    'the first save never stamped the bytes it committed as the last ones seen',
+  );
+  const seeded = await guard._readGuard(baseDir, NAME);
+  assert.strictEqual(seeded.lastSeen, sha256(Buffer.from(saved.stored, 'utf8')));
+
+  // Local is closed: a helper empties the list straight to disk.
+  await fsp.writeFile(path.join(baseDir, NAME), page({ items: [] }));
+
+  const { event } = await pageLoad(baseDir);
+  assert.ok(event, 'the first read after the outside edit must raise');
+  assert.strictEqual(event.lossSummary.provenance, 'external');
+});
+
+// The reviewer's Tailwind reproduction: the file is renamed into place, then the
+// lane still awaits the sidecar and the Tailwind compile. A read in that window
+// must not re-judge the host's own bytes as an outside edit.
+test('a page load while the save lane is still finishing raises no event', async () => {
+  const baseDir = await freshBaseDir();
+  const initial = page({ items: ['a', 'b', 'c'] });
+  await fsp.writeFile(path.join(baseDir, NAME), initial);
+  const first = await save(baseDir, initial, { userDriven: true, prev: initial });
+  assert.strictEqual(first.outcome, 'committed');
+  await waitFor(
+    async () => ((await guard._readGuard(baseDir, NAME)) || {}).lastSeen === sha256(first.stored),
+    'the first save never stamped the bytes it committed as the last ones seen',
+  );
+
+  let entered;
+  let release;
+  const started = new Promise((resolve) => { entered = resolve; });
+  const barrier = new Promise((resolve) => { release = resolve; });
+  const deps = {
+    getTailwindCssName: () => 'notes',
+    compileTailwind: async () => { entered(); await barrier; return ''; },
+  };
+
+  const smaller = page({ items: ['a', 'b'] });
+  const saving = save(baseDir, smaller, { userDriven: undefined, prev: initial, deps });
+  try {
+    await started;
+    assert.strictEqual(await fsp.readFile(path.join(baseDir, NAME), 'utf8'), smaller);
+    const bytes = await fsp.readFile(path.join(baseDir, NAME));
+    await guard.catchUpOutsideEdit(baseDir, NAME, bytes, smaller);
+    assert.strictEqual((await guard._readGuard(baseDir, NAME)).event, null);
+    assert.strictEqual((await pageLoad(baseDir)).event, null);
+  } finally {
+    release();
+  }
+
+  assert.strictEqual((await saving).outcome, 'committed');
+  const after = await pageLoad(baseDir);
+  assert.strictEqual(after.event, null);
+});

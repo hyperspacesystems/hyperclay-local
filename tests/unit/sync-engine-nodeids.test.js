@@ -29,10 +29,10 @@ jest.mock('livesync-hyperclay', () => ({
   }
 }));
 
-jest.mock('../../src/main/utils/backup', () => ({
+jest.mock('../../src/main/utils/backup', () => (require('../helpers/mock-exports').mockExports('src/main/utils/backup', {
   createBackupIfExists: jest.fn(),
   createBinaryBackupIfExists: jest.fn()
-}));
+})));
 
 jest.mock('../../src/main/utils/utils', () => ({
   getServerBaseUrl: (url) => url || 'http://localhyperclay.com'
@@ -44,6 +44,10 @@ const apiClient = require('../../src/sync-engine/api-client');
 const nodeMapModule = require('../../src/sync-engine/node-map');
 const { liveSync } = require('livesync-hyperclay');
 const { stubDocumentHost } = require('../helpers/document-host-stub');
+
+const structureMoves = () => syncEngine.documentHost.restructure.mock.calls
+  .flatMap(([request]) => request.context.entries
+    .map((entry) => [entry.from.location, entry.to.canonical]));
 
 jest.mock('../../src/sync-engine/file-operations');
 jest.mock('../../src/sync-engine/utils', () => {
@@ -125,7 +129,6 @@ beforeEach(() => {
     }),
   });
   fileOps.ensureDirectory.mockResolvedValue();
-  fileOps.moveFile.mockResolvedValue();
   fileOps.readFile.mockResolvedValue('<html>content</html>');
   fileOps.getFileStats.mockResolvedValue({ mtime: new Date('2024-01-01'), size: 100 });
   fileOps.fileExists.mockResolvedValue(true);
@@ -183,10 +186,10 @@ describe('performInitialSync — nodeId move detection', () => {
 
     await syncEngine.performInitialSync();
 
-    expect(fileOps.moveFile).toHaveBeenCalledWith(
+    expect(structureMoves()).toContainEqual([
       '/test/sync/my-site.html',
       '/test/sync/blog/my-site.html'
-    );
+    ]);
   });
 
   test('downloads when nodeId has no mapping (first sync)', async () => {
@@ -198,7 +201,7 @@ describe('performInitialSync — nodeId move detection', () => {
 
     await syncEngine.performInitialSync();
 
-    expect(fileOps.moveFile).not.toHaveBeenCalled();
+    expect(structureMoves()).toEqual([]);
     expect(apiClient.getNodeContent).toHaveBeenCalledWith(
       expect.objectContaining({ serverUrl: 'http://localhyperclay.com', apiKey: 'hcsk_test' }),
       42
@@ -275,7 +278,7 @@ describe('offline delete reconciliation', () => {
 
     await syncEngine.performInitialSync();
 
-    expect(fileOps.moveFile).not.toHaveBeenCalled();
+    expect(structureMoves()).toEqual([]);
   });
 
   test('trashes an unchanged local file the server no longer lists', async () => {
@@ -294,10 +297,10 @@ describe('offline delete reconciliation', () => {
 
     await syncEngine.performInitialSync();
 
-    expect(fileOps.moveFile).toHaveBeenCalledWith(
+    expect(structureMoves()).toContainEqual([
       '/test/sync/old-site.html',
       '/test/sync/.trash/old-site.html'
-    );
+    ]);
     expect(syncEngine.repo.has('99')).toBe(false);
   });
 
@@ -319,7 +322,7 @@ describe('offline delete reconciliation', () => {
 
     await syncEngine.performInitialSync();
 
-    expect(fileOps.moveFile).not.toHaveBeenCalled();
+    expect(structureMoves()).toEqual([]);
     expect(apiClient.deleteNode).not.toHaveBeenCalled();
     expect(syncEngine.repo.has('99')).toBe(true);
   });
@@ -341,10 +344,10 @@ describe('offline delete reconciliation', () => {
 
     await syncEngine.performInitialSync();
 
-    expect(fileOps.moveFile).toHaveBeenCalledWith(
+    expect(structureMoves()).toContainEqual([
       '/test/sync/trashed.html',
       '/test/sync/.trash/trashed.html'
-    );
+    ]);
     expect(apiClient.createNode).not.toHaveBeenCalled();
   });
 
@@ -372,10 +375,10 @@ describe('handleNodeRenamed', () => {
       oldPath: 'my-site.html', newPath: 'new-name.html'
     });
 
-    expect(fileOps.moveFile).toHaveBeenCalledWith(
+    expect(structureMoves()).toContainEqual([
       '/test/sync/my-site.html',
       '/test/sync/new-name.html'
-    );
+    ]);
     expect(syncEngine.repo.get('42').path).toBe('new-name.html');
     expect(nodeMapModule.save).toHaveBeenCalled();
   });
@@ -389,10 +392,10 @@ describe('handleNodeRenamed', () => {
       oldPath: 'blog/my-site.html', newPath: 'blog/new-name.html'
     });
 
-    expect(fileOps.moveFile).toHaveBeenCalledWith(
+    expect(structureMoves()).toContainEqual([
       '/test/sync/blog/my-site.html',
       '/test/sync/blog/new-name.html'
-    );
+    ]);
     expect(syncEngine.repo.get('42').path).toBe('blog/new-name.html');
   });
 
@@ -406,7 +409,7 @@ describe('handleNodeRenamed', () => {
       oldPath: 'gone.html', newPath: 'new.html'
     });
 
-    expect(fileOps.moveFile).not.toHaveBeenCalled();
+    expect(structureMoves()).toEqual([]);
     expect(syncEngine.repo.get('42').path).toBe('new.html');
   });
 
@@ -433,10 +436,10 @@ describe('handleNodeMoved', () => {
       oldPath: 'my-site.html', newPath: 'blog/my-site.html'
     });
 
-    expect(fileOps.moveFile).toHaveBeenCalledWith(
+    expect(structureMoves()).toContainEqual([
       '/test/sync/my-site.html',
       '/test/sync/blog/my-site.html'
-    );
+    ]);
     expect(syncEngine.repo.get('42').path).toBe('blog/my-site.html');
     expect(nodeMapModule.save).toHaveBeenCalled();
   });
@@ -449,10 +452,10 @@ describe('handleNodeMoved', () => {
       oldPath: 'old-location.html', newPath: 'blog/my-site.html'
     });
 
-    expect(fileOps.moveFile).toHaveBeenCalledWith(
+    expect(structureMoves()).toContainEqual([
       '/test/sync/actual-location.html',
       '/test/sync/blog/my-site.html'
-    );
+    ]);
   });
 
   test('updates map even when source file not found', async () => {
@@ -464,7 +467,7 @@ describe('handleNodeMoved', () => {
       oldPath: 'gone.html', newPath: 'blog/my-site.html'
     });
 
-    expect(fileOps.moveFile).not.toHaveBeenCalled();
+    expect(structureMoves()).toEqual([]);
     expect(syncEngine.repo.get('42').path).toBe('blog/my-site.html');
   });
 
@@ -491,10 +494,10 @@ describe('handleNodeDeleted', () => {
       name: 'my-site.html', path: 'my-site.html'
     });
 
-    expect(fileOps.moveFile).toHaveBeenCalledWith(
+    expect(structureMoves()).toContainEqual([
       '/test/sync/my-site.html',
       '/test/sync/.trash/my-site.html'
-    );
+    ]);
     expect(syncEngine.repo.has('42')).toBe(false);
     expect(nodeMapModule.save).toHaveBeenCalled();
   });
@@ -508,10 +511,10 @@ describe('handleNodeDeleted', () => {
       name: 'different-name.html', path: 'different-name.html'
     });
 
-    expect(fileOps.moveFile).toHaveBeenCalledWith(
+    expect(structureMoves()).toContainEqual([
       '/test/sync/blog/actual-name.html',
       '/test/sync/.trash/blog/actual-name.html'
-    );
+    ]);
   });
 
   test('removes from nodeMap even when file not found locally', async () => {
@@ -523,7 +526,7 @@ describe('handleNodeDeleted', () => {
       name: 'gone.html', path: 'gone.html'
     });
 
-    expect(fileOps.moveFile).not.toHaveBeenCalled();
+    expect(structureMoves()).toEqual([]);
     expect(syncEngine.repo.has('42')).toBe(false);
   });
 

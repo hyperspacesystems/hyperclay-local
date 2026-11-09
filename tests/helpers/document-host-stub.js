@@ -9,6 +9,11 @@ function stubDocumentHost(overrides = {}) {
       content: request.bytes,
     })),
     read: jest.fn(async () => null),
+    restructure: jest.fn(async ({ steps }) => ({
+      outcome: 'committed',
+      completed: steps.length,
+      reason: null,
+    })),
     ...overrides,
   };
 }

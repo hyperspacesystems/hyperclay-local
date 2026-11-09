@@ -11,6 +11,7 @@ const { createBackup, publishRecoveredCopy } = require('../../src/main/utils/bac
 const { execFileSync } = require('child_process');
 const { createApp } = require('../../src/main/server');
 const { createLocalCheckpoint } = require('../../src/main/local-checkpoint');
+const { createRootDocumentHost } = require('../../src/main/document-host');
 const { storePageState } = require('../../src/main/page-state-store');
 const { pageFixture } = require('../helpers/page-fixture');
 const request = require('supertest');
@@ -390,13 +391,12 @@ describe('a stale page copy written over a dirty room', () => {
 
     rooms = createRooms({});
     authority = createLocalAuthority({ rooms, withDocument: withDocumentWrite });
-    checkpoint = createLocalCheckpoint({ authority, withDocument: withDocumentWrite, logError: () => {} });
+    checkpoint = createLocalCheckpoint({ authority, logError: () => {} });
     authority.setCheckpointService(checkpoint);
-    checkpoint.registerWriter('root-a', async (write) => {
-      fs.writeFileSync(write.filePath, await storePageState(dir, 'article.html', write.content));
-      await authority.confirmKnownWrite(write.target, write.content, write.token);
-      return write.content;
-    });
+    checkpoint.registerHost('root-a', createRootDocumentHost({
+      ctx: { root: { id: 'root-a', path: dir }, localAuthority: authority },
+      live: { markBrowserSave: () => {}, broadcast: () => {}, notify: () => {} },
+    }));
     authority.registerRoot({ id: 'root-a', path: dir, canonicalPath: dir }, { owner: 'server' });
     const target = authority.bindTarget({ rootId: 'root-a', logicalPath: 'article.html', canonicalPath: file });
     room = await authority.roomFor(target, async () => ({

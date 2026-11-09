@@ -29,10 +29,10 @@ jest.mock('livesync-hyperclay', () => ({
   }
 }));
 
-jest.mock('../../src/main/utils/backup', () => ({
+jest.mock('../../src/main/utils/backup', () => (require('../helpers/mock-exports').mockExports('src/main/utils/backup', {
   createBackupIfExists: jest.fn().mockResolvedValue(),
   createBinaryBackupIfExists: jest.fn().mockResolvedValue()
-}));
+})));
 
 jest.mock('../../src/main/utils/utils', () => ({
   getServerBaseUrl: (url) => url || 'http://localhyperclay.com'
@@ -60,6 +60,10 @@ const { stubDocumentHost } = require('../helpers/document-host-stub');
 let syncEngine;
 let liveSyncMock;
 let sseMock;
+
+const structureMoves = () => syncEngine.documentHost.restructure.mock.calls
+  .flatMap(([request]) => request.context.entries
+    .map((entry) => [entry.from.location, entry.to.canonical]));
 
 // The sync folder as path-resolver canonicalizes it: the folder itself does not
 // exist, so resolution runs through its nearest existing ancestor. The ancestor has
@@ -118,7 +122,6 @@ beforeEach(() => {
   fileOps.readFile.mockResolvedValue('');
   fileOps.readFileBuffer.mockResolvedValue(Buffer.from(''));
   fileOps.ensureDirectory.mockResolvedValue();
-  fileOps.moveFile.mockResolvedValue();
   fileOps.fileExists.mockResolvedValue(false);
   fileOps.calculateBufferChecksum.mockReturnValue('mock-checksum');
   nodeMapModule.getInode.mockResolvedValue(12345);
@@ -377,10 +380,10 @@ describe('handleNodeRenamed', () => {
       newPath: 'new.html'
     });
 
-    expect(fileOps.moveFile).toHaveBeenCalledWith(
+    expect(structureMoves()).toContainEqual([
       path.join(SYNC_ROOT, 'old.html'),
       path.join(SYNC_ROOT, 'new.html')
-    );
+    ]);
     expect(syncEngine.repo.get('42').path).toBe('new.html');
   });
 
@@ -402,7 +405,7 @@ describe('handleNodeRenamed', () => {
       newPath: 'new.png'
     });
 
-    expect(fileOps.moveFile).toHaveBeenCalled();
+    expect(syncEngine.documentHost.restructure).toHaveBeenCalled();
     expect(syncEngine.repo.get('50').path).toBe('new.png');
   });
 
@@ -423,7 +426,7 @@ describe('handleNodeRenamed', () => {
       newPath: 'new'
     });
 
-    expect(fileOps.moveFile).toHaveBeenCalled();
+    expect(syncEngine.documentHost.restructure).toHaveBeenCalled();
     expect(syncEngine.repo.get('60').path).toBe('new');
     expect(syncEngine.repo.get('61').path).toBe('new/a.html');
   });
@@ -436,11 +439,11 @@ describe('handleNodeRenamed', () => {
 
     await syncEngine._applyFolderRelocate('60', 'Proj', 'proj');
 
-    expect(fileOps.moveFile).toHaveBeenCalledWith(
+    expect(structureMoves()).toContainEqual([
       path.join(SYNC_ROOT, 'Proj'),
       path.join(SYNC_ROOT, 'proj')
-    );
-    expect(fileOps.moveFile.mock.calls.some(([s, d]) => `${s} ${d}`.includes('conflicted copy'))).toBe(false);
+    ]);
+    expect(structureMoves().some(([s, d]) => `${s} ${d}`.includes('conflicted copy'))).toBe(false);
     expect(syncEngine.repo.get('60').path).toBe('proj');
   });
 
@@ -452,14 +455,14 @@ describe('handleNodeRenamed', () => {
 
     await syncEngine._applyFolderRelocate('60', 'Proj', 'proj');
 
-    expect(fileOps.moveFile).toHaveBeenCalledWith(
+    expect(structureMoves()).toContainEqual([
       path.join(SYNC_ROOT, 'proj'),
       path.join(SYNC_ROOT, 'proj (conflicted copy)')
-    );
-    expect(fileOps.moveFile).toHaveBeenCalledWith(
+    ]);
+    expect(structureMoves()).toContainEqual([
       path.join(SYNC_ROOT, 'Proj'),
       path.join(SYNC_ROOT, 'proj')
-    );
+    ]);
     expect(syncEngine.repo.get('60').path).toBe('proj');
   });
 
@@ -470,11 +473,11 @@ describe('handleNodeRenamed', () => {
 
     await syncEngine._applyFileRelocate('42', 'Proj.html', 'proj.html', 'site');
 
-    expect(fileOps.moveFile).toHaveBeenCalledWith(
+    expect(structureMoves()).toContainEqual([
       path.join(SYNC_ROOT, 'Proj.html'),
       path.join(SYNC_ROOT, 'proj.html')
-    );
-    expect(fileOps.moveFile.mock.calls.some(([s, d]) => `${s} ${d}`.includes('conflicted copy'))).toBe(false);
+    ]);
+    expect(structureMoves().some(([s, d]) => `${s} ${d}`.includes('conflicted copy'))).toBe(false);
     expect(syncEngine.repo.get('42').path).toBe('proj.html');
   });
 });
@@ -605,7 +608,7 @@ describe('handleNodeDeleted', () => {
       path: 'foo.html'
     });
 
-    expect(fileOps.moveFile).toHaveBeenCalled();
+    expect(syncEngine.documentHost.restructure).toHaveBeenCalled();
     expect(syncEngine.repo.has('42')).toBe(false);
   });
 
@@ -626,7 +629,7 @@ describe('handleNodeDeleted', () => {
       path: 'projects'
     });
 
-    expect(fileOps.moveFile).toHaveBeenCalled();
+    expect(syncEngine.documentHost.restructure).toHaveBeenCalled();
     expect(syncEngine.repo.size).toBe(0);
   });
 

@@ -40,6 +40,11 @@ async function run(mode, { second = false } = {}) {
   const authority = createLocalAuthority({ withDocument: withDocumentWrite, pageCompaction: false });
   const checkpoint = createLocalCheckpoint({ authority, withDocument: withDocumentWrite });
   authority.setCheckpointService(checkpoint);
+  const writes = [];
+  const recoverEdits = authority.recoverUnsavedEdits;
+  authority.recoverUnsavedEdits = (...args) => { writes.push('recover'); return recoverEdits(...args); };
+  const confirmWrite = authority.confirmKnownWrite;
+  authority.confirmKnownWrite = (...args) => { writes.push('confirm'); return confirmWrite(...args); };
   const root = { id: 'root-a', kind: 'personal', path: dir, port: 0 };
   const published = [];
   const server = new RootServer(root, { localAuthority: authority, localCheckpoint: checkpoint,
@@ -55,16 +60,22 @@ async function run(mode, { second = false } = {}) {
     assert.equal(edited.error, undefined);
     assert.equal(authority.roomIsDirty(room), true);
     const before = await logicalBytes(dir, 'A.html', await fs.readFile(file));
-    const incoming = mode === 'stale-save'
+    const incoming = mode === 'stale-save' || mode === 'stale-disk'
       ? splitPage(older.html).file.replace('>abc<', '>outside<')
       : splitPage(stored.html).file.replace('>xyz<', '>outside<');
     const write = async (html) => {
-      if (mode === 'same-rev-disk') {
-        const observer = new RootObserver(root, { localAuthority: authority, live: { notify() {}, broadcast() {} } });
+      if (mode === 'same-rev-disk' || mode === 'stale-disk') {
+        let broadcasts = 0;
+        const observer = new RootObserver(root, { localAuthority: authority,
+          live: { notify() {}, broadcast() { broadcasts += 1; } } });
         observer._runDataGuard = () => {};
         await fs.writeFile(file, html);
         await observer._raw('change', 'A.html');
         await observer.stop();
+        if (mode === 'stale-disk') {
+          assert.ok(writes.indexOf('recover') < writes.indexOf('confirm'));
+          expect(broadcasts).toBe(1);
+        }
       } else {
         const current = await logicalBytes(dir, 'A.html', await fs.readFile(file));
         const saved = await fetch(`${origin}/save`, { method: 'POST', headers: { Origin: origin,
@@ -104,6 +115,7 @@ describe('an outside edit over a dirty room keeps its unsaved edits as a recover
   test('a save at the current revision', () => run('same-rev-save'));
   test('a save based on an older version', () => run('stale-save'));
   test('a disk write at the current revision', () => run('same-rev-disk'));
+  test('a disk write based on an older version', () => run('stale-disk'));
   test('a second save before any tab merged the first keeps the newer typing', () => run('same-rev-save', { second: true }));
   test('a second disk write before any tab merged the first keeps the newer typing', () => run('same-rev-disk', { second: true }));
 });

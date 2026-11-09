@@ -192,7 +192,7 @@ test('an unknown inode never matches an auto-name record', async () => {
 test('the checkpoint exposes scheduled work until an editor arrival cancels it', async () => {
   const room = { key: '/tmp/page.html', nodeId: 'node-1' };
   const authority = { rooms: new Map([[room.key, room]]), roomIsDirty: () => true };
-  const checkpoint = createLocalCheckpoint({ authority, withDocument: () => {},
+  const checkpoint = createLocalCheckpoint({ authority,
     immediate: fn => fn, cancelImmediate: () => {} });
   expect(checkpoint.departed(room)).toBe(true);
   const pending = checkpoint.pending(room.key);
@@ -218,16 +218,16 @@ test('a clean retry wakes the auto namer after the first checkpoint attempt fail
     reconcileDisk: async () => ({ kind: 'current' }),
   };
   const checkpoint = createLocalCheckpoint({
-    authority, withDocument: async (_, fn) => {
-      if (++attempts === 1) throw new Error('temporary write failure');
-      return fn(null, {});
-    },
-    loadCore: async () => ({ captureCheckpoint: () => ({}), isCheckpointCurrent: () => true }),
+    authority,
     setTimer: () => 1, clearTimer: () => {}, logError: () => {},
   });
   const departed = jest.fn();
   checkpoint.setAutoNamer({ departed });
-  checkpoint.registerWriter('root-a', () => {});
+  checkpoint.registerHost('root-a', { checkpoint: async () => {
+    if (++attempts === 1) throw new Error('temporary write failure');
+    authority.rooms.markSaved(room, {});
+    return { kind: 'current' };
+  } });
   expect((await checkpoint.attempt(key)).kind).toBe('transient');
   expect(departed).not.toHaveBeenCalled();
   expect((await checkpoint.retry(key)).kind).toBe('current');

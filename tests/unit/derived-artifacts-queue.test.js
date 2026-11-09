@@ -41,18 +41,18 @@ jest.mock('livesync-hyperclay', () => ({
   }
 }));
 
-jest.mock('../../src/main/data-loss-guard', () => ({
+jest.mock('../../src/main/data-loss-guard', () => (require('../helpers/mock-exports').mockExports('src/main/data-loss-guard', {
   runDataLossGuard: jest.fn().mockResolvedValue(undefined),
   getGuardEvent: jest.fn().mockResolvedValue(null),
   resolveGuard: jest.fn(),
   provenanceForLocalSave: jest.fn(() => 'ui-gestured')
-}));
+})));
 
-jest.mock('../../src/main/utils/backup', () => ({
+jest.mock('../../src/main/utils/backup', () => (require('../helpers/mock-exports').mockExports('src/main/utils/backup', {
   createBackup: jest.fn().mockResolvedValue(null),
   createBackupIfExists: jest.fn().mockResolvedValue(null),
   createBinaryBackupIfExists: jest.fn().mockResolvedValue(null)
-}));
+})));
 
 jest.mock('../../src/sync-engine/api-client');
 jest.mock('../../src/sync-engine/node-map');

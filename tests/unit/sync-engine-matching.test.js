@@ -29,10 +29,10 @@ jest.mock('livesync-hyperclay', () => ({
   }
 }));
 
-jest.mock('../../src/main/utils/backup', () => ({
+jest.mock('../../src/main/utils/backup', () => (require('../helpers/mock-exports').mockExports('src/main/utils/backup', {
   createBackupIfExists: jest.fn(),
   createBinaryBackupIfExists: jest.fn()
-}));
+})));
 
 jest.mock('../../src/main/utils/utils', () => ({
   getServerBaseUrl: (url) => url || 'http://localhyperclay.com'
@@ -44,6 +44,10 @@ const apiClient = require('../../src/sync-engine/api-client');
 const nodeMapModule = require('../../src/sync-engine/node-map');
 const { liveSync } = require('livesync-hyperclay');
 const { stubDocumentHost } = require('../helpers/document-host-stub');
+
+const structureMoves = () => syncEngine.documentHost.restructure.mock.calls
+  .flatMap(([request]) => request.context.entries
+    .map((entry) => [entry.from.location, entry.to.canonical]));
 
 jest.mock('../../src/sync-engine/file-operations');
 jest.mock('../../src/sync-engine/utils', () => {
@@ -131,7 +135,6 @@ beforeEach(() => {
 
   // Default mocks
   fileOps.ensureDirectory.mockResolvedValue();
-  fileOps.moveFile.mockResolvedValue();
   fileOps.readFile.mockResolvedValue('<html>content</html>');
   fileOps.readFileBuffer.mockImplementation(async (filePath) => Buffer.from(await fileOps.readFile(filePath)));
   fileOps.calculateBufferChecksum.mockImplementation(realBufferChecksum);
@@ -188,10 +191,10 @@ describe('performInitialSync — nodeId-based move detection', () => {
 
     await syncEngine.performInitialSync();
 
-    expect(fileOps.moveFile).toHaveBeenCalledWith(
+    expect(structureMoves()).toContainEqual([
       `${SYNC_ROOT}/my-site.html`,
       `${SYNC_ROOT}/blog/my-site.html`
-    );
+    ]);
     expect(liveSync.markBrowserSave).toHaveBeenCalledWith('blog/my-site.html');
 
     // Should NOT try to download since the file was moved
@@ -210,7 +213,7 @@ describe('performInitialSync — nodeId-based move detection', () => {
 
     await syncEngine.performInitialSync();
 
-    expect(fileOps.moveFile).not.toHaveBeenCalled();
+    expect(structureMoves()).toEqual([]);
     expect(apiClient.getNodeContent).toHaveBeenCalledWith(
       expect.objectContaining({ serverUrl: 'http://localhyperclay.com', apiKey: 'hcsk_test' }),
       1
@@ -261,7 +264,7 @@ describe('performInitialSync — nodeId-based move detection', () => {
     await syncEngine.performInitialSync();
 
     // File was moved
-    expect(fileOps.moveFile).toHaveBeenCalled();
+    expect(syncEngine.documentHost.restructure).toHaveBeenCalled();
 
     // Checksums match so no download needed
     expect(apiClient.getNodeContent).not.toHaveBeenCalled();
@@ -296,7 +299,7 @@ describe('performInitialSync — nodeId-based move detection', () => {
     await syncEngine.performInitialSync();
 
     // File was moved to match server organization
-    expect(fileOps.moveFile).toHaveBeenCalled();
+    expect(syncEngine.documentHost.restructure).toHaveBeenCalled();
 
     // The local bytes changed since the baseline and the remote did not, so the
     // edit is uploaded: the server copy never overwrites it.
@@ -320,7 +323,7 @@ describe('performInitialSync — nodeId-based move detection', () => {
 
     syncEngine.repo.seed([['1', entry('my-site.html')]]);
 
-    fileOps.moveFile.mockRejectedValue(new Error('EACCES: permission denied'));
+    syncEngine.documentHost.restructure.mockRejectedValue(new Error('EACCES: permission denied'));
 
     await syncEngine.performInitialSync();
 
@@ -343,7 +346,7 @@ describe('performInitialSync — nodeId-based move detection', () => {
 
     await syncEngine.performInitialSync();
 
-    expect(fileOps.moveFile).not.toHaveBeenCalled();
+    expect(structureMoves()).toEqual([]);
     // Server file should be downloaded since no local match
     expect(apiClient.getNodeContent).toHaveBeenCalled();
     // Local file should be uploaded since no server match
@@ -372,10 +375,10 @@ describe('performInitialSync — duplicate filename handling', () => {
 
     await syncEngine.performInitialSync();
 
-    expect(fileOps.moveFile).toHaveBeenCalledWith(
+    expect(structureMoves()).toContainEqual([
       `${SYNC_ROOT}/archive/blog.html`,
       `${SYNC_ROOT}/projects/blog.html`
-    );
+    ]);
     expect(apiClient.getNodeContent).not.toHaveBeenCalled();
   });
 
@@ -470,15 +473,15 @@ describe('performInitialSync — duplicate filename handling', () => {
 
     syncEngine.repo.seed([['1', entry('drafts/blog.html')]]);
 
-    fileOps.moveFile.mockRejectedValue(new Error('EACCES: permission denied'));
+    syncEngine.documentHost.restructure.mockRejectedValue(new Error('EACCES: permission denied'));
 
     await syncEngine.performInitialSync();
 
     // Move was attempted for the nodeId-mapped file
-    expect(fileOps.moveFile).toHaveBeenCalledWith(
+    expect(structureMoves()).toContainEqual([
       `${SYNC_ROOT}/drafts/blog.html`,
       `${SYNC_ROOT}/projects/blog.html`
-    );
+    ]);
     // Move failed, should fall back to downloading
     expect(apiClient.getNodeContent).toHaveBeenCalledWith(
       expect.objectContaining({ serverUrl: 'http://localhyperclay.com', apiKey: 'hcsk_test' }),
@@ -519,16 +522,16 @@ describe('performInitialSync — duplicate filename handling', () => {
     await syncEngine.performInitialSync();
 
     // blog: drafts/blog.html mapped by nodeId → moved to projects/blog.html
-    expect(fileOps.moveFile).toHaveBeenCalledWith(
+    expect(structureMoves()).toContainEqual([
       `${SYNC_ROOT}/drafts/blog.html`,
       `${SYNC_ROOT}/projects/blog.html`
-    );
+    ]);
     // about: archive/about.html mapped by nodeId → moved to work/about.html
-    expect(fileOps.moveFile).toHaveBeenCalledWith(
+    expect(structureMoves()).toContainEqual([
       `${SYNC_ROOT}/archive/about.html`,
       `${SYNC_ROOT}/work/about.html`
-    );
-    expect(fileOps.moveFile).toHaveBeenCalledTimes(2);
+    ]);
+    expect(structureMoves()).toHaveLength(2);
 
     // No downloads needed (checksums match after move)
     expect(apiClient.getNodeContent).not.toHaveBeenCalled();

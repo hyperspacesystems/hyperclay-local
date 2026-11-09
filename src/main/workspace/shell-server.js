@@ -6,6 +6,7 @@ const { getConsentRegistry, resolveReadPath } = require('../utils/path-resolver'
 const { RootTree, entryFor } = require('./tree');
 const { executeCommand, safePath, refusal } = require('./commands');
 const { createAutoNamer } = require('./auto-name');
+const { createRootDocumentHost } = require('../document-host');
 const { freeCopyName } = require('../utils/free-name');
 const { SearchIndex } = require('./search-index');
 const { handleWorkspaceRoute } = require('./routes');
@@ -174,10 +175,14 @@ function createShellServer({ authority, rootPool, observerFor, settings, appVers
     if (!tree) {
       const observer = observerFor(root.id);
       tree = new RootTree(root, observer, changed);
-      if (autoNamer && observer) tree.unsubscribeAutoName = observer.subscribe(({ event, rel }) => {
+      const host = observer ? createRootDocumentHost({ ctx: { root, localAuthority: authority }, getObserver: () => observer }) : null;
+      if (autoNamer && host) tree.unsubscribeAutoName = host.events(null, ({ type, event, rel }) => {
+        if (type !== 'change') return;
         autoNamer.observe(root, event, rel).catch(error => console.error(`[auto-name] observer: ${error.message}`));
       });
-      if (observer) tree.unsubscribeSearch = observer.subscribe(({ rel }) => indexes.get(root.id)?.update(rel));
+      if (host) tree.unsubscribeSearch = host.events(null, ({ type, rel }) => {
+        if (type === 'change') indexes.get(root.id)?.update(rel);
+      });
       trees.set(root.id, tree);
     }
     await tree.start();

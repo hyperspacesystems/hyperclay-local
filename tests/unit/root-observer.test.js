@@ -5,9 +5,10 @@ const fs = require('fs').promises;
 const path = require('upath');
 const os = require('os');
 
-jest.mock('../../src/main/data-loss-guard', () => ({
-  runDataLossGuard: jest.fn().mockResolvedValue(null)
-}));
+jest.mock('../../src/main/data-loss-guard', () => (require('../helpers/mock-exports').mockExports('src/main/data-loss-guard', {
+  runDataLossGuard: jest.fn().mockResolvedValue(null),
+  noteSeen: jest.fn(() => Promise.resolve())
+})));
 
 const dataGuard = require('../../src/main/data-loss-guard');
 const { documentEtag } = require('../../src/main/spec-wire');

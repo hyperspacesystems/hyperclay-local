@@ -11,6 +11,7 @@ const { createBackup } = require('../../src/main/utils/backup');
 const { storePageState } = require('../../src/main/page-state-store');
 const { RootObserver } = require('../../src/main/root-observer');
 const { pageFixture } = require('./page-fixture');
+const { checkpointHost } = require('./checkpoint-host');
 
 const blocks = (first) => [
   { id: 'a', t: 'paragraph', text: first },
@@ -33,11 +34,9 @@ async function scenario(older, stored, edit) {
   const authority = createLocalAuthority({ rooms, withDocument: withDocumentWrite });
   const checkpoint = createLocalCheckpoint({ authority, withDocument: withDocumentWrite, logError: () => {} });
   authority.setCheckpointService(checkpoint);
-  checkpoint.registerWriter('root-a', async (write) => {
-    await fsp.writeFile(write.filePath, await storePageState(dir, 'article.html', write.content));
-    await authority.confirmKnownWrite(write.target, write.content, write.token);
-    return write.content;
-  });
+  checkpoint.registerHost('root-a', checkpointHost({
+    dir, authority, write: async (filePath, bytes) => fsp.writeFile(filePath, bytes),
+  }));
   authority.registerRoot({ id: 'root-a', path: dir, canonicalPath: dir }, { owner: 'server' });
   const target = authority.bindTarget({ rootId: 'root-a', logicalPath: 'article.html', canonicalPath: file });
   const room = await authority.roomFor(target, () => ({

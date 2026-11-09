@@ -6,6 +6,7 @@ const { createLocalCheckpoint } = require('../../src/main/local-checkpoint');
 const { withDocumentWrite } = require('../../src/main/utils/write-queue');
 const { pageFixture } = require('./page-fixture');
 const { storePageState, readPageState } = require('../../src/main/page-state-store');
+const { checkpointHost } = require('./checkpoint-host');
 
 async function run() {
   const dir = path.resolve(fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'l3-probe4-'))));
@@ -16,12 +17,9 @@ async function run() {
   authority.registerRoot({ id: 'root-a', path: dir, canonicalPath: dir });
   const checkpoint = createLocalCheckpoint({ authority, withDocument: withDocumentWrite, logError: () => {} });
   authority.setCheckpointService(checkpoint);
-  checkpoint.registerWriter('root-a', async (write) => {
-    const stored = await storePageState(dir, 'doc.html', write.content);
-    fs.writeFileSync(write.filePath, stored);
-    await authority.confirmKnownWrite(write.target, write.content, write.token);
-    return write.content;
-  });
+  checkpoint.registerHost('root-a', checkpointHost({
+    dir, authority, write: async (filePath, bytes) => fs.writeFileSync(filePath, bytes),
+  }));
   const target = authority.bindTarget({ rootId: 'root-a', logicalPath: 'doc.html', canonicalPath: file });
   const room = await authority.roomFor(target, () => ({
     rootId: 'root-a', logicalPath: 'doc.html', canonicalPath: file, identity: target.identity,

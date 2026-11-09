@@ -13,6 +13,10 @@ const request = require('supertest');
 const { createApp } = require('../../src/main/server.js');
 const { listenLoopback, closeLoopback } = require('../helpers/loopback');
 
+// chmod 0o500 is not a refusal on Windows: there is no mode that makes a
+// directory unwritable to its owner, so that case has nothing to prove there.
+const describeUnlessWindows = process.platform === 'win32' ? describe.skip : describe;
+
 const ORIGINAL = '<html><body>original</body></html>';
 const REPLACEMENT = '<html><body>replacement</body></html>';
 
@@ -93,6 +97,52 @@ describe('discovery says this host keeps version history', () => {
       .set('Document-URL', 'http://localhost/index.html');
     expect(restored.status).toBe(200);
     expect(await onDisk()).toBe(ORIGINAL);
+  });
+
+  // The safety copy is the one thing a restore must never skip, so both ways it can
+  // fail refuse the restore and answer the 500 that says which half failed.
+  test('a restore whose live room cannot be backed up is a 500 and writes nothing', async () => {
+    expect((await save(ORIGINAL)).status).toBe(200);
+    expect((await save(REPLACEMENT)).status).toBe(200);
+    const target = (await versions()).body.versions[1];
+    const localCheckpoint = {
+      registerHost() {},
+      safetyBackup: async () => { throw new Error('the room cannot be backed up'); },
+    };
+    const watched = await listenLoopback(createApp({
+      root: { id: 'meta-versions-room', kind: 'personal', path: dir, port: 0 },
+      devHooks: null, isKnownPath: null, localCheckpoint,
+    }));
+
+    const res = await request(watched)
+      .post(`/_/restore/index.html/${target.name}`)
+      .set('Host', 'localhost')
+      .set('Document-URL', 'http://localhost/index.html');
+    await closeLoopback();
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toBe('live room cannot be backed up');
+    expect(await onDisk()).toBe(REPLACEMENT);
+  });
+
+  describeUnlessWindows('a safety backup that cannot be written', () => {
+    test('refuses the restore with a 500 and writes nothing', async () => {
+      expect((await save(ORIGINAL)).status).toBe(200);
+      expect((await save(REPLACEMENT)).status).toBe(200);
+      const target = (await versions()).body.versions[1];
+      const siteVersions = path.join(dir, '.hyperclay', 'versions', 'index');
+      await fs.chmod(siteVersions, 0o500);
+
+      const res = await request(app)
+        .post(`/_/restore/index.html/${target.name}`)
+        .set('Host', 'localhost')
+        .set('Document-URL', 'http://localhost/index.html');
+
+      await fs.chmod(siteVersions, 0o755);
+      expect(res.status).toBe(500);
+      expect(res.body.error).toBe('could not create a safety backup');
+      expect(await onDisk()).toBe(REPLACEMENT);
+    });
   });
 
   test('a document that is not there gets no document block, and so no versions claim', async () => {

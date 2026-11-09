@@ -19,10 +19,10 @@ jest.mock('livesync-hyperclay', () => ({
   }
 }));
 
-jest.mock('../../src/main/utils/backup', () => ({
+jest.mock('../../src/main/utils/backup', () => (require('../helpers/mock-exports').mockExports('src/main/utils/backup', {
   createBackupIfExists: jest.fn().mockResolvedValue(),
   createBinaryBackupIfExists: jest.fn().mockResolvedValue()
-}));
+})));
 
 jest.mock('../../src/main/utils/utils', () => ({
   getServerBaseUrl: (url) => url || 'http://localhyperclay.com'
@@ -40,9 +40,14 @@ const fileOps = require('../../src/sync-engine/file-operations');
 const nodeMapModule = require('../../src/sync-engine/node-map');
 const Outbox = require('../../src/sync-engine/state/outbox');
 const CascadeSuppression = require('../../src/sync-engine/state/cascade-suppression');
+const { stubDocumentHost } = require('../helpers/document-host-stub');
 const realGetInodeSync = jest.requireActual('../../src/sync-engine/node-map').getInodeSync;
 
 let syncEngine;
+
+const structureMoves = () => syncEngine.documentHost.restructure.mock.calls
+  .flatMap(([request]) => request.context.entries
+    .map((entry) => [entry.from.location, entry.to.canonical]));
 
 beforeEach(() => {
   jest.clearAllMocks();
@@ -58,7 +63,7 @@ beforeEach(() => {
   syncEngine.outbox = new Outbox();
   syncEngine.cascade = new CascadeSuppression();
 
-  fileOps.moveFile.mockResolvedValue();
+  syncEngine.documentHost = stubDocumentHost();
   fileOps.ensureDirectory.mockResolvedValue();
   fileOps.fileExists.mockResolvedValue(false);
   nodeMapModule.getInode.mockResolvedValue(12345);
@@ -87,10 +92,10 @@ describe('_applyFolderRelocate', () => {
 
     await syncEngine._applyFolderRelocate(60, 'projects/old', 'projects/new');
 
-    expect(fileOps.moveFile).toHaveBeenCalledWith(
+    expect(structureMoves()).toContainEqual([
       path.join('/tmp/test-sync', 'projects/old'),
       path.join('/tmp/test-sync', 'projects/new')
-    );
+    ]);
     expect(syncEngine.repo.get('60').path).toBe('projects/new');
     expect(syncEngine.repo.get('61').path).toBe('projects/new/a.html');
     expect(syncEngine.repo.get('62').path).toBe('projects/new/b.png');
@@ -130,7 +135,7 @@ describe('_applyFolderRelocate', () => {
 
     await syncEngine._applyFolderRelocate(60, 'old', 'new');
 
-    expect(fileOps.moveFile).not.toHaveBeenCalled();
+    expect(syncEngine.documentHost.restructure).not.toHaveBeenCalled();
     expect(syncEngine.repo.get('60').path).toBe('new');
     expect(syncEngine.repo.get('61').path).toBe('new/a.html');
   });
@@ -142,14 +147,14 @@ describe('_applyFolderRelocate', () => {
 
     await syncEngine._applyFolderRelocate(60, 'old', 'new');
 
-    expect(fileOps.moveFile).toHaveBeenCalledWith(
+    expect(structureMoves()).toContainEqual([
       path.join('/tmp/test-sync', 'new'),
       path.join('/tmp/test-sync', 'new (conflicted copy)')
-    );
-    expect(fileOps.moveFile).toHaveBeenCalledWith(
+    ]);
+    expect(structureMoves()).toContainEqual([
       path.join('/tmp/test-sync', 'old'),
       path.join('/tmp/test-sync', 'new')
-    );
+    ]);
     expect(syncEngine.repo.get('60').path).toBe('new');
   });
 
