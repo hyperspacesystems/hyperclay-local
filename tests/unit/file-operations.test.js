@@ -5,12 +5,10 @@ const {
   getLocalFiles,
   getLocalUploads,
   readFile,
-  writeFile,
   fileExists,
   getFileStats,
   ensureDirectory,
   readFileBuffer,
-  writeFileBuffer,
   calculateBufferChecksum
 } = require('../../src/sync-engine/file-operations');
 
@@ -185,7 +183,7 @@ describe('getLocalUploads', () => {
   });
 });
 
-describe('readFileBuffer and writeFileBuffer', () => {
+describe('readFileBuffer', () => {
   let tempDir;
 
   beforeEach(async () => {
@@ -194,27 +192,6 @@ describe('readFileBuffer and writeFileBuffer', () => {
 
   afterEach(async () => {
     await fs.rm(tempDir, { recursive: true, force: true });
-  });
-
-  test('writeFileBuffer creates directories and writes buffer', async () => {
-    const filePath = path.join(tempDir, 'nested', 'dir', 'file.bin');
-    const content = Buffer.from([0x00, 0x01, 0x02, 0xFF]);
-
-    await writeFileBuffer(filePath, content);
-
-    const read = await readFileBuffer(filePath);
-    expect(Buffer.compare(read, content)).toBe(0);
-  }, 20000);
-
-  test('writeFileBuffer sets modification time', async () => {
-    const filePath = path.join(tempDir, 'file.bin');
-    const content = Buffer.from('test');
-    const mtime = new Date('2024-01-15T12:00:00Z');
-
-    await writeFileBuffer(filePath, content, mtime);
-
-    const stats = await fs.stat(filePath);
-    expect(Math.abs(stats.mtime.getTime() - mtime.getTime())).toBeLessThan(1000);
   });
 
   test('readFileBuffer returns Buffer', async () => {

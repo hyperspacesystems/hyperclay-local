@@ -57,6 +57,7 @@ const fileOps = require('../../src/sync-engine/file-operations');
 const apiClient = require('../../src/sync-engine/api-client');
 const nodeMapModule = require('../../src/sync-engine/node-map');
 const { createRootLive } = require('../../src/main/utils/root-live');
+const { stubDocumentHost } = require('../helpers/document-host-stub');
 const { SyncEngine } = require('../../src/sync-engine/index');
 
 const flush = async () => {
@@ -89,14 +90,21 @@ async function startEngine(opts) {
     path.join(syncFolder, 'meta'),
     opts
   );
+  engine.documentHost = stubDocumentHost({
+    commit: jest.fn(async (request) => {
+      engine.live.markBrowserSave(request.name);
+      return {
+        outcome: 'committed', reason: null, etag: null, checksum: 'stub',
+        stored: request.bytes, content: request.bytes,
+      };
+    }),
+  });
   return engine;
 }
 
 beforeEach(() => {
   jest.clearAllMocks();
 
-  fileOps.writeFile.mockResolvedValue();
-  fileOps.writeFileBuffer.mockResolvedValue();
   fileOps.ensureDirectory.mockResolvedValue();
   fileOps.fileExists.mockResolvedValue(false);
   fileOps.readFile.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
@@ -130,7 +138,13 @@ describe('per-root live keys', () => {
     await engine.downloadFile(7, 'index.html');
 
     expect(liveSync.markBrowserSave).toHaveBeenCalledWith('r1:index.html');
-    expect(fileOps.writeFile).toHaveBeenCalled();
+    expect(engine.documentHost.commit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: 'sync-download',
+        name: 'index.html',
+        modifiedAt: '2026-04-08T12:00:00Z',
+      })
+    );
   });
 
   it('keeps the bare relative path when no opts.live is given', async () => {
@@ -173,11 +187,13 @@ describe('generation counter', () => {
       modifiedAt: '2026-04-08T12:00:00Z'
     });
 
-    expect(fileOps.writeFileBuffer).toHaveBeenCalledWith(
-      require('upath').join(syncFolder, 'photo.png'),
-      '<html>remote</html>',
-      '2026-04-08T12:00:00Z'
-    );
+    expect(engine.documentHost.commit).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'sync-download',
+      name: 'photo.png',
+      filePath: require('upath').join(syncFolder, 'photo.png'),
+      bytes: '<html>remote</html>',
+      modifiedAt: '2026-04-08T12:00:00Z'
+    }));
     expect(synced).toHaveBeenCalled();
   });
 
@@ -220,8 +236,7 @@ describe('generation counter', () => {
     await pending;
     await flush();
 
-    expect(fileOps.writeFileBuffer).not.toHaveBeenCalled();
-    expect(fileOps.writeFile).not.toHaveBeenCalled();
+    expect(engine.documentHost.commit).not.toHaveBeenCalled();
     expect(engine.repo.has(42)).toBe(false);
     expect(synced).not.toHaveBeenCalled();
     expect(fs.existsSync(path.join(syncFolder, 'photo.png'))).toBe(false);

@@ -10,11 +10,9 @@
  * `conflicts.json` keeps both until the user picks mine or theirs.
  *
  * Reused rather than re-implemented: the api client (getNodeContent,
- * putNodeContent, createNode, deleteNode), the backup helpers
- * (createBackupIfExists, createBinaryBackupIfExists), the atomic publish
- * (writeFile/writeFileBuffer and the shared document boundary), refreshDerivedArtifacts, the
- * data-loss guard, live.markBrowserSave, and the engine's `_applyFileDelete`
- * for `trash-local` (the `.trash/` move and its collision handling).
+ * putNodeContent, createNode, deleteNode), the shared document boundary, and
+ * the engine's `_applyFileDelete` for `trash-local` (the `.trash/` move and its
+ * collision handling).
  *
  * Not wired into initial sync or the watcher yet; C3.5 does that.
  */
@@ -22,10 +20,7 @@
 const fs = require('fs').promises;
 const path = require('upath');
 const {
-  readFile,
   readFileBuffer,
-  writeFile,
-  writeFileBuffer,
   ensureDirectory,
   fileExists,
 } = require('../file-operations');
@@ -36,17 +31,14 @@ const {
   getNodeContent,
   putNodeContent,
 } = require('../api-client');
-const { createBackupIfExists, createBinaryBackupIfExists } = require('../../main/utils/backup');
 const { atomicWriteFile } = require('../../main/utils/write-queue');
-const { withLocalDocumentWrite, withLocalDirectoryChange, claimLocalDocumentTarget } = require('../local-boundary');
+const { withLocalDocumentWrite, withLocalDirectoryChange, claimLocalDocumentTarget, documentHostFor } = require('../local-boundary');
 const { getConsentRegistry, resolveWritePath } = require('../../main/utils/path-resolver');
-const { refreshDerivedArtifacts } = require('../../main/utils/derived-artifacts');
-const dataGuard = require('../../main/data-loss-guard');
 const nodeMap = require('../node-map');
 const store = require('./conflicts');
 const { A } = require('./decide');
 const { isUnderLockedFolder, lockedFolderError } = require('../locked-folder');
-const { sendPageState, readPageRecord, applyPageRecord, storedPageFile, confirmDownload } = require('../page-state');
+const { sendPageState, readPageRecord, applyPageRecord } = require('../page-state');
 
 const SITE_PATTERN = /\.(html|htmlclay)$/i;
 
@@ -86,9 +78,10 @@ async function localPathFor(engine, rel) {
   return resolveWritePath(getConsentRegistry(engine.syncFolder), rel);
 }
 
-async function readLocalBytes(localPath) {
-  const buffer = await readFileBuffer(localPath);
-  return { buffer, checksum: await calculateChecksum(buffer) };
+async function readLocalBytes(engine, localPath) {
+  const read = await documentHostFor(engine).read(null, localPath);
+  if (!read) throw Object.assign(new Error(`ENOENT: ${localPath}`), { code: 'ENOENT' });
+  return { buffer: read.bytes, checksum: read.checksum };
 }
 
 // An attachment over the account's per-file cap stays on this computer. The
@@ -120,90 +113,29 @@ const CHANGED = 'changed';
  * write: a generation that ended, or local bytes that changed since the caller read them
  * (`null` = the file was absent), refuse the write. Returns `{ localPath, refused }`.
  */
-async function writeLocal(engine, rel, content, { modifiedAt = null, gen, expectLocal, claim = null, explicitCreate = false, pageRecord = null } = {}) {
-  const isSite = SITE_PATTERN.test(rel);
-  const generation = gen !== undefined ? gen : engine.generation;
+const expectedFrom = (expectLocal) => expectLocal === undefined ? undefined
+  : expectLocal === null ? { type: 'absent' } : { type: 'checksum', value: expectLocal };
 
+async function writeLocal(engine, rel, content, { modifiedAt = null, gen, expectLocal, claim = null, explicitCreate = false, pageRecord = null } = {}) {
+  const generation = gen !== undefined ? gen : engine.generation;
+  const host = documentHostFor(engine);
   let localPath = null;
   let refused = null;
-  const previous = await withLocalDocumentWrite(engine, rel, async (target, token) => {
+  let checksum = null;
+  const outcome = await withLocalDocumentWrite(engine, rel, async (target, token) => {
     localPath = target.canonicalPath;
-
-    if (gen !== undefined && gen !== engine.generation) {
-      refused = STALE;
-      return null;
-    }
-    if (expectLocal !== undefined) {
-      let now = null;
-      try {
-        now = (await readLocalBytes(localPath)).checksum;
-      } catch {
-        now = null;
-      }
-      if (now !== expectLocal) {
-        refused = CHANGED;
-        return null;
-      }
-    }
-    let prev = null;
-    if (isSite) {
-      try {
-        prev = await readFile(localPath);
-      } catch {
-        prev = null;
-      }
-    }
-
-    if (isSite) {
-      await createBackupIfExists(localPath, rel.replace(SITE_PATTERN, ''), engine.syncFolder, engine.emit.bind(engine), engine.logger);
-    } else {
-      await createBinaryBackupIfExists(localPath, rel, engine.syncFolder, engine.emit.bind(engine), engine.logger);
-    }
-
-    engine.live.markBrowserSave(rel);
-    await ensureDirectory(path.dirname(localPath));
-
-    let confirmed = content;
-    if (isSite) {
-      await applyPageRecord(engine, rel, pageRecord);
-      confirmed = await storedPageFile(engine, rel, content);
-      await writeFile(localPath, confirmed, modifiedAt);
-    } else {
-      await writeFileBuffer(localPath, content, modifiedAt);
-    }
-
-    if (token) {
-      await confirmDownload(engine, target, token, rel, confirmed, {
-        sender: 'sync-engine',
-      });
-    }
-
-    if (isSite && typeof content === 'string') {
-      try {
-        await refreshDerivedArtifacts(engine.syncFolder, rel, content);
-      } catch (error) {
-        if (!token) throw error;
-        console.error('[SYNC] reconcile: derived artifact refresh failed:', error && error.message ? error.message : error);
-      }
-    }
-
-    return prev;
+    if (gen !== undefined && gen !== engine.generation) { refused = STALE; return null; }
+    const written = await host.commit({
+      kind: 'sync-download', name: rel, filePath: localPath, bytes: content, modifiedAt, pageRecord,
+      expected: expectedFrom(expectLocal), context: { target, token },
+    });
+    if (written.outcome === 'indeterminate') throw written.error;
+    if (written.outcome === 'refused') { refused = CHANGED; return null; }
+    checksum = written.checksum;
+    return written;
   }, { generation, claim, explicitCreate });
-
-  if (previous && previous.stale) return { localPath, refused: STALE };
-  if (refused) return { localPath, refused };
-
-  if (isSite && typeof content === 'string') {
-    dataGuard.runDataLossGuard({
-      baseDir: engine.syncFolder,
-      name: rel,
-      newHtml: content,
-      prevContent: previous,
-      prov: 'external',
-    }).catch((err) => console.error('[data-guard] reconcile guard error:', err && err.message ? err.message : err));
-  }
-
-  return { localPath, refused: null };
+  if (outcome && outcome.stale) return { localPath, refused: STALE, checksum: null };
+  return { localPath, refused, checksum };
 }
 
 /** Merge baseline fields into an entry (or a brand-new one) and persist. */
@@ -257,11 +189,8 @@ async function recordConflict(engine, nodeId, rel, { kind, localChecksum = null,
 }
 
 async function localChecksumOf(engine, rel) {
-  try {
-    return (await readLocalBytes(await localPathFor(engine, rel))).checksum;
-  } catch {
-    return null;
-  }
+  const read = await documentHostFor(engine).read(rel, await localPathFor(engine, rel));
+  return read ? read.checksum : null;
 }
 
 /**
@@ -290,7 +219,7 @@ async function upload(engine, nodeId, entry, context, gen) {
   const localPath = await localPathFor(engine, rel);
   const size = (await fs.stat(localPath)).size;
   if (overLimit(engine, isSite, size)) return keepLocal(engine, rel, size, engine.uploadLimit);
-  const { buffer, checksum: localChecksum } = await readLocalBytes(localPath);
+  const { buffer, checksum: localChecksum } = await readLocalBytes(engine, localPath);
   if (overLimit(engine, isSite, buffer.length)) return keepLocal(engine, rel, buffer.length, engine.uploadLimit);
   const content = isSite ? buffer.toString('utf8') : buffer;
   const baseline = engine.repo.getBaseline(nodeId) || {};
@@ -420,7 +349,7 @@ async function download(engine, nodeId, entry, context, gen) {
     });
   }
   const localPath = written.localPath;
-  const localChecksum = (await readLocalBytes(localPath)).checksum;
+  const localChecksum = written.checksum;
   const type = typeOf(entry, context, rel);
   const parentId = entry ? entry.parentId : context.parentId;
 
@@ -537,7 +466,7 @@ async function createRemote(engine, nodeId, entry, context, gen) {
   const localPath = await localPathFor(engine, rel);
   const size = (await fs.stat(localPath)).size;
   if (overLimit(engine, isSite, size)) return keepLocal(engine, rel, size, engine.uploadLimit);
-  const { buffer, checksum: localChecksum } = await readLocalBytes(localPath);
+  const { buffer, checksum: localChecksum } = await readLocalBytes(engine, localPath);
   if (overLimit(engine, isSite, buffer.length)) return keepLocal(engine, rel, buffer.length, engine.uploadLimit);
   const content = isSite ? buffer.toString('utf8') : buffer;
   const type = typeOf(entry, context, rel);
@@ -713,7 +642,7 @@ async function resolveConflict(session, { path: rel, choice } = {}) {
     if (!KEEP_BOTH_KINDS.has(found.kind) || !found.remoteCopy) return { ok: false, error: 'no-remote-copy' };
     copy = await conflictedCopyPath(engine, found.path);
     if (!copy) return { ok: false, error: 'no-free-name' };
-    const { buffer } = await readLocalBytes(localPath);
+    const { buffer } = await readLocalBytes(engine, localPath);
     const written = await writeLocal(engine, copy, isSite ? buffer.toString('utf8') : buffer, { expectLocal: null, explicitCreate: true });
     if (written.refused) return { ok: false, error: 'copy-taken' };
     try {
@@ -729,10 +658,10 @@ async function resolveConflict(session, { path: rel, choice } = {}) {
     } else {
       if (!found.remoteCopy) return { ok: false, error: 'no-remote-copy' };
       const other = await readFileBuffer(path.join(engine.syncFolder, found.remoteCopy));
-      await writeLocal(engine, found.path, isSite ? other.toString('utf8') : other, {});
+      const restored = await writeLocal(engine, found.path, isSite ? other.toString('utf8') : other, {});
       await saveEntry(engine, found.key, known, {
         remoteEtag: found.remoteEtag,
-        localChecksum: (await readLocalBytes(localPath)).checksum,
+        localChecksum: restored.checksum,
       }, extra);
     }
     await engine.clearUploadBlock(found.path);
@@ -746,7 +675,7 @@ async function resolveConflict(session, { path: rel, choice } = {}) {
     await keepLocal(engine, found.path, size, engine.uploadLimit);
     return { ok: false, error: 'too-large' };
   }
-  const { buffer, checksum: localChecksum } = await readLocalBytes(localPath);
+  const { buffer, checksum: localChecksum } = await readLocalBytes(engine, localPath);
   if (overLimit(engine, isSite, buffer.length)) {
     await keepLocal(engine, found.path, buffer.length, engine.uploadLimit);
     return { ok: false, error: 'too-large' };

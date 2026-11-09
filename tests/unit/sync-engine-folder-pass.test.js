@@ -32,6 +32,7 @@ jest.mock('livesync-hyperclay', () => ({
 }));
 
 jest.mock('../../src/main/utils/backup', () => ({
+  createBackup: jest.fn(),
   createBackupIfExists: jest.fn(),
   createBinaryBackupIfExists: jest.fn()
 }));
@@ -44,6 +45,7 @@ const fileOps = require('../../src/sync-engine/file-operations');
 const utils = require('../../src/sync-engine/utils');
 const apiClient = require('../../src/sync-engine/api-client');
 const nodeMapModule = require('../../src/sync-engine/node-map');
+const { stubDocumentHost } = require('../helpers/document-host-stub');
 const fsSync = require('fs');
 const os = require('os');
 const nodePath = require('path');
@@ -127,8 +129,6 @@ beforeEach(() => {
   };
 
   fileOps.ensureDirectory.mockResolvedValue();
-  fileOps.writeFile.mockResolvedValue();
-  fileOps.writeFileBuffer.mockResolvedValue();
   fileOps.moveFile.mockResolvedValue();
   fileOps.readFile.mockResolvedValue('<html>content</html>');
   fileOps.readFileBuffer.mockImplementation(async (filePath) => Buffer.from(await fileOps.readFile(filePath)));
@@ -139,6 +139,17 @@ beforeEach(() => {
   fileOps.getLocalFiles.mockResolvedValue(new Map());
   fileOps.getLocalUploads.mockResolvedValue(new Map());
   fileOps.getLocalFolders.mockResolvedValue(new Map());
+
+  syncEngine.documentHost = stubDocumentHost({
+    read: jest.fn(async (name, filePath) => {
+      try {
+        const bytes = await fileOps.readFileBuffer(filePath);
+        return { bytes, checksum: await utils.calculateChecksum(bytes) };
+      } catch {
+        return null;
+      }
+    }),
+  });
 
   nodeMapModule.load.mockResolvedValue(new Map());
   nodeMapModule.save.mockResolvedValue();
@@ -665,11 +676,10 @@ describe('performInitialFolderSync — the locked root uploads folder', () => {
       expect(fileOps.ensureDirectory).toHaveBeenCalledWith(upath.join(root, 'uploads', 'assets-a'));
       expect(apiClient.getNodeContent).toHaveBeenCalledWith(expect.anything(), 12);
       // The executor writes through the resolved root, so the assertion is too.
-      expect(fileOps.writeFileBuffer).toHaveBeenCalledWith(
-        upath.join(fsSync.realpathSync.native(root), 'uploads', 'assets-a', 'x.png'),
-        expect.anything(),
-        expect.anything()
-      );
+      expect(syncEngine.documentHost.commit).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'sync-download',
+        filePath: upath.join(fsSync.realpathSync.native(root), 'uploads', 'assets-a', 'x.png'),
+      }));
     } finally {
       fsSync.rmSync(root, { recursive: true, force: true });
     }
@@ -711,11 +721,10 @@ describe('performInitialFolderSync — the locked root uploads folder', () => {
       // download: an attachment deleted while the app was closed reappears.
       expect(apiClient.deleteNode).not.toHaveBeenCalled();
       expect(apiClient.getNodeContent).toHaveBeenCalledWith(expect.anything(), 13);
-      expect(fileOps.writeFileBuffer).toHaveBeenCalledWith(
-        upath.join(fsSync.realpathSync.native(root), 'uploads', 'assets-a', 'y.png'),
-        expect.anything(),
-        expect.anything()
-      );
+      expect(syncEngine.documentHost.commit).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'sync-download',
+        filePath: upath.join(fsSync.realpathSync.native(root), 'uploads', 'assets-a', 'y.png'),
+      }));
     } finally {
       fsSync.rmSync(root, { recursive: true, force: true });
     }
@@ -763,11 +772,10 @@ describe('performInitialFolderSync — the locked root uploads folder', () => {
       expect(apiClient.renameNode).not.toHaveBeenCalled();
       expect(apiClient.moveNode).not.toHaveBeenCalled();
       expect(apiClient.getNodeContent).toHaveBeenCalledWith(expect.anything(), 12);
-      expect(fileOps.writeFile).toHaveBeenCalledWith(
-        upath.join(fsSync.realpathSync.native(root), 'uploads', 'assets-a', 'page.html'),
-        expect.anything(),
-        expect.anything()
-      );
+      expect(syncEngine.documentHost.commit).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'sync-download',
+        filePath: upath.join(fsSync.realpathSync.native(root), 'uploads', 'assets-a', 'page.html'),
+      }));
     } finally {
       fsSync.rmSync(root, { recursive: true, force: true });
     }

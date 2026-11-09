@@ -34,6 +34,7 @@ jest.mock('../../src/main/utils/derived-artifacts', () => ({
 }));
 
 jest.mock('../../src/main/utils/backup', () => ({
+  createBackup: jest.fn(),
   createBackupIfExists: jest.fn(),
   createBinaryBackupIfExists: jest.fn()
 }));

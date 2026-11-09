@@ -17,11 +17,46 @@ const KINDS = {
 const REQUIRED_DEPS = [
   'ctx', 'baseDir', 'live', 'store', 'resolveTailwindWrite',
   'canonicalForWrite', 'formatHtml', 'scopeTailwindLink', 'stripSaveToken', 'splitWrite',
-  'storePageState', 'createBackup', 'atomicWriteFile', 'assertWriteContext',
-  'writeApiSidecar', 'getTailwindCssName', 'compileTailwind', 'dataGuard', 'documentEtag',
+  'storePageState', 'writePageState', 'logicalDocument',
+  'createBackup', 'createBackupIfExists', 'createBinaryBackupIfExists', 'atomicWriteFile',
+  'assertWriteContext', 'assertStructureContext',
+  'writeApiSidecar', 'refreshDerivedArtifacts', 'getTailwindCssName', 'compileTailwind', 'dataGuard', 'documentEtag',
   'rebaseStaleSave', 'newestVersionFiles', 'needsAdoption', 'roomsPackage',
   'MAX_EXTERNAL_HTML', 'VERSIONS_DIR', 'TAILWIND_DIR',
+  'emit', 'logger',
 ];
+
+const MAX_EXTERNAL_HTML = 12 * 1024 * 1024;
+
+const DOCUMENT_NAME = /\.(html|htmlclay)$/i;
+
+const roomsPackage = () => require('@panphora/clayjs/server/rooms');
+
+// The logical document a write stores and the clean file part that reaches disk.
+async function splitWrite(baseDir, name, html, { keepState = true } = {}) {
+  const { file, state } = roomsPackage().splitPage(html);
+  if (state) return { file, logical: roomsPackage().composePage(file, state) };
+  return { file, logical: keepState ? await require('./page-state-store.js').logicalDocument(baseDir, name, file) : file };
+}
+
+// The other direction, for the bytes that become the document. A browser holding a
+// projected document saves what it holds, and nothing guarantees the client puts the
+// public URLs back: an older ClayJS, a hand-written save, the JSON data API, a restored
+// version or an incoming relay frame can all carry `/_/clayjs/` URLs or the descriptor.
+// Bytes like that only work on this host, and platform sync would upload them. Every
+// authoritative write turns them back into the public URLs and drops the descriptor
+// first. One pass, so the descriptor is read once: the document URL is the first loopback
+// origin the text names before `/_/clayjs/` (any port, since each root server listens on
+// its own), and a root-relative `/_/clayjs/` URL resolves under any origin.
+const LOOPBACK_RUNTIME = /\bhttps?:\/\/(?:localhost|127\.0\.0\.1)(?::\d{1,5})?(?=\/_\/clayjs\/)/i;
+
+function canonicalForWrite(html) {
+  const runtimeAssets = require('./runtime-assets');
+  const origin = html.match(LOOPBACK_RUNTIME);
+  const documentURL = origin ? `${origin[0].toLowerCase()}/` : 'http://localhost/';
+  const result = runtimeAssets.canonicalizeRuntimeHTML(html, { releases: runtimeAssets.releases, documentURL });
+  return result.changed === 0 && !result.descriptorRemoved ? html : result.html;
+}
 
 function refused(reason) {
   return { outcome: 'refused', reason, etag: null, stored: null, content: null };
@@ -32,10 +67,11 @@ function createDocumentHost(deps) {
     if (deps[name] === undefined) throw new TypeError(`createDocumentHost is missing ${name}`);
   }
   const {
-    ctx, baseDir, live, resolveTailwindWrite,
+    ctx, baseDir, live, resolveTailwindWrite, emit, logger,
     canonicalForWrite, formatHtml, scopeTailwindLink, stripSaveToken, splitWrite,
-    storePageState, createBackup, atomicWriteFile, assertWriteContext,
-    writeApiSidecar, getTailwindCssName, compileTailwind, documentEtag, roomsPackage, TAILWIND_DIR,
+    storePageState, writePageState, logicalDocument, createBackup, createBackupIfExists, createBinaryBackupIfExists,
+    atomicWriteFile, assertWriteContext,
+    writeApiSidecar, refreshDerivedArtifacts, getTailwindCssName, compileTailwind, documentEtag, roomsPackage, TAILWIND_DIR,
     store, rebaseStaleSave, newestVersionFiles, needsAdoption, dataGuard, MAX_EXTERNAL_HTML, VERSIONS_DIR,
   } = deps;
 
@@ -84,13 +120,60 @@ function createDocumentHost(deps) {
     throw new TypeError(`Unknown expected type: ${expected.type}`);
   }
 
-  async function commitExact({ name, filePath, bytes, modifiedAt = null, pageRecord = null }) {
-    if (modifiedAt !== null || pageRecord !== null) {
-      throw new Error('sync-download modifiedAt and pageRecord are not migrated yet');
+  async function confirmExact({ name, stored, target, token }) {
+    const authority = ctx.localAuthority;
+    const options = { sender: 'sync-engine' };
+    if (!DOCUMENT_NAME.test(name) || typeof stored !== 'string') {
+      return authority.confirmKnownWrite(target, stored, token, options);
     }
-    await atomicWriteFile(filePath, bytes, Buffer.isBuffer(bytes) ? null : 'utf8');
+    const html = await logicalDocument(baseDir, name, stored);
+    const room = authority.rooms.get(target.canonicalPath);
+    if (room && authority.roomIsDirty(room)) return authority.observeExternal(target, html, token);
+    return authority.confirmKnownWrite(target, html, token, options);
+  }
+
+  async function commitExact({ name, filePath: requestedPath, bytes, modifiedAt = null, pageRecord = null, context = {} }) {
+    const { target = null, token = null } = context;
+    const authorityWrite = Boolean(ctx.localAuthority && target && token);
+    if (authorityWrite) assertWriteContext(token, target.canonicalPath);
+    const filePath = authorityWrite ? target.canonicalPath : requestedPath;
+    const isDocument = typeof bytes === 'string' && DOCUMENT_NAME.test(name);
+    const previous = isDocument ? await fs.readFile(filePath, 'utf8').catch(() => null) : null;
+    if (isDocument) {
+      await createBackupIfExists(filePath, name.replace(DOCUMENT_NAME, ''), baseDir, emit, logger);
+      if (pageRecord) await writePageState(baseDir, name, pageRecord);
+    } else {
+      await createBinaryBackupIfExists(filePath, name, baseDir, emit, logger);
+    }
+    const stored = isDocument ? await storePageState(baseDir, name, bytes) : bytes;
+    try {
+      await atomicWriteFile(filePath, stored, Buffer.isBuffer(stored) ? null : 'utf8');
+    } catch (error) {
+      if (error && error.afterRename) error.indeterminate = true;
+      throw error;
+    }
     live.markBrowserSave(name);
-    return { outcome: 'committed', reason: null, etag: null, stored: bytes, content: bytes };
+    try {
+      if (modifiedAt) {
+        const stamp = new Date(modifiedAt);
+        await fs.utimes(filePath, stamp, stamp);
+      }
+      if (authorityWrite) await confirmExact({ name, stored, target, token });
+    } catch (error) {
+      error.indeterminate = true;
+      throw error;
+    }
+    if (isDocument) {
+      try {
+        await refreshDerivedArtifacts(baseDir, name, bytes);
+      } catch (error) {
+        if (!token) throw error;
+        console.error('[SYNC] derived artifact refresh failed:', error && error.message ? error.message : error);
+      }
+      dataGuard.runDataLossGuard({ baseDir, name, newHtml: bytes, prevContent: previous, prov: 'external', live })
+        .catch(err => console.error('[data-guard] sync guard error:', err && err.message ? err.message : err));
+    }
+    return { outcome: 'committed', reason: null, etag: null, checksum: await calculateChecksum(stored), stored, content: bytes };
   }
 
   // The one publish sequence for a write this app makes to a live document — the
@@ -485,4 +568,40 @@ function createDocumentHost(deps) {
   return { commit, read };
 }
 
-module.exports = { createDocumentHost };
+function createRootDocumentHost({ ctx, live = require('./utils/root-live.js').createRootLive(ctx.root), emit = () => {}, logger = null }) {
+  const { getConsentRegistry, resolveWritePath, validateSegments } = require('./utils/path-resolver.js');
+  const { snapshotStoreFor } = require('./utils/snapshot-store.js');
+  const { TAILWIND_DIR, VERSIONS_DIR } = require('./utils/artifact-paths.js');
+  const { storePageState, writePageState, logicalDocument } = require('./page-state-store.js');
+  const { createBackup, createBackupIfExists, createBinaryBackupIfExists } = require('./utils/backup.js');
+  const { atomicWriteFile, assertWriteContext, assertStructureContext } = require('./utils/write-queue.js');
+  const { writeApiSidecar } = require('./utils/api-sidecar.js');
+  const { refreshDerivedArtifacts } = require('./utils/derived-artifacts.js');
+  const { compileTailwind, getTailwindCssName } = require('tailwind-hyperclay');
+  const { scopeTailwindLink } = require('./utils/tailwind-scoping.js');
+  const { stripSaveToken } = require('./utils/root-attrs.js');
+  const dataGuard = require('./data-loss-guard.js');
+  const { documentEtag } = require('./spec-wire.js');
+  const { rebaseStaleSave, newestVersionFiles, needsAdoption } = require('./page-rebase.js');
+  const formatHtml = require('./format-html.js');
+
+  const baseDir = ctx.root.path;
+  const paths = getConsentRegistry(baseDir);
+  return createDocumentHost({
+    ctx, baseDir, live, emit, logger,
+    store: snapshotStoreFor(ctx.root.id),
+    resolveTailwindWrite: async (name) => {
+      validateSegments(`${name}.css`);
+      return resolveWritePath(paths, `${TAILWIND_DIR}/${name}.css`);
+    },
+    canonicalForWrite, formatHtml, scopeTailwindLink, stripSaveToken, splitWrite,
+    storePageState, writePageState, logicalDocument,
+    createBackup, createBackupIfExists, createBinaryBackupIfExists,
+    atomicWriteFile, assertWriteContext, assertStructureContext,
+    writeApiSidecar, refreshDerivedArtifacts, getTailwindCssName, compileTailwind,
+    dataGuard, documentEtag, rebaseStaleSave, newestVersionFiles, needsAdoption, roomsPackage,
+    MAX_EXTERNAL_HTML, VERSIONS_DIR, TAILWIND_DIR,
+  });
+}
+
+module.exports = { createDocumentHost, createRootDocumentHost, canonicalForWrite, splitWrite, MAX_EXTERNAL_HTML, LOOPBACK_RUNTIME };

@@ -55,6 +55,7 @@ const { calculateChecksum } = require('../../src/sync-engine/utils');
 const Outbox = require('../../src/sync-engine/state/outbox');
 const CascadeSuppression = require('../../src/sync-engine/state/cascade-suppression');
 const EchoWindow = require('../../src/sync-engine/state/echo-window');
+const { stubDocumentHost } = require('../helpers/document-host-stub');
 
 let syncEngine;
 let liveSyncMock;
@@ -113,10 +114,9 @@ beforeEach(() => {
     errors: []
   };
 
+  syncEngine.documentHost = stubDocumentHost();
   fileOps.readFile.mockResolvedValue('');
-  fileOps.writeFile.mockResolvedValue();
   fileOps.readFileBuffer.mockResolvedValue(Buffer.from(''));
-  fileOps.writeFileBuffer.mockResolvedValue();
   fileOps.ensureDirectory.mockResolvedValue();
   fileOps.moveFile.mockResolvedValue();
   fileOps.fileExists.mockResolvedValue(false);
@@ -148,9 +148,7 @@ afterEach(() => {
 
 describe('handleNodeSaved', () => {
   describe('site branch', () => {
-    it('writes inline content to disk and updates nodeMap', async () => {
-      fileOps.readFile.mockRejectedValueOnce(new Error('ENOENT'));
-
+    it('commits inline content through the host and updates nodeMap', async () => {
       await syncEngine.handleNodeSaved({
         nodeId: 42,
         nodeType: 'site',
@@ -164,11 +162,14 @@ describe('handleNodeSaved', () => {
       // The SSE apply resolves its write target canonically (path-resolver
       // phase 4) before writing, so the path handed to writeFile is the real
       // one — on macOS /tmp is itself a symlink to /private/tmp.
-      expect(fileOps.writeFile).toHaveBeenCalledWith(
-        path.join(canonicalSyncFolder, 'index.html'),
-        '<html>hi</html>',
-        expect.any(Date)
-      );
+      expect(syncEngine.documentHost.commit).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'sync-download',
+        name: 'index.html',
+        filePath: path.join(canonicalSyncFolder, 'index.html'),
+        bytes: '<html>hi</html>',
+        modifiedAt: '2026-04-08T12:00:00Z',
+        expected: { type: 'absent' }
+      }));
       expect(syncEngine.repo.get('42')).toEqual(expect.objectContaining({
         type: 'site',
         path: 'index.html'
@@ -176,8 +177,6 @@ describe('handleNodeSaved', () => {
     });
 
     it('broadcasts the persisted content to view-mode tabs on the saved lane', async () => {
-      fileOps.readFile.mockRejectedValueOnce(new Error('ENOENT'));
-
       await syncEngine.handleNodeSaved({
         nodeId: 42,
         nodeType: 'site',
@@ -212,7 +211,7 @@ describe('handleNodeSaved', () => {
   });
 
   describe('upload branch', () => {
-    it('fetches content via getNodeContent and writes buffer to disk', async () => {
+    it('fetches content via getNodeContent and commits the buffer through the host', async () => {
       await syncEngine.handleNodeSaved({
         nodeId: 50,
         nodeType: 'upload',
@@ -224,7 +223,14 @@ describe('handleNodeSaved', () => {
       });
 
       expect(apiClient.getNodeContent).toHaveBeenCalledWith(expect.objectContaining({ serverUrl: 'http://test', apiKey: 'test-key' }), 50);
-      expect(fileOps.writeFileBuffer).toHaveBeenCalled();
+      expect(syncEngine.documentHost.commit).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'sync-download',
+        name: 'image.png',
+        filePath: path.join(canonicalSyncFolder, 'image.png'),
+        bytes: Buffer.from([0x01, 0x02, 0x03]),
+        modifiedAt: '2026-04-08T12:00:00Z',
+        expected: { type: 'absent' }
+      }));
       expect(syncEngine.repo.get('50')).toEqual(expect.objectContaining({
         type: 'upload',
         path: 'image.png',
@@ -233,8 +239,9 @@ describe('handleNodeSaved', () => {
     });
 
     it('skips fetch if local content already matches', async () => {
-      fileOps.readFileBuffer.mockResolvedValueOnce(Buffer.from([0x01]));
-      fileOps.calculateBufferChecksum.mockReturnValueOnce('cs-2');
+      syncEngine.documentHost = stubDocumentHost({
+        read: jest.fn(async () => ({ bytes: Buffer.from([0x01]), checksum: 'cs-2' })),
+      });
 
       await syncEngine.handleNodeSaved({
         nodeId: 50,
@@ -246,7 +253,53 @@ describe('handleNodeSaved', () => {
       });
 
       expect(apiClient.getNodeContent).not.toHaveBeenCalled();
-      expect(fileOps.writeFileBuffer).not.toHaveBeenCalled();
+      expect(syncEngine.documentHost.commit).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('a host refusal', () => {
+    it('leaves the baseline alone and emits no file-synced when the commit is refused', async () => {
+      syncEngine.documentHost = stubDocumentHost({
+        commit: jest.fn(async () => ({ outcome: 'refused', reason: 'changed' })),
+      });
+      const setSpy = jest.spyOn(syncEngine.repo, 'set');
+      const synced = jest.fn();
+      syncEngine.on('file-synced', synced);
+
+      await syncEngine.handleNodeSaved({
+        nodeId: 42,
+        nodeType: 'site',
+        name: 'index.html',
+        path: 'index.html',
+        content: '<html>hi</html>',
+        checksum: 'cs-1',
+        modifiedAt: '2026-04-08T12:00:00Z'
+      });
+
+      expect(syncEngine.documentHost.commit).toHaveBeenCalled();
+      expect(setSpy).not.toHaveBeenCalled();
+      expect(synced).not.toHaveBeenCalled();
+      syncEngine.off('file-synced', synced);
+    });
+
+    it('rethrows an indeterminate commit and leaves the baseline alone', async () => {
+      const failure = new Error('disk full');
+      syncEngine.documentHost = stubDocumentHost({
+        commit: jest.fn(async () => ({ outcome: 'indeterminate', error: failure })),
+      });
+      const setSpy = jest.spyOn(syncEngine.repo, 'set');
+
+      await expect(syncEngine._applyNodeSavedSite({
+        nodeId: 42,
+        nodeType: 'site',
+        name: 'index.html',
+        path: 'index.html',
+        content: '<html>hi</html>',
+        checksum: 'cs-1',
+        modifiedAt: '2026-04-08T12:00:00Z'
+      })).rejects.toThrow('disk full');
+
+      expect(setSpy).not.toHaveBeenCalled();
     });
   });
 
@@ -295,7 +348,7 @@ describe('handleNodeSaved', () => {
         checksum: 'cs-1'
       });
 
-      expect(fileOps.writeFile).not.toHaveBeenCalled();
+      expect(syncEngine.documentHost.commit).not.toHaveBeenCalled();
       expect(syncEngine.outbox.has('save', 42)).toBe(false);
     });
   });

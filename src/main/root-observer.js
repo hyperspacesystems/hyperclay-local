@@ -23,9 +23,9 @@ const { getConsentRegistry, resolveWritePath } = require('./utils/path-resolver'
 const { logicalBytes, storePageState } = require('./page-state-store');
 const { createBackup } = require('./utils/backup');
 const { rebaseStaleSave, newestVersionFiles } = require('./page-rebase');
+const { MAX_EXTERNAL_HTML } = require('./document-host');
 
 const EMPTY_QUIET_MS = 3000;
-const MAX_EXTERNAL_HTML = 12 * 1024 * 1024;
 const IGNORED = [
   '**/node_modules/**', '**/sites-versions/**', '**/tailwindcss/**',
   '**/.*', '**/.*/**', '**/.DS_Store', '**/Thumbs.db', '**/.trash/**',

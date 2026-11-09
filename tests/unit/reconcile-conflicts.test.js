@@ -27,7 +27,8 @@ jest.mock('livesync-hyperclay', () => ({
 
 jest.mock('../../src/main/data-loss-guard', () => ({
   runDataLossGuard: jest.fn(() => Promise.resolve({})),
-  applyRemoteResolution: jest.fn()
+  applyRemoteResolution: jest.fn(),
+  provenanceForLocalSave: jest.fn(() => 'ui-unknown')
 }));
 
 jest.mock('../../src/main/utils/derived-artifacts', () => ({
@@ -35,6 +36,7 @@ jest.mock('../../src/main/utils/derived-artifacts', () => ({
 }));
 
 jest.mock('../../src/main/utils/backup', () => ({
+  createBackup: jest.fn(),
   createBackupIfExists: jest.fn(),
   createBinaryBackupIfExists: jest.fn()
 }));
@@ -804,5 +806,127 @@ describe('a download never overwrites an edit made while it was fetching', () =>
     expect(backup.createBackupIfExists).not.toHaveBeenCalled();
     expect(engine.repo.getBaseline('901').localChecksum).toBe(LOCAL_SUM);
     expect(await readRecords()).toEqual({});
+  });
+});
+
+describe('sync download contract', () => {
+  const { decide } = require('../../src/sync-engine/reconcile/decide');
+
+  const FORMATTABLE = '<!DOCTYPE html><html formathtml="true"><head><title>x</title></head><body><div><p>caf\u00e9\r\nhi</p></div></body></html>';
+  const SITE_SUM = checksum(FORMATTABLE);
+  const ATTACHMENT = Buffer.from([0x00, 0xff, 0xfe, 0x80, 0x41, 0x0a, 0xc3, 0x28]);
+  const ATTACHMENT_SUM = checksum(ATTACHMENT);
+  const EDITED_LOCAL = '<h1>edited</h1>';
+
+  async function readBytes(rel) {
+    return fsp.readFile(path.join(root, rel));
+  }
+
+  async function seedAttachment(bytes) {
+    await seedSite({ rel: 'uploads/a.bin', content: bytes, remoteEtag: REMOTE_ETAG, localChecksum: checksum(bytes) });
+    await engine.repo.set('901', { ...engine.repo.get('901'), type: 'upload' });
+  }
+
+  async function expectStillHeld(result, held) {
+    expect(result.action).toBe(A.CONFLICT);
+    expect(api.putNodeContent).not.toHaveBeenCalled();
+    expect((await fsp.readFile(path.join(metaDir, 'conflicts.json'))).equals(held)).toBe(true);
+    expect((await readBytes('board.html')).equals(Buffer.from(EDITED_LOCAL))).toBe(true);
+  }
+
+  it('the fixture is a document the formatter rewrites', () => {
+    expect(require('../../src/main/format-html')(FORMATTABLE)).not.toBe(FORMATTABLE);
+  });
+
+  it('a site download stores the exact bytes and records matching checksums', async () => {
+    await seedSite({ content: LOCAL_BYTES, remoteEtag: REMOTE_ETAG, localChecksum: LOCAL_SUM });
+    api.getNodeContent.mockResolvedValue(remoteContent(FORMATTABLE, SITE_SUM, 'st2', SITE_SUM));
+
+    await executeDecision(engine, '901', { action: A.DOWNLOAD });
+
+    const bytes = await readBytes('board.html');
+    expect(bytes.equals(Buffer.from(FORMATTABLE))).toBe(true);
+
+    const baseline = engine.repo.getBaseline('901');
+    expect(baseline.localChecksum).toBe(SITE_SUM);
+    expect(baseline.remoteEtag).toBe(SITE_SUM);
+
+    expect(decide({
+      baseline,
+      local: { checksum: checksum(bytes) },
+      remote: { etag: SITE_SUM },
+      complete: true
+    })).toEqual({ action: A.NOOP });
+
+    expect(api.putNodeContent).not.toHaveBeenCalled();
+    expect(api.createNode).not.toHaveBeenCalled();
+  });
+
+  it('an attachment download stores the exact bytes and records matching checksums', async () => {
+    await seedAttachment(Buffer.from(LOCAL_BYTES));
+    api.getNodeContent.mockResolvedValue({ ...remoteContent(ATTACHMENT, ATTACHMENT_SUM, 'st2', ATTACHMENT_SUM), nodeType: 'upload' });
+
+    await executeDecision(engine, '901', { action: A.DOWNLOAD });
+
+    const bytes = await readBytes('uploads/a.bin');
+    expect(bytes.equals(ATTACHMENT)).toBe(true);
+
+    const baseline = engine.repo.getBaseline('901');
+    expect(baseline.localChecksum).toBe(ATTACHMENT_SUM);
+    expect(baseline.remoteEtag).toBe(ATTACHMENT_SUM);
+
+    expect(decide({
+      baseline,
+      local: { checksum: checksum(bytes) },
+      remote: { etag: ATTACHMENT_SUM },
+      complete: true
+    })).toEqual({ action: A.NOOP });
+
+    expect(api.putNodeContent).not.toHaveBeenCalled();
+    expect(api.createNode).not.toHaveBeenCalled();
+  });
+
+  it('an open conflict holds the upload and leaves every byte where it was', async () => {
+    await seedSite({ content: EDITED_LOCAL, remoteEtag: REMOTE_ETAG, localChecksum: LOCAL_SUM });
+    await executeDecision(engine, '901', { action: A.CONFLICT, conflictKind: 'both-edited' });
+    const held = await fsp.readFile(path.join(metaDir, 'conflicts.json'));
+
+    const result = await executeDecision(engine, '901', { action: A.UPLOAD });
+
+    await expectStillHeld(result, held);
+  });
+
+  it('the hold survives a restart with the same folder and meta dir', async () => {
+    await seedSite({ content: EDITED_LOCAL, remoteEtag: REMOTE_ETAG, localChecksum: LOCAL_SUM });
+    await executeDecision(engine, '901', { action: A.CONFLICT, conflictKind: 'both-edited' });
+    const held = await fsp.readFile(path.join(metaDir, 'conflicts.json'));
+
+    const restarted = new SyncEngine();
+    restarted.syncFolder = root;
+    restarted.metaDir = metaDir;
+    restarted.serverUrl = 'http://localhost:5';
+    restarted.apiKey = 'hcsk_test';
+    restarted.accountId = 42;
+    restarted.protocol = 2;
+    restarted.repo.seed([['901', { ...engine.repo.get('901') }]]);
+
+    const result = await executeDecision(restarted, '901', { action: A.UPLOAD });
+
+    await expectStillHeld(result, held);
+  });
+
+  it('a download while held refreshes only the parked copy', async () => {
+    await seedSite({ content: EDITED_LOCAL, remoteEtag: REMOTE_ETAG, localChecksum: LOCAL_SUM });
+    await executeDecision(engine, '901', { action: A.CONFLICT, conflictKind: 'both-edited' });
+
+    api.getNodeContent.mockResolvedValue(remoteContent(REMOTE_BYTES, REMOTE_ETAG_2, 'st2', REMOTE_SUM));
+    const result = await executeDecision(engine, '901', { action: A.DOWNLOAD });
+
+    expect(result.action).toBe(A.CONFLICT);
+    expect((await readBytes('board.html')).equals(Buffer.from(EDITED_LOCAL))).toBe(true);
+    const record = (await readRecords())['901'];
+    expect(record.remoteEtag).toBe(REMOTE_ETAG_2);
+    expect((await readBytes(record.remoteCopy)).equals(Buffer.from(REMOTE_BYTES))).toBe(true);
+    expect(api.putNodeContent).not.toHaveBeenCalled();
   });
 });

@@ -84,6 +84,7 @@ const { createRootLive } = require('../../src/main/utils/root-live');
 const { RootObserver } = require('../../src/main/root-observer');
 const { withStructureChange } = require('../../src/main/utils/write-queue');
 const { SyncManager } = require('../../src/main/sync-manager');
+const { stubDocumentHost } = require('../helpers/document-host-stub');
 
 const FORWARDED = ['sync-start', 'sync-complete', 'sync-error', 'file-synced', 'sync-stats',
   'backup-created', 'sync-retry', 'sync-failed'];
@@ -155,8 +156,6 @@ function makeSession(id, rootId, accountId = null) {
 beforeEach(() => {
   jest.clearAllMocks();
 
-  fileOps.writeFile.mockResolvedValue();
-  fileOps.writeFileBuffer.mockResolvedValue();
   fileOps.ensureDirectory.mockResolvedValue();
   fileOps.fileExists.mockResolvedValue(false);
   fileOps.readFile.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
@@ -308,6 +307,7 @@ describe('SyncManager sessions', () => {
     await manager.start(sessionA, rootA);
 
     const engineA = manager.get(sessionA.id);
+    engineA.documentHost = stubDocumentHost();
     const synced = jest.fn();
     manager.on('file-synced', synced);
 
@@ -331,8 +331,7 @@ describe('SyncManager sessions', () => {
     await pending;
     await flush();
 
-    expect(fileOps.writeFileBuffer).not.toHaveBeenCalled();
-    expect(fileOps.writeFile).not.toHaveBeenCalled();
+    expect(engineA.documentHost.commit).not.toHaveBeenCalled();
     expect(engineA.repo.has(42)).toBe(false);
     expect(synced).not.toHaveBeenCalled();
   });

@@ -95,8 +95,6 @@ beforeEach(() => {
   };
 
   fileOps.ensureDirectory.mockResolvedValue();
-  fileOps.writeFile.mockResolvedValue();
-  fileOps.writeFileBuffer.mockResolvedValue();
   fileOps.moveFile.mockResolvedValue();
   fileOps.readFile.mockResolvedValue('<html>content</html>');
   fileOps.readFileBuffer.mockImplementation(async (filePath) => Buffer.from(await fileOps.readFile(filePath)));

@@ -9,21 +9,16 @@
 
 const path = require('upath');
 const { EventSource } = require('eventsource');
-const { createBackupIfExists, createBinaryBackupIfExists } = require('../main/utils/backup');
-const dataGuard = require('../main/data-loss-guard');
-const { refreshDerivedArtifacts } = require('../main/utils/derived-artifacts');
 const { classifyError, formatErrorForLog } = require('./error-handler');
 const { dispatchControlEnvelope } = require('./control-lane');
 const {
   getLocalFiles,
   readFile,
-  writeFile,
   fileExists,
   ensureDirectory,
   moveFile,
   getLocalUploads,
   readFileBuffer,
-  writeFileBuffer,
   calculateBufferChecksum
 } = require('./file-operations');
 const { syncUrl, authHeaders, getNodeContent } = require('./api-client');
@@ -33,10 +28,10 @@ const { SYNC_CONFIG } = require('./constants');
 const nodeMap = require('./node-map');
 const { getConsentRegistry, resolveWritePath } = require('../main/utils/path-resolver');
 const { withStructureChange } = require('../main/utils/write-queue');
-const { withLocalDocumentWrite, withLocalDirectoryChange, withLocalStructureDelete, claimLocalDocumentTarget, structureEntryFor } = require('./local-boundary');
+const { withLocalDocumentWrite, withLocalDirectoryChange, withLocalStructureDelete, claimLocalDocumentTarget, structureEntryFor, documentHostFor } = require('./local-boundary');
 const {
-  readPageRecord, applyPageRecord, storedPageFile, moveDocumentPageState, moveFolderPageState,
-  dropDocumentPageState, dropFolderPageState, confirmDownload
+  readPageRecord, applyPageRecord, moveDocumentPageState, moveFolderPageState,
+  dropDocumentPageState, dropFolderPageState
 } = require('./page-state');
 
 /**
@@ -121,81 +116,36 @@ module.exports = {
     const remoteAtThisPath = !tracked || tracked.path === localFilename;
     const record = await readPageRecord(this, data.nodeId, localFilename);
 
-    // A1: read, checksum-compare, back up and write are ONE critical section.
-    // Reading the local body outside it would let a concurrent /save land in
-    // between, so an up-to-date check could pass against bytes that are already
-    // stale by the time the write happens.
+    // A1: read, checksum-compare and write are ONE critical section. Reading the
+    // local body outside it would let a concurrent /save land in between, so an
+    // up-to-date check could pass against bytes that are already stale by the time
+    // the write happens.
+    const host = documentHostFor(this);
     const applied = await withLocalDocumentWrite(this, localFilename, async (target, token) => {
       const localPath = target.canonicalPath;
-      await applyPageRecord(this, localFilename, record);
-      let preApplyContent = null;
-      try {
-        const localContent = await readFile(localPath);
-        preApplyContent = typeof localContent === 'string' ? localContent : localContent.toString('utf8');
-        const localChecksum = await calculateChecksum(localContent);
-        if (localChecksum === data.checksum) {
-          console.log(`[SYNC] SSE node-saved: ${data.path} already up to date`);
-          const inode = await nodeMap.getInode(localPath);
-          await this.repo.set(data.nodeId, {
-            type: 'site',
-            path: localFilename,
-            checksum: localChecksum,
-            inode,
-            syncedAt: Date.now()
-          });
-          return { upToDate: true, preApplyContent };
-        }
-      } catch (e) {
-        // File doesn't exist locally yet — fall through to write
+      const current = await host.read(localFilename, localPath);
+      if (current && current.checksum === data.checksum) {
+        await applyPageRecord(this, localFilename, record);
+        await this.repo.set(data.nodeId, { type: 'site', path: localFilename, checksum: current.checksum, inode: await nodeMap.getInode(localPath), syncedAt: Date.now() });
+        return { upToDate: true };
       }
-
-      // ANCILLARY: siteName without extension → maps to sites-versions/{siteName}/.
-      const siteName = localFilename.replace(/\.(html|htmlclay)$/i, '');
-      await createBackupIfExists(localPath, siteName, this.syncFolder, this.emit.bind(this), this.logger);
-
-      await ensureDirectory(path.dirname(localPath));
-
-      // liveSync channel key = full path with extension (Rule 1 / Rule 2).
-      this.live.markBrowserSave(localFilename);
-
-      const stored = await storedPageFile(this, localFilename, data.content);
-      await writeFile(localPath, stored, new Date(data.modifiedAt));
-
-      if (token) {
-        await confirmDownload(this, target, token, localFilename, stored, {
-          sender: 'sync-engine',
-        });
-      }
-
-      // A1: derived artifacts belong in the same critical section as the write
-      // that causes them. Skipping them here leaves an H0 sidecar and an H0
-      // stylesheet serving against H1 bytes — and because writeFile stamps the
-      // remote modifiedAt, an H0 sidecar can outrank H1 by mtime permanently.
-      // A sidecar or stylesheet failure after a confirmed authority write is
-      // logged: the confirmed bytes are already published, so the disk write is
-      // not unapplied and the room confirmation must stand.
-      try {
-        await refreshDerivedArtifacts(this.syncFolder, localFilename, data.content);
-      } catch (error) {
-        if (!token) throw error;
-        console.error('[SYNC] SSE node-saved: derived artifact refresh failed:', error && error.message ? error.message : error);
-      }
-
-      const inode = await nodeMap.getInode(localPath);
-      const cs = await calculateChecksum(data.content);
-      await this.repo.set(data.nodeId, {
-        type: 'site',
-        path: localFilename,
-        checksum: cs,
-        inode,
-        syncedAt: Date.now()
+      const written = await host.commit({
+        kind: 'sync-download', name: localFilename, filePath: localPath, bytes: data.content,
+        modifiedAt: data.modifiedAt, pageRecord: record,
+        expected: current ? { type: 'checksum', value: current.checksum } : { type: 'absent' },
+        context: { target, token },
       });
-
-      return { upToDate: false, preApplyContent };
+      if (written.outcome === 'indeterminate') throw written.error;
+      if (written.outcome === 'refused') return { refused: true };
+      await this.repo.set(data.nodeId, { type: 'site', path: localFilename, checksum: await calculateChecksum(data.content), inode: await nodeMap.getInode(localPath), syncedAt: Date.now() });
+      return { upToDate: false };
     }, { generation: gen, explicitCreate: remoteAtThisPath });
 
     if (applied.stale || applied.upToDate) return;
-    const preApplyContent = applied.preApplyContent;
+    if (applied.refused) {
+      console.warn(`[SYNC] SSE node-saved: ${localFilename} changed while applying; leaving it for the next pass`);
+      return;
+    }
 
     // Morph view-mode tabs with the just-persisted content. Edit-mode tabs get
     // the platform's live-sync relay (pre-strip snapshot) on the live lane.
@@ -206,18 +156,6 @@ module.exports = {
 
     console.log(`[SYNC] SSE node-saved: Wrote site ${localFilename}`);
     this.stats.filesDownloaded++;
-
-    // Data-clobber guard: a synced-down apply is an off-page (external) write
-    // from the local perspective. The pre-apply body is the last-good local copy.
-    if (typeof data.content === 'string') {
-      dataGuard.runDataLossGuard({
-        baseDir: this.syncFolder,
-        name: localFilename,
-        newHtml: data.content,
-        prevContent: preApplyContent,
-        prov: 'external',
-      }).catch(err => console.error('[data-guard] sse guard error:', err && err.message ? err.message : err));
-    }
 
     this.emit('file-synced', {
       file: localFilename,
@@ -236,23 +174,19 @@ module.exports = {
     // resolved through the same registry the route server uses.
     const localPath = claim?.canonicalPath ?? await resolveWritePath(getConsentRegistry(this.syncFolder), localFilename);
 
-    try {
-      const localContent = await readFileBuffer(localPath);
-      const localChecksum = calculateBufferChecksum(localContent);
-      if (localChecksum === data.checksum) {
-        console.log(`[SYNC] SSE node-saved: upload ${data.path} already up to date`);
-        const inode = await nodeMap.getInode(localPath);
-        await this.repo.set(data.nodeId, {
-          type: 'upload',
-          path: localFilename,
-          checksum: localChecksum,
-          inode,
-          syncedAt: Date.now()
-        });
-        return;
-      }
-    } catch (e) {
-      // File doesn't exist locally — fall through to fetch
+    const host = documentHostFor(this);
+    const existing = await host.read(localFilename, localPath);
+    if (existing && existing.checksum === data.checksum) {
+      console.log(`[SYNC] SSE node-saved: upload ${data.path} already up to date`);
+      const inode = await nodeMap.getInode(localPath);
+      await this.repo.set(data.nodeId, {
+        type: 'upload',
+        path: localFilename,
+        checksum: existing.checksum,
+        inode,
+        syncedAt: Date.now()
+      });
+      return;
     }
 
     const tracked = this.repo.get(data.nodeId);
@@ -268,41 +202,34 @@ module.exports = {
     const applied = await withLocalDocumentWrite(this, localFilename, async (target, token) => {
       const canonicalPath = target.canonicalPath;
 
-      try {
-        const currentContent = await readFileBuffer(canonicalPath);
-        const currentChecksum = calculateBufferChecksum(currentContent);
-        if (currentChecksum === fetched.checksum) {
-          console.log(`[SYNC] SSE node-saved: upload ${data.path} already up to date`);
-          const inode = await nodeMap.getInode(canonicalPath);
-          await this.repo.set(data.nodeId, {
-            type: 'upload',
-            path: localFilename,
-            checksum: currentChecksum,
-            inode,
-            syncedAt: Date.now()
-          });
-          return { upToDate: true };
-        }
-      } catch (e) {
-        // File doesn't exist locally — fall through to write
-      }
-
-      await createBinaryBackupIfExists(canonicalPath, localFilename, this.syncFolder, this.emit.bind(this), this.logger);
-
-      await writeFileBuffer(canonicalPath, fetched.content, fetched.modifiedAt);
-
-      if (token) {
-        await this.localAuthority.confirmKnownWrite(target, fetched.content, token, {
-          sender: 'sync-engine',
+      const current = await host.read(localFilename, canonicalPath);
+      if (current && current.checksum === fetched.checksum) {
+        console.log(`[SYNC] SSE node-saved: upload ${data.path} already up to date`);
+        const inode = await nodeMap.getInode(canonicalPath);
+        await this.repo.set(data.nodeId, {
+          type: 'upload',
+          path: localFilename,
+          checksum: current.checksum,
+          inode,
+          syncedAt: Date.now()
         });
+        return { upToDate: true };
       }
 
-      const inode = await nodeMap.getInode(canonicalPath);
+      const written = await host.commit({
+        kind: 'sync-download', name: localFilename, filePath: canonicalPath, bytes: fetched.content,
+        modifiedAt: fetched.modifiedAt,
+        expected: current ? { type: 'checksum', value: current.checksum } : { type: 'absent' },
+        context: { target, token },
+      });
+      if (written.outcome === 'indeterminate') throw written.error;
+      if (written.outcome === 'refused') return { refused: true };
+
       await this.repo.set(data.nodeId, {
         type: 'upload',
         path: localFilename,
         checksum: fetched.checksum,
-        inode,
+        inode: await nodeMap.getInode(canonicalPath),
         syncedAt: Date.now()
       });
 
@@ -310,6 +237,10 @@ module.exports = {
     }, { generation: gen, claim, explicitCreate: remoteAtThisPath });
 
     if (applied.stale || applied.upToDate) return;
+    if (applied.refused) {
+      console.warn(`[SYNC] SSE node-saved: ${localFilename} changed while applying; leaving it for the next pass`);
+      return;
+    }
 
     console.log(`[SYNC] SSE node-saved: Wrote upload ${localFilename}`);
     this.stats.uploadsDownloaded++;

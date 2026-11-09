@@ -37,6 +37,7 @@ jest.mock('../../src/main/utils/utils', () => ({
 }));
 
 const fileOps = require('../../src/sync-engine/file-operations');
+const { stubDocumentHost } = require('../helpers/document-host-stub');
 const utils = require('../../src/sync-engine/utils');
 const apiClient = require('../../src/sync-engine/api-client');
 const nodeMapModule = require('../../src/sync-engine/node-map');
@@ -90,11 +91,20 @@ beforeEach(() => {
   syncEngine.serverUrl = 'http://localhyperclay.com';
   syncEngine.apiKey = 'hcsk_test';
   syncEngine.isRunning = true;
+  syncEngine.documentHost = stubDocumentHost({
+    read: jest.fn(async () => ({ bytes: Buffer.from(LOCAL_HTML), checksum: SAME })),
+    commit: jest.fn(async (request) => ({
+      outcome: 'committed',
+      reason: null,
+      etag: null,
+      checksum: await utils.calculateChecksum(request.bytes),
+      stored: request.bytes,
+      content: request.bytes,
+    })),
+  });
   syncEngine.repo.seed();
 
   fileOps.ensureDirectory.mockResolvedValue();
-  fileOps.writeFile.mockResolvedValue();
-  fileOps.writeFileBuffer.mockResolvedValue();
   fileOps.moveFile.mockResolvedValue();
   fileOps.readFile.mockResolvedValue(LOCAL_HTML);
   fileOps.readFileBuffer.mockResolvedValue(Buffer.from(LOCAL_HTML));
@@ -127,7 +137,7 @@ describe('reconcileAll', () => {
 
     expect(apiClient.listNodes).not.toHaveBeenCalled();
     expect(apiClient.getNodeContent).toHaveBeenCalledWith(expect.anything(), 11);
-    expect(fileOps.writeFile).toHaveBeenCalled();
+    expect(syncEngine.documentHost.commit).toHaveBeenCalled();
     expect(syncEngine.serverNodesComplete).toBe(true);
   });
 
@@ -141,7 +151,7 @@ describe('reconcileAll', () => {
 
     expect(apiClient.listNodes).not.toHaveBeenCalled();
     expect(apiClient.getNodeContent).not.toHaveBeenCalled();
-    expect(fileOps.writeFile).not.toHaveBeenCalled();
+    expect(syncEngine.documentHost.commit).not.toHaveBeenCalled();
   });
 });
 
@@ -160,7 +170,7 @@ describe('refreshNode', () => {
 
     expect(apiClient.listNodes).toHaveBeenCalledTimes(1);
     expect(actions[0]).toBe('download');
-    expect(fileOps.writeFile).toHaveBeenCalled();
+    expect(syncEngine.documentHost.commit).toHaveBeenCalled();
   });
 
   it('trashes the local file of a node the complete inventory omits', async () => {
@@ -190,7 +200,7 @@ describe('refreshNode', () => {
 
     await expect(pending).resolves.toBeNull();
     expect(apiClient.getNodeContent).not.toHaveBeenCalled();
-    expect(fileOps.writeFile).not.toHaveBeenCalled();
+    expect(syncEngine.documentHost.commit).not.toHaveBeenCalled();
     expect(fileOps.moveFile).not.toHaveBeenCalled();
   });
 
@@ -202,7 +212,7 @@ describe('refreshNode', () => {
     await syncEngine.refreshNode(11, { generation: 4, signal: controller.signal });
 
     expect(apiClient.listNodes).not.toHaveBeenCalled();
-    expect(fileOps.writeFile).not.toHaveBeenCalled();
+    expect(syncEngine.documentHost.commit).not.toHaveBeenCalled();
     expect(fileOps.moveFile).not.toHaveBeenCalled();
   });
 });

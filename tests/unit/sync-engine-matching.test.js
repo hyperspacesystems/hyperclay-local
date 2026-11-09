@@ -43,6 +43,7 @@ const utils = require('../../src/sync-engine/utils');
 const apiClient = require('../../src/sync-engine/api-client');
 const nodeMapModule = require('../../src/sync-engine/node-map');
 const { liveSync } = require('livesync-hyperclay');
+const { stubDocumentHost } = require('../helpers/document-host-stub');
 
 jest.mock('../../src/sync-engine/file-operations');
 jest.mock('../../src/sync-engine/utils', () => {
@@ -102,6 +103,16 @@ beforeEach(() => {
   syncEngine.username = 'testuser';
   syncEngine.clockOffset = 0;
   syncEngine.repo.seed();
+  syncEngine.documentHost = stubDocumentHost({
+    read: jest.fn(async (name, filePath) => {
+      try {
+        const bytes = await fileOps.readFileBuffer(filePath);
+        return { bytes, checksum: await utils.calculateChecksum(bytes) };
+      } catch {
+        return null;
+      }
+    }),
+  });
   syncEngine.lastSyncedAt = null;
   syncEngine.isRunning = false;
   syncEngine.stats = {
@@ -120,7 +131,6 @@ beforeEach(() => {
 
   // Default mocks
   fileOps.ensureDirectory.mockResolvedValue();
-  fileOps.writeFile.mockResolvedValue();
   fileOps.moveFile.mockResolvedValue();
   fileOps.readFile.mockResolvedValue('<html>content</html>');
   fileOps.readFileBuffer.mockImplementation(async (filePath) => Buffer.from(await fileOps.readFile(filePath)));
@@ -204,6 +214,13 @@ describe('performInitialSync — nodeId-based move detection', () => {
     expect(apiClient.getNodeContent).toHaveBeenCalledWith(
       expect.objectContaining({ serverUrl: 'http://localhyperclay.com', apiKey: 'hcsk_test' }),
       1
+    );
+    expect(syncEngine.documentHost.commit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: 'sync-download',
+        name: 'new-site.html',
+        modifiedAt: '2024-06-01T00:00:00Z',
+      })
     );
   });
 
@@ -542,7 +559,6 @@ describe('handleNodeSaved — SSE with duplicate on disk', () => {
     const cs = checksum(content);
 
     fileOps.readFile.mockRejectedValue(new Error('ENOENT'));
-    fileOps.writeFile.mockResolvedValue();
     fileOps.ensureDirectory.mockResolvedValue();
 
     syncEngine.syncFolder = SYNC_ROOT;
@@ -554,11 +570,13 @@ describe('handleNodeSaved — SSE with duplicate on disk', () => {
       content, checksum: cs, modifiedAt: '2024-06-01T00:00:00Z'
     });
 
-    expect(fileOps.writeFile).toHaveBeenCalledWith(
-      `${SYNC_ROOT}/projects/blog.html`,
-      content,
-      new Date('2024-06-01T00:00:00Z')
-    );
+    expect(syncEngine.documentHost.commit).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'sync-download',
+      name: 'projects/blog.html',
+      filePath: `${SYNC_ROOT}/projects/blog.html`,
+      bytes: content,
+      modifiedAt: '2024-06-01T00:00:00Z'
+    }));
     expect(syncEngine.stats.filesDownloaded).toBe(1);
   });
 });
@@ -566,7 +584,6 @@ describe('handleNodeSaved — SSE with duplicate on disk', () => {
 describe('handleNodeSaved — SSE folder path preservation', () => {
   beforeEach(() => {
     fileOps.readFile.mockRejectedValue(new Error('ENOENT'));
-    fileOps.writeFile.mockResolvedValue();
     fileOps.ensureDirectory.mockResolvedValue();
     syncEngine.syncFolder = SYNC_ROOT;
     syncEngine.isRunning = true;
@@ -582,12 +599,13 @@ describe('handleNodeSaved — SSE folder path preservation', () => {
       content, checksum: cs, modifiedAt: '2024-06-01T00:00:00Z'
     });
 
-    expect(fileOps.ensureDirectory).toHaveBeenCalledWith(`${SYNC_ROOT}/blog`);
-    expect(fileOps.writeFile).toHaveBeenCalledWith(
-      `${SYNC_ROOT}/blog/hyperclay-is-ready.html`,
-      content,
-      new Date('2024-06-01T00:00:00Z')
-    );
+    expect(syncEngine.documentHost.commit).toHaveBeenCalledWith(expect.objectContaining({
+      filePath: `${SYNC_ROOT}/blog/hyperclay-is-ready.html`
+    }));
+    expect(syncEngine.documentHost.commit).toHaveBeenCalledWith(expect.objectContaining({
+      bytes: content,
+      modifiedAt: '2024-06-01T00:00:00Z'
+    }));
   });
 
   test('file without folder prefix writes to root', async () => {
@@ -600,11 +618,11 @@ describe('handleNodeSaved — SSE folder path preservation', () => {
       content, checksum: cs, modifiedAt: '2024-06-01T00:00:00Z'
     });
 
-    expect(fileOps.writeFile).toHaveBeenCalledWith(
-      `${SYNC_ROOT}/my-site.html`,
-      content,
-      new Date('2024-06-01T00:00:00Z')
-    );
+    expect(syncEngine.documentHost.commit).toHaveBeenCalledWith(expect.objectContaining({
+      filePath: `${SYNC_ROOT}/my-site.html`,
+      bytes: content,
+      modifiedAt: '2024-06-01T00:00:00Z'
+    }));
   });
 
   test('deeply nested folder path creates full directory structure', async () => {
@@ -617,12 +635,13 @@ describe('handleNodeSaved — SSE folder path preservation', () => {
       content, checksum: cs, modifiedAt: '2024-06-01T00:00:00Z'
     });
 
-    expect(fileOps.ensureDirectory).toHaveBeenCalledWith(`${SYNC_ROOT}/projects/2026/launch`);
-    expect(fileOps.writeFile).toHaveBeenCalledWith(
-      `${SYNC_ROOT}/projects/2026/launch/deep-site.html`,
-      content,
-      new Date('2024-06-01T00:00:00Z')
-    );
+    expect(syncEngine.documentHost.commit).toHaveBeenCalledWith(expect.objectContaining({
+      filePath: `${SYNC_ROOT}/projects/2026/launch/deep-site.html`
+    }));
+    expect(syncEngine.documentHost.commit).toHaveBeenCalledWith(expect.objectContaining({
+      bytes: content,
+      modifiedAt: '2024-06-01T00:00:00Z'
+    }));
   });
 
   test('file with .html extension does not double-append', async () => {
@@ -635,18 +654,18 @@ describe('handleNodeSaved — SSE folder path preservation', () => {
       content, checksum: cs, modifiedAt: '2024-06-01T00:00:00Z'
     });
 
-    expect(fileOps.writeFile).toHaveBeenCalledWith(
-      `${SYNC_ROOT}/blog/my-post.html`,
-      content,
-      new Date('2024-06-01T00:00:00Z')
-    );
+    expect(syncEngine.documentHost.commit).toHaveBeenCalledWith(expect.objectContaining({
+      filePath: `${SYNC_ROOT}/blog/my-post.html`,
+      bytes: content,
+      modifiedAt: '2024-06-01T00:00:00Z'
+    }));
   });
 
   test('skips write when checksums match (file already up to date)', async () => {
     const content = '<html>existing content</html>';
     const cs = checksum(content);
 
-    fileOps.readFile.mockResolvedValue(content);
+    fileOps.readFileBuffer.mockResolvedValue(Buffer.from(content));
 
     await syncEngine.handleNodeSaved({
       nodeId: 1, nodeType: 'site',
@@ -654,7 +673,7 @@ describe('handleNodeSaved — SSE folder path preservation', () => {
       content, checksum: cs, modifiedAt: '2024-06-01T00:00:00Z'
     });
 
-    expect(fileOps.writeFile).not.toHaveBeenCalled();
+    expect(syncEngine.documentHost.commit).not.toHaveBeenCalled();
   });
 
 });

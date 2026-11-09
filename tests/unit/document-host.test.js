@@ -15,6 +15,7 @@ function tempDir() {
 }
 
 afterEach(() => {
+  jest.restoreAllMocks();
   while (dirs.length) fs.rmSync(dirs.pop(), { recursive: true, force: true });
 });
 
@@ -83,6 +84,14 @@ function makeHost(overrides = {}) {
     newestVersionFiles: async () => [],
     needsAdoption: () => false,
     roomsPackage: () => ({ splitPage: (h) => ({ file: h }) }),
+    writePageState: async (...args) => { calls.push('writePageState'); return args; },
+    logicalDocument: async (baseDir, name, file) => { calls.push('logicalDocument'); return file; },
+    createBackupIfExists: async (...args) => { calls.push('createBackupIfExists'); return args; },
+    createBinaryBackupIfExists: async (...args) => { calls.push('createBinaryBackupIfExists'); return args; },
+    assertStructureContext: (token) => { calls.push('assertStructureContext'); },
+    refreshDerivedArtifacts: async (...args) => { calls.push('refreshDerivedArtifacts'); return args; },
+    emit: () => { calls.push('emit'); },
+    logger: null,
     MAX_EXTERNAL_HTML: 1000000,
     VERSIONS_DIR: '.hyperclay/versions',
     TAILWIND_DIR: '.hyperclay/tailwindcss',
@@ -141,17 +150,165 @@ test('sync-download writes bytes byte for byte without running any formatter', a
   expect(state.contentAtMark.equals(bytes)).toBe(true);
 });
 
-test('sync-download rejects pageRecord and modifiedAt without writing', async () => {
+test('sync-download of a document stores it, stamps modifiedAt and checksums the file', async () => {
+  const { host, filePath, calls } = makeHost();
+  const html = '<html><body>exported</body></html>';
+  const modifiedAt = Date.UTC(2020, 0, 2, 3, 4, 5);
+
+  const result = await host.commit({ kind: 'sync-download', name: 'page.html', filePath, bytes: html, modifiedAt });
+
+  expect(result.outcome).toBe('committed');
+  expect(fs.readFileSync(filePath, 'utf8')).toBe(html);
+  expect(Math.floor(fs.statSync(filePath).mtimeMs)).toBe(modifiedAt);
+  expect(result.checksum).toBe(await calculateChecksum(fs.readFileSync(filePath)));
+  expect(calls).toContain('createBackupIfExists');
+  expect(calls).not.toContain('createBinaryBackupIfExists');
+});
+
+test('sync-download writes the page sidecar before the file', async () => {
+  const seen = {};
+  const { host, filePath } = makeHost({
+    writePageState: async (baseDir, name, record) => {
+      seen.existed = fs.existsSync(filePath);
+      seen.record = record;
+    },
+  });
+  const html = '<html><body>exported</body></html>';
+  const pageRecord = { rev: 7 };
+
+  const result = await host.commit({ kind: 'sync-download', name: 'page.html', filePath, bytes: html, pageRecord });
+
+  expect(result.outcome).toBe('committed');
+  expect(seen.record).toBe(pageRecord);
+  expect(seen.existed).toBe(false);
+  expect(fs.readFileSync(filePath, 'utf8')).toBe(html);
+});
+
+test('sync-download of a Buffer runs no document lane and backs up as binary', async () => {
+  const { host, filePath, calls, deps } = makeHost();
+  const bytes = Buffer.from([0xff, 0xfe, 0x00, 0xc3, 0x28, 0x80]);
+
+  const result = await host.commit({ kind: 'sync-download', name: 'page.html', filePath, bytes });
+
+  expect(result.outcome).toBe('committed');
+  expect(fs.readFileSync(filePath).equals(bytes)).toBe(true);
+  for (const name of ['storePageState', 'writePageState', 'logicalDocument', 'refreshDerivedArtifacts', 'runDataLossGuard', 'createBackupIfExists']) {
+    expect(calls).not.toContain(name);
+  }
+  expect(calls).toContain('createBinaryBackupIfExists');
+  expect(deps.dataGuard.runDataLossGuard).not.toHaveBeenCalled();
+});
+
+function exactAuthority(seen, { dirty = false, get = () => ({ id: 'room' }) } = {}) {
+  return {
+    rooms: { get },
+    roomIsDirty: () => dirty,
+    confirmKnownWrite: async (target, html, token, options) => {
+      seen.confirmed = { target, html, token, options };
+    },
+    observeExternal: async (target, html, token) => {
+      seen.observed = { target, html, token };
+    },
+  };
+}
+
+test('an authority write confirms a clean room with the composed document', async () => {
+  const seen = {};
+  const authority = exactAuthority(seen);
+  const { host, filePath, calls } = makeHost({
+    ctx: { localAuthority: authority },
+    logicalDocument: async (baseDir, name, stored) => {
+      calls.push('logicalDocument');
+      return '<html><body>composed</body></html>';
+    },
+  });
+  const target = { canonicalPath: filePath };
+  const html = '<html><body>transport</body></html>';
+
+  const result = await host.commit({ kind: 'sync-download', name: 'page.html', filePath, bytes: html, context: { target, token: 'tok' } });
+
+  expect(result.outcome).toBe('committed');
+  expect(seen.confirmed).toEqual({
+    target, html: '<html><body>composed</body></html>', token: 'tok', options: { sender: 'sync-engine' },
+  });
+  expect(seen.observed).toBe(undefined);
+  expect(calls).toContain('assertWriteContext');
+});
+
+test('an authority write over a dirty room observes the download as external', async () => {
+  const seen = {};
+  const authority = exactAuthority(seen, { dirty: true });
+  const { host, filePath, calls } = makeHost({
+    ctx: { localAuthority: authority },
+    logicalDocument: async (baseDir, name, stored) => {
+      calls.push('logicalDocument');
+      return '<html><body>composed</body></html>';
+    },
+  });
+  const target = { canonicalPath: filePath };
+
+  const result = await host.commit({
+    kind: 'sync-download', name: 'page.html', filePath,
+    bytes: '<html><body>transport</body></html>', context: { target, token: 'tok' },
+  });
+
+  expect(result.outcome).toBe('committed');
+  expect(seen.observed).toEqual({ target, html: '<html><body>composed</body></html>', token: 'tok' });
+  expect(seen.confirmed).toBe(undefined);
+});
+
+test('the data-loss guard sees the previous body and the root live object', async () => {
+  const { host, filePath, dir, live, deps } = makeHost();
+  fs.writeFileSync(filePath, 'old document');
+  const html = '<html><body>new</body></html>';
+
+  await host.commit({ kind: 'sync-download', name: 'page.html', filePath, bytes: html });
+
+  expect(deps.dataGuard.runDataLossGuard).toHaveBeenCalledWith({
+    baseDir: dir, name: 'page.html', newHtml: html, prevContent: 'old document', prov: 'external', live,
+  });
+});
+
+test('a utimes failure is indeterminate and leaves the new bytes on disk', async () => {
+  jest.spyOn(fs.promises, 'utimes').mockRejectedValueOnce(new Error('utimes failed'));
   const { host, filePath } = makeHost();
-  const bytes = Buffer.from('bytes');
+  const html = '<html><body>new</body></html>';
 
-  await expect(host.commit({ kind: 'sync-download', name: 'page.html', filePath, bytes, pageRecord: { rev: 1 } }))
-    .rejects.toThrow();
-  expect(fs.existsSync(filePath)).toBe(false);
+  const result = await host.commit({ kind: 'sync-download', name: 'page.html', filePath, bytes: html, modifiedAt: 1000 })
+    .catch((error) => error);
 
-  await expect(host.commit({ kind: 'sync-download', name: 'page.html', filePath, bytes, modifiedAt: 1 }))
-    .rejects.toThrow();
-  expect(fs.existsSync(filePath)).toBe(false);
+  expect(result.outcome).toBe('indeterminate');
+  expect(fs.readFileSync(filePath, 'utf8')).toBe(html);
+});
+
+test('a failing authority confirm is indeterminate and leaves the new bytes on disk', async () => {
+  const authority = {
+    rooms: { get: () => null },
+    roomIsDirty: () => false,
+    confirmKnownWrite: async () => { throw new Error('confirm failed'); },
+    observeExternal: async () => {},
+  };
+  const { host, filePath } = makeHost({ ctx: { localAuthority: authority } });
+  const html = '<html><body>new</body></html>';
+
+  const result = await host.commit({
+    kind: 'sync-download', name: 'page.html', filePath, bytes: html,
+    context: { target: { canonicalPath: filePath }, token: 'tok' },
+  }).catch((error) => error);
+
+  expect(result.outcome).toBe('indeterminate');
+  expect(fs.readFileSync(filePath, 'utf8')).toBe(html);
+});
+
+test('a failure before the replacement rejects and leaves the old bytes', async () => {
+  const { host, filePath } = makeHost({
+    createBackupIfExists: async () => { throw new Error('backup failed'); },
+  });
+  fs.writeFileSync(filePath, 'old document');
+
+  await expect(host.commit({ kind: 'sync-download', name: 'page.html', filePath, bytes: '<html><body>new</body></html>' }))
+    .rejects.toThrow('backup failed');
+  expect(fs.readFileSync(filePath, 'utf8')).toBe('old document');
 });
 
 test('a wrong expected checksum refuses without touching the file', async () => {

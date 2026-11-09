@@ -33,6 +33,7 @@ jest.mock('livesync-hyperclay', () => ({
 }));
 
 jest.mock('../../src/main/utils/backup', () => ({
+  createBackup: jest.fn(),
   createBackupIfExists: jest.fn(),
   createBinaryBackupIfExists: jest.fn()
 }));
@@ -45,6 +46,7 @@ const fileOps = require('../../src/sync-engine/file-operations');
 const utils = require('../../src/sync-engine/utils');
 const apiClient = require('../../src/sync-engine/api-client');
 const nodeMapModule = require('../../src/sync-engine/node-map');
+const { stubDocumentHost } = require('../helpers/document-host-stub');
 
 jest.mock('../../src/sync-engine/file-operations');
 jest.mock('../../src/sync-engine/utils', () => {
@@ -119,8 +121,6 @@ beforeEach(() => {
   };
 
   fileOps.ensureDirectory.mockResolvedValue();
-  fileOps.writeFile.mockResolvedValue();
-  fileOps.writeFileBuffer.mockResolvedValue();
   fileOps.moveFile.mockResolvedValue();
   fileOps.readFile.mockResolvedValue('<html>content</html>');
   fileOps.readFileBuffer.mockImplementation(async (filePath) => Buffer.from(await fileOps.readFile(filePath)));
@@ -179,8 +179,22 @@ function installFs() {
   fileOps.ensureDirectory.mockImplementation(async (a) => mkdirs(rel(a)));
   fileOps.readFile.mockImplementation(async (a) => { if (!files.has(rel(a))) throw enoent(); return files.get(rel(a)); });
   fileOps.readFileBuffer.mockImplementation(async (a) => { if (!files.has(rel(a))) throw enoent(); return Buffer.from(files.get(rel(a))); });
-  fileOps.writeFile.mockImplementation(async (a, c) => { files.set(rel(a), String(c)); mkdirs(parentsOf(rel(a)).pop()); });
-  fileOps.writeFileBuffer.mockImplementation(async (a, c) => { files.set(rel(a), c.toString()); mkdirs(parentsOf(rel(a)).pop()); });
+  syncEngine.documentHost = stubDocumentHost({
+    read: jest.fn(async (name, filePath) => {
+      if (!files.has(rel(filePath))) return null;
+      const bytes = Buffer.from(files.get(rel(filePath)));
+      return { bytes, checksum: realBufferChecksum(bytes) };
+    }),
+    commit: jest.fn(async (request) => {
+      const bytes = Buffer.isBuffer(request.bytes) ? request.bytes : Buffer.from(String(request.bytes));
+      files.set(rel(request.filePath), bytes.toString());
+      mkdirs(parentsOf(rel(request.filePath)).pop());
+      return {
+        outcome: 'committed', reason: null, etag: null, checksum: realBufferChecksum(bytes),
+        stored: bytes, content: bytes
+      };
+    }),
+  });
   fileOps.deleteFile.mockImplementation(async (a) => { files.delete(rel(a)); });
   fileOps.moveFile.mockImplementation(async (s, d) => {
     const rs = rel(s), rd = rel(d);

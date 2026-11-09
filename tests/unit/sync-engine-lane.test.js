@@ -90,7 +90,6 @@ beforeEach(() => {
   syncEngine.repo.seed();
 
   fileOps.ensureDirectory.mockResolvedValue();
-  fileOps.writeFile.mockResolvedValue();
   fileOps.readFile.mockResolvedValue('<html>content</html>');
   fileOps.getLocalFiles.mockResolvedValue(new Map());
   fileOps.getLocalUploads.mockResolvedValue(new Map());

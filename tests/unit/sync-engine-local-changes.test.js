@@ -30,6 +30,7 @@ jest.mock('livesync-hyperclay', () => ({
 }));
 
 jest.mock('../../src/main/utils/backup', () => ({
+  createBackup: jest.fn(),
   createBackupIfExists: jest.fn(),
   createBinaryBackupIfExists: jest.fn()
 }));
@@ -42,6 +43,7 @@ const fileOps = require('../../src/sync-engine/file-operations');
 const apiClient = require('../../src/sync-engine/api-client');
 const nodeMapModule = require('../../src/sync-engine/node-map');
 const Outbox = require('../../src/sync-engine/state/outbox');
+const { stubDocumentHost } = require('../helpers/document-host-stub');
 
 jest.mock('../../src/sync-engine/file-operations');
 jest.mock('../../src/sync-engine/api-client');
@@ -105,7 +107,6 @@ beforeEach(() => {
   };
 
   fileOps.ensureDirectory.mockResolvedValue();
-  fileOps.writeFile.mockResolvedValue();
   fileOps.moveFile.mockResolvedValue();
   fileOps.readFile.mockResolvedValue('<html>content</html>');
   fileOps.getFileStats.mockResolvedValue({ mtime: new Date('2024-01-01'), size: 100 });
@@ -135,6 +136,17 @@ beforeEach(() => {
   // modifiedAt it stamps on a server write, so that is mocked with the rest.
   fileOps.readFileBuffer.mockImplementation(async (filePath) => Buffer.from(await fileOps.readFile(filePath)));
   fileOps.calculateBufferChecksum.mockImplementation(realBufferChecksum);
+
+  syncEngine.documentHost = stubDocumentHost({
+    read: jest.fn(async (name, filePath) => {
+      try {
+        const bytes = await fileOps.readFileBuffer(filePath);
+        return { bytes, checksum: await fileOps.calculateBufferChecksum(bytes) };
+      } catch {
+        return null;
+      }
+    }),
+  });
   jest.spyOn(require('fs').promises, 'stat').mockResolvedValue(STUB_STAT);
 });
 

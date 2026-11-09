@@ -24,6 +24,8 @@ const NOT_DOCUMENTS = {
   'src/main/workspace/auto-name.js': 1,
   'src/sync-engine/node-map.js': 1,
   'src/sync-engine/state/upload-blocks.js': 1,
+  // the parked remote copy under `.hyperclay/conflicts/`
+  'src/sync-engine/reconcile/execute.js': 1,
 };
 
 // Every other write site, including the implementation of the primitive itself.
@@ -38,8 +40,6 @@ const DIRECT_WRITERS = {
   'src/main/server.js': 1,
   'src/main/root-observer.js': 1,
   'src/main/workspace/commands.js': 1,
-  'src/sync-engine/file-operations.js': 2,
-  'src/sync-engine/reconcile/execute.js': 1,
 };
 
 function collectFiles(dir, found = []) {
@@ -93,5 +93,39 @@ describe('document write boundary', () => {
       else if (actual !== expected) stale.push(`${file}: mapped as ${expected} but now makes ${actual}`);
     }
     expect(stale).toEqual([]);
+  });
+});
+
+// The modules the migration left: each writes a document through
+// documentHost.commit, and none of them keeps a primitive of its own.
+const MIGRATED_MODULES = [
+  'src/sync-engine/file-operations.js',
+  'src/sync-engine/reconcile/execute.js',
+  'src/sync-engine/engine-sse.js',
+  'src/sync-engine/engine-uploader.js',
+];
+
+const sourceOf = (file) => fs.readFileSync(path.join(REPO_ROOT, file), 'utf8');
+
+describe('the sync engine has no write primitive left', () => {
+  it('keeps no writeFile, writeFileBuffer or refreshDerivedArtifacts call', () => {
+    const offenders = [];
+    for (const file of MIGRATED_MODULES) {
+      const source = sourceOf(file);
+      for (const marker of ['writeFile(', 'writeFileBuffer(', 'refreshDerivedArtifacts(']) {
+        if (source.includes(marker)) offenders.push(`${file}: calls ${marker}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it('publishes a document only inside writeBytes', () => {
+    const source = sourceOf('src/sync-engine/reconcile/execute.js');
+    const start = source.indexOf('async function writeBytes');
+    expect(start).toBeGreaterThan(-1);
+    const body = source.slice(start, source.indexOf('\n}\n', start));
+    const calls = (text) => text.split('atomicWriteFile(').length - 1;
+    expect(calls(body)).toBeGreaterThan(0);
+    expect(calls(source)).toBe(calls(body));
   });
 });

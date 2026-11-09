@@ -7,15 +7,12 @@
  */
 
 const path = require('upath');
-const { createBackupIfExists, createBinaryBackupIfExists } = require('../main/utils/backup');
 const { classifyError, formatErrorForLog } = require('./error-handler');
 const {
   fileExists,
   readFile,
-  writeFile,
   getFileStats,
   readFileBuffer,
-  writeFileBuffer,
   calculateBufferChecksum
 } = require('./file-operations');
 const {
@@ -27,10 +24,8 @@ const { calculateChecksum } = require('./utils');
 const { validateFileName, validateFullPath, validateUploadPath } = require('./validation');
 const { ERROR_PRIORITY } = require('./constants');
 const nodeMap = require('./node-map');
-const dataGuard = require('../main/data-loss-guard');
-const { withLocalDocumentWrite, claimLocalDocumentTarget } = require('./local-boundary');
-const { refreshDerivedArtifacts } = require('../main/utils/derived-artifacts');
-const { readPageRecord, applyPageRecord, storedPageFile, sendPageState, confirmDownload } = require('./page-state');
+const { withLocalDocumentWrite, claimLocalDocumentTarget, documentHostFor } = require('./local-boundary');
+const { readPageRecord, sendPageState } = require('./page-state');
 
 module.exports = {
   /**
@@ -57,80 +52,23 @@ module.exports = {
       const isHtmlSite = /\.(html|htmlclay)$/i.test(relativePath);
       const record = isHtmlSite ? await readPageRecord(this, nodeId, relativePath) : null;
 
-      // A1: the whole read-modify-write region is serialized. Reading the
-      // pre-download body outside the lock would let a concurrent /save land
-      // between the read and the write, so the guard would compare against a
-      // body that is no longer what we are about to overwrite.
+      let localPath = null;
       const outcome = await withLocalDocumentWrite(this, relativePath, async (target, token) => {
-        const localPath = target.canonicalPath;
-
-        // Data-clobber guard: capture the last-good local body before overwriting,
-        // so a synced-down (external) write that destroys saved data is detectable.
-        // markBrowserSave() below suppresses the watcher, so this is the only place
-        // the guard can see a poll/initial-sync download.
-        let previous = null;
-        if (isHtmlSite) {
-          try {
-            const existing = await readFile(localPath);
-            previous = typeof existing === 'string' ? existing : existing.toString('utf8');
-          } catch {
-            // No local file yet — nothing to clobber.
-          }
-        }
-
-        // ANCILLARY: siteName without extension → maps to sites-versions/{siteName}/.
-        const siteName = relativePath.replace(/\.(html|htmlclay)$/i, '');
-        await createBackupIfExists(localPath, siteName, this.syncFolder, this.emit.bind(this), this.logger);
-
-        // liveSync channel key = full path with extension.
-        this.live.markBrowserSave(relativePath);
-
-        // Write file with server modification time (ensures directories exist).
-        // The server's merge state lands in the sidecar first, then a page copy
-        // still carrying its own state stores the clean file and keeps that state
-        // in the sidecar, the same way every other write of a page does.
-        await applyPageRecord(this, relativePath, record);
-        const stored = await storedPageFile(this, relativePath, content);
-        await writeFile(localPath, stored, modifiedAt);
-
-        if (token) {
-          await confirmDownload(this, target, token, relativePath, stored, {
-            sender: 'sync-engine',
-          });
-        }
-
-        // A1: derived artifacts belong in the same critical section as the write
-        // that causes them. Skipping them here leaves an H0 sidecar and an H0
-        // stylesheet serving against H1 bytes — and because writeFile stamps the
-        // remote modifiedAt, an H0 sidecar can outrank H1 by mtime permanently.
-        // After a confirmed authority write a sidecar or stylesheet failure is
-        // logged rather than thrown: the confirmed bytes are already published.
-        if (isHtmlSite && typeof content === 'string') {
-          try {
-            await refreshDerivedArtifacts(this.syncFolder, relativePath, content);
-          } catch (error) {
-            if (!token) throw error;
-            console.error('[SYNC] download: derived artifact refresh failed:', error && error.message ? error.message : error);
-          }
-        }
-
-        return { previous };
+        localPath = target.canonicalPath;
+        const written = await documentHostFor(this).commit({
+          kind: 'sync-download',
+          name: relativePath,
+          filePath: localPath,
+          bytes: content,
+          modifiedAt,
+          pageRecord: record,
+          context: { target, token },
+        });
+        if (written.outcome === 'indeterminate') throw written.error;
+        return written;
       }, { generation: gen, claim, explicitCreate: remoteAtThisPath });
 
       if (outcome.stale) return;
-      const preDownloadContent = outcome.previous;
-
-      // A synced-down apply is an off-page (external) write from the local
-      // perspective; preDownloadContent is the last-good local copy.
-      if (isHtmlSite && typeof content === 'string') {
-        dataGuard.runDataLossGuard({
-          baseDir: this.syncFolder,
-          name: relativePath,
-          newHtml: content,
-          prevContent: preDownloadContent,
-          prov: 'external',
-        }).catch(err => console.error('[data-guard] download guard error:', err && err.message ? err.message : err));
-      }
 
       console.log(`[SYNC] Downloaded ${relativePath}`);
 
@@ -378,20 +316,16 @@ module.exports = {
 
       const applied = await withLocalDocumentWrite(this, serverPath, async (target, token) => {
         const localPath = target.canonicalPath;
-
-        // Create binary backup if file exists (preserves images, PDFs, etc.)
-        await createBinaryBackupIfExists(localPath, serverPath, this.syncFolder, this.emit.bind(this), this.logger);
-
-        // Write file
-        await writeFileBuffer(localPath, content, modifiedAt);
-
-        if (token) {
-          await this.localAuthority.confirmKnownWrite(target, content, token, {
-            sender: 'sync-engine',
-          });
-        }
-
-        return { written: true };
+        const written = await documentHostFor(this).commit({
+          kind: 'sync-download',
+          name: serverPath,
+          filePath: localPath,
+          bytes: content,
+          modifiedAt,
+          context: { target, token },
+        });
+        if (written.outcome === 'indeterminate') throw written.error;
+        return written;
       }, { generation: gen, claim, explicitCreate: remoteAtThisPath });
 
       if (applied.stale) return;

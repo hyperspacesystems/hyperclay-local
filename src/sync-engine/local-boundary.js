@@ -8,8 +8,19 @@ const {
 } = require('../main/utils/write-queue');
 const { getConsentRegistry, resolveWritePath, realpathNearestParent } = require('../main/utils/path-resolver');
 const { LocalAuthorityError } = require('../main/local-authority');
+const { createRootDocumentHost } = require('../main/document-host');
 
 class StaleLocalWriteError extends Error {}
+
+function documentHostFor(engine) {
+  if (!engine.documentHost) {
+    engine.documentHost = createRootDocumentHost({
+      ctx: { root: { id: engine.rootId, path: engine.syncFolder }, localAuthority: engine.localAuthority },
+      live: engine.live, emit: engine.emit.bind(engine), logger: engine.logger,
+    });
+  }
+  return engine.documentHost;
+}
 
 async function canonicalPathFor(engine, rel) {
   engine.resolveContainedPath(rel);
@@ -155,4 +166,4 @@ async function withLocalStructureDelete(engine, rel, move, { generation = engine
   });
 }
 
-module.exports = { withLocalDocumentWrite, withLocalDirectoryChange, withLocalStructureDelete, claimLocalDocumentTarget, structureEntryFor };
+module.exports = { withLocalDocumentWrite, withLocalDirectoryChange, withLocalStructureDelete, claimLocalDocumentTarget, structureEntryFor, documentHostFor };

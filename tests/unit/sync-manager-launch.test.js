@@ -167,8 +167,6 @@ const connections = () => engineUtils.calibrateClock.mock.calls.map(([conn]) =>
 beforeEach(() => {
   jest.clearAllMocks();
 
-  fileOps.writeFile.mockResolvedValue();
-  fileOps.writeFileBuffer.mockResolvedValue();
   fileOps.ensureDirectory.mockResolvedValue();
   fileOps.fileExists.mockResolvedValue(false);
   fileOps.readFile.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));

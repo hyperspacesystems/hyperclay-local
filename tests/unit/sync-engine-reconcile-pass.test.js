@@ -34,6 +34,7 @@ jest.mock('livesync-hyperclay', () => ({
 }));
 
 jest.mock('../../src/main/utils/backup', () => ({
+  createBackup: jest.fn(),
   createBackupIfExists: jest.fn(),
   createBinaryBackupIfExists: jest.fn()
 }));
@@ -51,6 +52,7 @@ const utils = require('../../src/sync-engine/utils');
 const apiClient = require('../../src/sync-engine/api-client');
 const nodeMapModule = require('../../src/sync-engine/node-map');
 const store = require('../../src/sync-engine/reconcile/conflicts');
+const { stubDocumentHost } = require('../helpers/document-host-stub');
 
 jest.mock('../../src/sync-engine/file-operations');
 jest.mock('../../src/sync-engine/utils', () => {
@@ -103,6 +105,17 @@ beforeEach(() => {
   syncEngine.serverUrl = 'http://localhyperclay.com';
   syncEngine.apiKey = 'hcsk_test';
   syncEngine.isRunning = true;
+  syncEngine.documentHost = stubDocumentHost({
+    read: jest.fn(async () => ({ bytes: Buffer.from('<html>content</html>'), checksum: checksum('<html>content</html>') })),
+    commit: jest.fn(async (request) => ({
+      outcome: 'committed',
+      reason: null,
+      etag: null,
+      checksum: checksum(request.bytes),
+      stored: request.bytes,
+      content: request.bytes,
+    })),
+  });
   syncEngine.repo.seed();
   syncEngine.stats = {
     filesProtected: 0,
@@ -119,8 +132,6 @@ beforeEach(() => {
   };
 
   fileOps.ensureDirectory.mockResolvedValue();
-  fileOps.writeFile.mockResolvedValue();
-  fileOps.writeFileBuffer.mockResolvedValue();
   fileOps.moveFile.mockResolvedValue();
   fileOps.readFile.mockResolvedValue('<html>content</html>');
   fileOps.readFileBuffer.mockImplementation(async (filePath) => Buffer.from(await fileOps.readFile(filePath)));

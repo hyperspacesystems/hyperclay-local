@@ -15,22 +15,20 @@ const {
   resolveWritePath,
   realpathNearestParent
 } = require('./utils/path-resolver.js');
-const { withFileLock, withDocumentWrite, withStructureChange, assertWriteContext, assertStructureContext, atomicWriteFile } = require('./utils/write-queue.js');
+const { withFileLock, withDocumentWrite, withStructureChange, assertStructureContext, atomicWriteFile } = require('./utils/write-queue.js');
 const crypto = require('crypto');
 const busboy = require('busboy');
 const { scopeTailwindLink } = require('./utils/tailwind-scoping.js');
 const { stripSaveToken, injectDocumentEtag } = require('./utils/root-attrs.js');
 const runtimeAssets = require('./runtime-assets');
-const { projectRuntimeHTML, canonicalizeRuntimeHTML } = runtimeAssets;
+const { projectRuntimeHTML } = runtimeAssets;
 const { createRootLive } = require('./utils/root-live.js');
 const { replayStore } = require('./sync-replay.js');
 const { VERSIONS_DIR, RECOVERED_DIR, TAILWIND_DIR } = require('./utils/artifact-paths.js');
+const { snapshotStoreFor, rootStores } = require('./utils/snapshot-store.js');
 const { canonicalizeBase, rebaseOntoCanonical, assertRealDirChain } = require('./utils/real-dir-chain.js');
 const { VERSION_NAME, sortKey, collisionSuffix, compareNewestFirst } = require('./utils/prune-versions.js');
-const {
-  compileTailwind,
-  getTailwindCssName
-} = require('tailwind-hyperclay');
+const { compileTailwind } = require('tailwind-hyperclay');
 const { WireHub } = require('./wire-hub');
 const { mountWire } = require('./wire-routes');
 const { createHelperDispatcher } = require('./helpers/dispatcher');
@@ -39,19 +37,16 @@ const formatHtml = require('./format-html');
 const { hasHtmlRoot } = formatHtml;
 const { mapApiTagError, serveSiteApiLocal, extractSiteDataLocal, prepareSiteDataWriteLocal, applySiteDataLocal } = require('./utils/data-api');
 const { readDataQuery } = require('./utils/data-query');
-const { writeApiSidecar } = require('./utils/api-sidecar');
 const dataGuard = require('./data-loss-guard');
 const { documentEtag, ifMatchSatisfied } = require('./spec-wire');
-const { MAX_EXTERNAL_HTML } = require('./root-observer');
 const { buildEnvelope } = require('../sync-engine/control-lane-core.cjs');
 const { createLocalLiveData } = require('./local-live-data.js');
 const { PRESENCE_VERSION } = require('./presence-target');
 const { hasPageStore, loadPageModules, authoritativePageHtml } = require('./utils/page-api');
-const { logicalDocument, logicalBytes, storePageState, readPageState, readPageRecord } = require('./page-state-store.js');
-const { rebaseStaleSave, needsAdoption, newestVersionFiles } = require('./page-rebase.js');
+const { logicalBytes, readPageState, readPageRecord } = require('./page-state-store.js');
 const roomsPackage = () => require('@panphora/clayjs/server/rooms');
 const cheerio = require('cheerio');
-const { createDocumentHost } = require('./document-host.js');
+const { createRootDocumentHost, canonicalForWrite } = require('./document-host.js');
 
 const KIND_BY_ORIGIN = { save: 'browser-save', api: 'data-api', checkpoint: 'checkpoint' };
 
@@ -60,13 +55,6 @@ const eta = new Eta({
   views: path.join(__dirname, 'templates'),
   cache: true
 });
-
-// The logical document a write stores and the clean file part that reaches disk.
-async function splitWrite(baseDir, name, html, { keepState = true } = {}) {
-  const { file, state } = roomsPackage().splitPage(html);
-  if (state) return { file, logical: roomsPackage().composePage(file, state) };
-  return { file, logical: keepState ? await logicalDocument(baseDir, name, file) : file };
-}
 
 // Document 11 §6b: the `page-format-v1` extension is advertised only when both
 // halves exist — the shared rooms package can admit a page format, and the offline
@@ -122,23 +110,6 @@ function sameOriginDiscovery(req) {
   const origin = req.get('origin');
   if (!origin) return true;
   return origin === `${req.protocol}://${req.get('host')}`;
-}
-
-// What each open file owes the platform on its next sync upload, keyed by filename
-// within its own root's store: the same relative path in two roots is two different
-// files, and one root's snapshot must never be uploaded as the other's. Two lanes
-// fill it: /live-sync/save contributes the unstripped snapshot, /save contributes
-// the provenance bit. Either half can arrive without the other, so both are optional
-// and neither lane clears the other's.
-const rootStores = new Map();
-
-function snapshotStoreFor(rootId) {
-  let store = rootStores.get(rootId);
-  if (!store) {
-    store = { snapshots: new Map(), etags: new Map() };
-    rootStores.set(rootId, store);
-  }
-  return store;
 }
 
 // One sweep over every served root's store, run on the pool's interval
@@ -334,24 +305,6 @@ function projectServed(req, html) {
   }
   if (!result.mappings.length) return html;
   return Buffer.from(result.html, 'utf8');
-}
-
-// The other direction, for the bytes that become the document. A browser holding a
-// projected document saves what it holds, and nothing guarantees the client puts the
-// public URLs back: an older ClayJS, a hand-written save, the JSON data API, a restored
-// version or an incoming relay frame can all carry `/_/clayjs/` URLs or the descriptor.
-// Bytes like that only work on this host, and platform sync would upload them. Every
-// authoritative write turns them back into the public URLs and drops the descriptor
-// first. One pass, so the descriptor is read once: the document URL is the first loopback
-// origin the text names before `/_/clayjs/` (any port, since each root server listens on
-// its own), and a root-relative `/_/clayjs/` URL resolves under any origin.
-const LOOPBACK_RUNTIME = /\bhttps?:\/\/(?:localhost|127\.0\.0\.1)(?::\d{1,5})?(?=\/_\/clayjs\/)/i;
-
-function canonicalForWrite(html) {
-  const origin = html.match(LOOPBACK_RUNTIME);
-  const documentURL = origin ? `${origin[0].toLowerCase()}/` : 'http://localhost/';
-  const result = canonicalizeRuntimeHTML(html, { releases: runtimeAssets.releases, documentURL });
-  return result.changed === 0 && !result.descriptorRemoved ? html : result.html;
 }
 
 // Translate a data-api result object ({ status, headers?, json?, raw? }) into a
@@ -2120,14 +2073,7 @@ function createApp(ctxOrDir, devHooks = null, isKnownPath = null) {
       };
     };
 
-    const documentHost = createDocumentHost({
-      ctx, baseDir, live, store, resolveTailwindWrite,
-      canonicalForWrite, formatHtml, scopeTailwindLink, stripSaveToken, splitWrite,
-      storePageState, createBackup, atomicWriteFile, assertWriteContext,
-      writeApiSidecar, getTailwindCssName, compileTailwind, dataGuard, documentEtag,
-      rebaseStaleSave, newestVersionFiles, needsAdoption, roomsPackage,
-      MAX_EXTERNAL_HTML, VERSIONS_DIR, TAILWIND_DIR,
-    });
+    const documentHost = createRootDocumentHost({ ctx, live });
 
     // The second half of a save, shared by POST /save and POST /_/api/<file>:
     // first-save backup, Tailwind link scoping, formatting, version backup,

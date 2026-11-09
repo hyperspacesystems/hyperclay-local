@@ -11,8 +11,7 @@
 const fs = require('fs').promises;
 const path = require('upath');
 const {
-  readPageState, writePageState, storePageState, dropPageState, dropPageStateDir, movePageState, movePageStateDir,
-  logicalDocument
+  readPageState, writePageState, dropPageState, dropPageStateDir, movePageState, movePageStateDir
 } = require('../main/page-state-store');
 const { getPageState, putPageState } = require('./api-client');
 
@@ -51,12 +50,6 @@ async function readPageRecord(engine, nodeId, rel) {
 async function applyPageRecord(engine, rel, record) {
   if (!record || !PAGE_PATTERN.test(rel)) return;
   await writePageState(engine.syncFolder, rel, record);
-}
-
-/** The bytes to store for a downloaded page: a copy still carrying its tag keeps that state in the sidecar. */
-async function storedPageFile(engine, rel, content) {
-  if (!PAGE_PATTERN.test(rel) || typeof content !== 'string') return content;
-  return storePageState(engine.syncFolder, rel, content);
 }
 
 // A relocation already happened on disk; a sidecar that cannot follow it is
@@ -102,20 +95,7 @@ async function dropFolderPageState(engine, rel) {
   }
 }
 
-// A downloaded page is confirmed with its state put back, never the clean transport body, so
-// the room's baseline stays one it can render over. Over a room with unsaved edits it is a
-// replacement like any other outside write: disk wins, and those edits go to a recovered copy.
-async function confirmDownload(engine, target, token, rel, stored, options) {
-  const authority = engine.localAuthority;
-  if (!PAGE_PATTERN.test(rel) || typeof stored !== 'string') return authority.confirmKnownWrite(target, stored, token, options);
-  const html = await logicalDocument(engine.syncFolder, rel, stored);
-  const room = authority.rooms.get(target.canonicalPath);
-  if (room && authority.roomIsDirty(room)) return authority.observeExternal(target, html, token);
-  return authority.confirmKnownWrite(target, html, token, options);
-}
-
 module.exports = {
-  confirmDownload,
-  sendPageState, readPageRecord, applyPageRecord, storedPageFile,
+  sendPageState, readPageRecord, applyPageRecord,
   moveDocumentPageState, moveFolderPageState, dropDocumentPageState, dropFolderPageState
 };

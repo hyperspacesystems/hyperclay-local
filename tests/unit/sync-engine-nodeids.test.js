@@ -43,6 +43,7 @@ const utils = require('../../src/sync-engine/utils');
 const apiClient = require('../../src/sync-engine/api-client');
 const nodeMapModule = require('../../src/sync-engine/node-map');
 const { liveSync } = require('livesync-hyperclay');
+const { stubDocumentHost } = require('../helpers/document-host-stub');
 
 jest.mock('../../src/sync-engine/file-operations');
 jest.mock('../../src/sync-engine/utils', () => {
@@ -113,8 +114,17 @@ beforeEach(() => {
     errors: []
   };
 
+  syncEngine.documentHost = stubDocumentHost({
+    read: jest.fn(async (name, filePath) => {
+      try {
+        const bytes = await fileOps.readFile(filePath);
+        return { bytes, checksum: await utils.calculateChecksum(bytes) };
+      } catch {
+        return null;
+      }
+    }),
+  });
   fileOps.ensureDirectory.mockResolvedValue();
-  fileOps.writeFile.mockResolvedValue();
   fileOps.moveFile.mockResolvedValue();
   fileOps.readFile.mockResolvedValue('<html>content</html>');
   fileOps.getFileStats.mockResolvedValue({ mtime: new Date('2024-01-01'), size: 100 });
@@ -559,7 +569,7 @@ describe('handleNodeSaved — site nodeId tracking', () => {
       modifiedAt: '2024-06-01T00:00:00Z'
     });
 
-    expect(fileOps.writeFile).not.toHaveBeenCalled();
+    expect(syncEngine.documentHost.commit).not.toHaveBeenCalled();
     expect(syncEngine.repo.get('42').path).toBe('my-site.html');
     expect(syncEngine.repo.get('42').type).toBe('site');
   });

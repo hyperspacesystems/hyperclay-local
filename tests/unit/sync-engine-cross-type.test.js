@@ -20,6 +20,7 @@ jest.mock('livesync-hyperclay', () => ({
 }));
 
 jest.mock('../../src/main/utils/backup', () => ({
+  createBackup: jest.fn().mockResolvedValue(),
   createBackupIfExists: jest.fn().mockResolvedValue(),
   createBinaryBackupIfExists: jest.fn().mockResolvedValue()
 }));
@@ -59,6 +60,7 @@ const fileOps = require('../../src/sync-engine/file-operations');
 const utils = require('../../src/sync-engine/utils');
 const apiClient = require('../../src/sync-engine/api-client');
 const nodeMapModule = require('../../src/sync-engine/node-map');
+const { stubDocumentHost } = require('../helpers/document-host-stub');
 const Outbox = require('../../src/sync-engine/state/outbox');
 const CascadeSuppression = require('../../src/sync-engine/state/cascade-suppression');
 
@@ -81,7 +83,6 @@ beforeEach(() => {
   fileOps.moveFile.mockResolvedValue();
   fileOps.ensureDirectory.mockResolvedValue();
   fileOps.fileExists.mockResolvedValue(false);
-  fileOps.writeFile.mockResolvedValue();
   fileOps.readFile.mockResolvedValue('<html>content</html>');
   nodeMapModule.getInode.mockResolvedValue(12345);
 
@@ -90,6 +91,17 @@ beforeEach(() => {
   // modifiedAt it stamps on a server write, so that is mocked with the rest.
   fileOps.calculateBufferChecksum.mockImplementation(realBufferChecksum);
   utils.calculateFileChecksum.mockImplementation(async (filePath) => fileOps.calculateBufferChecksum(await fileOps.readFileBuffer(filePath)));
+
+  syncEngine.documentHost = stubDocumentHost({
+    read: jest.fn(async (name, filePath) => {
+      try {
+        const bytes = await fileOps.readFileBuffer(filePath);
+        return { bytes, checksum: await fileOps.calculateBufferChecksum(bytes) };
+      } catch {
+        return null;
+      }
+    }),
+  });
   jest.spyOn(require('fs').promises, 'stat').mockResolvedValue(STUB_STAT);
   nodeMapModule.save.mockResolvedValue();
   nodeMapModule.load.mockResolvedValue(new Map());
