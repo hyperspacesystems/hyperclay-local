@@ -216,23 +216,12 @@ function createGoDocumentHost({ ctx }) {
   // G9b: what this root's server owes platform sync for one document, cleared as
   // it is read, the same shape getAndClearSnapshot answers in-process.
   async function takeSnapshot(name, root = ctx.root) {
-    let answer;
-    try {
-      answer = await request('POST', '/v1/snapshot/take', {
-        body: { root: rootId(root), name },
-      });
-    } catch (error) {
-      if (error.status !== 404) throw error;
-      const pending = new Error('pending G9b: Go has no /v1/snapshot/take yet');
-      pending.code = 'pending-g9b';
-      pending.status = 404;
-      throw pending;
-    }
-    if (!answer) return null;
-    if (answer.html === null || answer.html === undefined) {
-      if (answer.userDriven === undefined) return null;
-    }
-    return { html: answer.html ?? null, userDriven: answer.userDriven };
+    const answer = await request('POST', '/v1/snapshot/take', {
+      body: { root: rootId(root), name },
+    });
+    const snapshot = answer && answer.snapshot;
+    if (!snapshot) return null;
+    return { html: snapshot.html ?? null, userDriven: snapshot.userDriven };
   }
 
   async function checkpoint() {

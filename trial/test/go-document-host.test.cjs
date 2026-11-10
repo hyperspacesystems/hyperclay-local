@@ -219,26 +219,14 @@ test('the Go document host adapter', { skip: SKIP }, async (t) => {
     await host.pageState({ op: 'drop', name: 'moved-again.html' });
   });
 
-  await t.test('takeSnapshot answers a relay snapshot once, then null', async (t) => {
+  await t.test('takeSnapshot answers a relay snapshot once, then null', async () => {
     const rel = 'relayed.html';
     const html = document('relayed');
     const relayed = await postRelay(go, rel, html);
-    if (relayed.status === 404) {
-      t.skip('pending G9b: Go has no /v1/snapshot/take yet');
-      return;
-    }
     assert.equal(relayed.status, 200, `the relay answered ${relayed.status}: ${relayed.body}`);
-    let taken;
-    try {
-      taken = await host.takeSnapshot(rel);
-    } catch (error) {
-      if (error.code === 'pending-g9b') {
-        t.skip('pending G9b: Go has no /v1/snapshot/take yet');
-        return;
-      }
-      throw error;
-    }
+    const taken = await host.takeSnapshot(rel);
     assert.equal(taken && taken.html, html);
+    assert.equal(taken.userDriven, undefined, 'a relay alone names no provenance, so the upload reports ui-unknown');
     assert.equal(await host.takeSnapshot(rel), null);
   });
 
