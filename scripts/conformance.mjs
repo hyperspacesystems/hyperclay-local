@@ -35,7 +35,7 @@ export const REQUIRED_EXTENSIONS = [
 ];
 
 const PROBE_TITLE = 'Conformance probe \u00b7 Hyperclay Local';
-const PROBE_HTML = [
+export const PROBE_HTML = [
   '<!DOCTYPE html>',
   '<html lang="en">',
   `<head><meta charset="utf-8"><title>${PROBE_TITLE}</title></head>`,
