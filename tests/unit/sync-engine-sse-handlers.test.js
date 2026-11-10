@@ -609,6 +609,7 @@ describe('handleNodeDeleted', () => {
     });
 
     expect(syncEngine.documentHost.restructure).toHaveBeenCalled();
+    expect(syncEngine.documentHost.restructure.mock.calls[0][0].steps[0]).toEqual({ from: 'foo.html', to: '.trash/foo.html' });
     expect(syncEngine.repo.has('42')).toBe(false);
   });
 
@@ -630,6 +631,7 @@ describe('handleNodeDeleted', () => {
     });
 
     expect(syncEngine.documentHost.restructure).toHaveBeenCalled();
+    expect(syncEngine.documentHost.restructure.mock.calls[0][0].steps[0]).toEqual({ from: 'projects', to: '.trash/projects' });
     expect(syncEngine.repo.size).toBe(0);
   });
 

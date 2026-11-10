@@ -157,7 +157,7 @@ async function restructureTrash(engine, rel, trashRel) {
   return documentHostFor(engine).restructure({
     kind: 'sync-trash',
     rootId: engine.rootId,
-    steps: [{ from: rel, to: null }],
+    steps: [{ from: rel, to: trashRel }],
     context: {
       token: null,
       entries: [{ from: relocateEntryFor(engine, rel), to: relocateEntryFor(engine, trashRel) }],
@@ -195,7 +195,7 @@ async function withLocalStructureDelete(engine, rel, trashRel, { generation = en
       return documentHostFor(engine).restructure({
         kind: 'sync-trash',
         rootId: engine.rootId,
-        steps: [{ from: rel, to: null }],
+        steps: [{ from: rel, to: toRel }],
         context: {
           token,
           entries: [{ from: source, to: { location: destination.location, canonical: destination.location } }],

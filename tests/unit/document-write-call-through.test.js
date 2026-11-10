@@ -653,7 +653,7 @@ describe('every restructure kind reaches the document host', () => {
     recorder.begin(dir);
     await engine._applyFileDelete(7, 'page.html', 'site');
 
-    expectHostCall('restructure', (c) => c.request.kind === 'sync-trash');
+    expectHostCall('restructure', (c) => c.request.kind === 'sync-trash' && c.request.steps[0].to === '.trash/page.html');
     expect(await fs.readFile(path.join(dir, '.trash', 'page.html'), 'utf8')).toBe(DOC);
     expectOnlyHostWrites();
   });
