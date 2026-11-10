@@ -148,6 +148,39 @@ test('a copy of the journal under another name stops the run', () => {
   assert.match(result.stdout + result.stderr, /must not be uploaded/);
 });
 
+test('an empty guard record the journal shares with other documents does not stop the run', () => {
+  const src = buildSource();
+  const empty = '{"baseline":null,"uiWorkPending":false,"event":null,"status":"none"}';
+  writeFile(src, '.hyperclay/guard/personal/journal.json', empty);
+  writeFile(src, '.hyperclay/guard/journal.json', empty);
+  writeFile(src, '.hyperclay/guard/apps/board.json', empty);
+  const run = freshRunDir();
+  const result = runCli(src, run);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(fs.readFileSync(path.join(run, 'C', '.hyperclay/guard/apps/board.json'), 'utf8'), empty);
+});
+
+test('a guard record carrying a baseline is still fingerprinted', () => {
+  const src = buildSource();
+  const record = '{"baseline":{"items":["secret-8"]},"uiWorkPending":false,"event":null,"status":"none"}';
+  writeFile(src, '.hyperclay/guard/journal.json', record);
+  writeFile(src, '.hyperclay/guard/apps/board.json', record);
+  const run = freshRunDir();
+  const result = runCli(src, run);
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+});
+
+test('the journal save test history is excluded', () => {
+  const src = buildSource();
+  writeFile(src, '.hyperclay/versions/journal-save-test/2026-09-25.html', 'secret-9');
+  writeFile(src, '.hyperclay/guard/journal-save-test.json', '{"guard":"secret-10"}');
+  const run = freshRunDir();
+  const result = runCli(src, run);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(fs.existsSync(path.join(run, 'C', '.hyperclay/versions/journal-save-test')), false);
+  assert.equal(fs.existsSync(path.join(run, 'C', '.hyperclay/guard/journal-save-test.json')), false);
+});
+
 test('refusals: non-empty run directory, run inside src and a run under the GitHub folder', () => {
   const src = buildSource();
 

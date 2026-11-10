@@ -17,7 +17,19 @@ export const EXCLUDED = [
   '.hyperclay/*/personal',
   '.hyperclay/versions/journal',
   '.hyperclay/guard/journal.json',
+  '.hyperclay/versions/journal-save-test',
+  '.hyperclay/guard/journal-save-test.json',
 ];
+
+function isEmptyGuardRecord(bytes) {
+  try {
+    const record = JSON.parse(bytes.toString('utf8'));
+    return record !== null && typeof record === 'object' && !Array.isArray(record)
+      && record.baseline === null && record.event === null;
+  } catch {
+    return false;
+  }
+}
 
 function byName(a, b) {
   return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
@@ -79,7 +91,9 @@ function collectJournalHashes(src, excluded) {
       }
       if (!stat.isFile()) continue;
       if (!isExcluded(segs, excluded)) continue;
-      const hash = sha256File(abs);
+      const bytes = fs.readFileSync(abs);
+      if (isEmptyGuardRecord(bytes)) continue;
+      const hash = crypto.createHash('sha256').update(bytes).digest('hex');
       if (hash !== EMPTY_SHA256) hashes.add(hash);
     }
   };
