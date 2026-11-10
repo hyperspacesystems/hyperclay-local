@@ -142,7 +142,9 @@ export function startLocal({
   return waitForManifest({ child, exitPromise, manifestPath, timeoutMs }).then((manifest) => {
     const target = assertManifest(manifest);
     control = target.control;
-    return { url: target.url, root: target.root, control, child, logPath, stop };
+    return {
+      url: target.url, root: target.root, control, child, logPath, stop, manifest,
+    };
   }).catch(async (error) => {
     await stop();
     throw error instanceof Infrastructure ? error : new Infrastructure(error?.message || String(error));
@@ -265,7 +267,7 @@ export function startGo({
   const stop = () => stopGo({ child, exitPromise, graceMs });
   return waitForReady({ child, exitPromise, logPath, timeoutMs }).then((ready) => {
     const target = assertReady(ready, roots[0]);
-    return { ...target, child, logPath, stop };
+    return { ...target, readyRoots: ready.roots, child, logPath, stop };
   }).catch(async (error) => {
     await stop();
     throw error instanceof Infrastructure ? error : new Infrastructure(error?.message || String(error));
