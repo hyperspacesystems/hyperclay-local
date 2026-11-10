@@ -3,12 +3,11 @@ import { execFileSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
-import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { startManaged } from './supervisor.mjs';
+import { freePortPair, startManaged } from './supervisor.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const LOCAL_APPS = path.join(os.homedir(), 'Documents', 'GitHub', 'hyper', 'LOCAL_APPS');
@@ -150,30 +149,6 @@ function sendJson(res, status, body) {
   res.end(payload);
 }
 
-// A port the pair can have: Go gives root i the port `port + i`, so both P and
-// P+1 must be free on loopback before the hosts start.
-function probePort(port) {
-  return new Promise((resolve) => {
-    const first = net.createServer();
-    first.once('error', () => resolve(false));
-    first.listen(port, '127.0.0.1', () => {
-      first.close(() => {
-        const second = net.createServer();
-        second.once('error', () => resolve(false));
-        second.listen(port + 1, '127.0.0.1', () => second.close(() => resolve(true)));
-      });
-    });
-  });
-}
-
-async function chooseBasePort() {
-  for (let attempt = 0; attempt < 50; attempt += 1) {
-    const port = 20000 + Math.floor(Math.random() * 39999);
-    if (await probePort(port)) return port;
-  }
-  throw new Error('no free base port in 20000..60000');
-}
-
 function headOf(repo) {
   try {
     return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim();
@@ -195,7 +170,7 @@ async function main() {
     for (const dir of Object.values(rootDirs)) fs.mkdirSync(dir, { recursive: true });
   }
 
-  const port = await chooseBasePort();
+  const port = await freePortPair();
   const bin = path.resolve(args.goBin);
   const env = { ...process.env, HYPERCLAY_PAGE_COMPACTION: '0' };
 

@@ -31,6 +31,15 @@ const STRUCTURE_KINDS = {
 // Request fields the Go host resolves itself, so no request carries them.
 const UNSENDABLE = new Set(['context', 'filePath', 'hooks']);
 
+// A commit whose reply was lost (a dropped connection, say) may have landed. The
+// adapter asks Go what became of the op before it reports a failure: for up to
+// ten seconds it waits out a running op, then takes the answer /v1/op recorded
+// (protocol v1, "GET /v1/op/<opId>").
+const LOST_REPLY_ATTEMPTS = 50;
+const LOST_REPLY_DELAY_MS = 100;
+
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 const tally = { kinds: {} };
 // Every subscription to a root sees every commit frame, and a root has more than
 // one subscriber, so a commit is counted once per frame cursor, which is unique
@@ -132,14 +141,16 @@ function transportError(error, opId) {
 
 function answerError(answer, opId) {
   let message = `the Go document host answered ${answer.status}`;
+  let parsed = null;
   try {
-    const parsed = JSON.parse(answer.body.toString('utf8'));
+    parsed = JSON.parse(answer.body.toString('utf8'));
     if (parsed && typeof parsed.error === 'string') message = parsed.error;
   } catch {
     // A body that is not JSON leaves the status as the message.
   }
   const error = new Error(message);
   error.status = answer.status;
+  if (parsed && typeof parsed === 'object') error.body = parsed;
   if (opId) error.opId = opId;
   return error;
 }
@@ -200,10 +211,16 @@ function createGoDocumentHost({ ctx, checkpointClaim = serviceMode ? serviceMode
     if (request_.hooks) throw new TypeError('hooks ended in M16');
     const opId = randomBytes(16).toString('hex');
     countKind(request_.kind).adapter += 1;
-    const answer = await request('POST', '/v1/commit', {
-      body: { opId, root: rootId(), ...bodyFor(request_) },
-      opId,
-    });
+    let answer;
+    try {
+      answer = await request('POST', '/v1/commit', {
+        body: { opId, root: rootId(), ...bodyFor(request_) },
+        opId,
+      });
+    } catch (error) {
+      if (error.code !== 'host-unreachable') throw error;
+      answer = await reconcileLostReply(opId, error);
+    }
     const result = {
       outcome: answer.outcome,
       reason: answer.reason ?? null,
@@ -220,6 +237,30 @@ function createGoDocumentHost({ ctx, checkpointClaim = serviceMode ? serviceMode
       Object.defineProperty(result, 'error', { value: error, enumerable: false });
     }
     return result;
+  }
+
+  // A commit whose reply was lost may have landed (P12). Before anyone retries,
+  // ask Go what became of the op: a finished commit's record carries the exact
+  // reply /v1/commit answered (CONTROL-PROTOCOL.md, /v1/op). An op Go does not
+  // know (it never arrived, or Go restarted), or one that finished without a
+  // reply, keeps the original failure, and nothing is retried here.
+  async function reconcileLostReply(opId, failure) {
+    for (let attempt = 0; attempt < LOST_REPLY_ATTEMPTS; attempt += 1) {
+      let status;
+      try {
+        status = await request('GET', `/v1/op/${opId}`);
+      } catch {
+        await delay(LOST_REPLY_DELAY_MS);
+        continue;
+      }
+      if (status && status.state === 'running') {
+        await delay(LOST_REPLY_DELAY_MS);
+        continue;
+      }
+      if (status && status.answer && typeof status.answer === 'object') return status.answer;
+      throw failure;
+    }
+    throw failure;
   }
 
   // Local's read goes by the file path alone, and the sync engine passes no name
@@ -304,10 +345,16 @@ function createGoDocumentHost({ ctx, checkpointClaim = serviceMode ? serviceMode
     const claim = checkpointClaim ? checkpointClaim(target) : null;
     pendingCheckpoints.set(opId, { target, room, claim, filePath });
     try {
-      const answer = await request('POST', '/v1/checkpoint', {
-        body: { opId, root: rootId(), name, roomIdentity: String(roomIdentity), generation: generation ?? null },
-        opId,
-      });
+      let answer;
+      try {
+        answer = await request('POST', '/v1/checkpoint', {
+          body: { opId, root: rootId(), name, roomIdentity: String(roomIdentity), generation: generation ?? null },
+          opId,
+        });
+      } catch (error) {
+        if (error.body && typeof error.body.code === 'string') error.code = error.body.code;
+        throw error;
+      }
       if (answer.kind === 'indeterminate') {
         const error = new Error(`the checkpoint of ${name} may not have reached disk`);
         error.code = answer.reason ?? 'indeterminate';

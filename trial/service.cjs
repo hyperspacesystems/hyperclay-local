@@ -39,6 +39,10 @@ const roomsPackage = () => require('@panphora/clayjs/server/rooms');
 const BEARER = 'Bearer ';
 const MAX_BODY = 64 * 1024 * 1024;
 const RECONCILE_MEMORY_MS = 5 * 60 * 1000;
+// How long a new service keeps asking Go for the documents an earlier service
+// left unconfirmed, and how long it waits between asks.
+const RECOVER_ATTEMPTS = 20;
+const RECOVER_DELAY_MS = 500;
 // The room-owning public routes Go forwards arrive under this prefix.
 const ROUTE_PREFIX = '/v1/route';
 const SUPERVISOR_PATHS = new Set(['/v1/flush', '/v1/peer', '/v1/snapshot/take', '/v1/checkpoint-wait']);
@@ -589,6 +593,35 @@ function createTrialService({
     await goCall('POST', '/v1/reconciled', { root: rootId, name });
   }
 
+  // Documents Go still holds unconfirmed, because a settle was lost with an
+  // earlier service process: each is reconciled from disk and released, as a
+  // settle-failed abort would have done. Without this, every later save of such
+  // a document answers 503 until the whole host restarts.
+  async function recoverUnconfirmed() {
+    for (let attempt = 0; attempt < RECOVER_ATTEMPTS; attempt += 1) {
+      let answer = null;
+      try {
+        answer = await goCall('GET', '/v1/unconfirmed');
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, RECOVER_DELAY_MS));
+        continue;
+      }
+      let failed = 0;
+      for (const entry of (answer && answer.documents) || []) {
+        const record = roots.get(entry.root);
+        if (!record) continue;
+        try {
+          await reconcile({ root: entry.root, name: entry.name, canonicalPath: path.join(record.path, entry.name) });
+        } catch (error) {
+          failed += 1;
+          logError(`reconcile of ${entry.name} after a service restart failed:`, error);
+        }
+      }
+      if (failed === 0) return;
+      await new Promise((resolve) => setTimeout(resolve, RECOVER_DELAY_MS));
+    }
+  }
+
   // POST /v1/render-checkpoint: Local's renderCheckpoint for a checkpoint the
   // service started through Go (the adapter's POST /v1/checkpoint). The room,
   // its target and the admission claim are what the adapter recorded under the
@@ -1110,6 +1143,7 @@ function createTrialService({
       }
       events?.();
       events = followEvents();
+      recoverUnconfirmed().catch((error) => logError('recovering unconfirmed documents failed:', error));
     },
     close() {
       events?.();

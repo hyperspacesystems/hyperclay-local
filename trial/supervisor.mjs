@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
+import net from 'node:net';
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -124,11 +125,40 @@ function terminate({ child, exitPromise, graceMs }) {
   });
 }
 
+// A port the pair can have: Go gives root i the port `port + i`, so both P and
+// P+1 must be free on loopback before the hosts start.
+function probePort(port) {
+  return new Promise((resolve) => {
+    const first = net.createServer();
+    first.once('error', () => resolve(false));
+    first.listen(port, '127.0.0.1', () => {
+      first.close(() => {
+        const second = net.createServer();
+        second.once('error', () => resolve(false));
+        second.listen(port + 1, '127.0.0.1', () => second.close(() => resolve(true)));
+      });
+    });
+  });
+}
+
+export async function freePortPair() {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    const port = 20000 + Math.floor(Math.random() * 39999);
+    if (await probePort(port)) return port;
+  }
+  throw new Error('no free base port in 20000..60000');
+}
+
 /**
  * The managed trial's host pair: the JS service as its own process, then Go
  * attached to it, then the service attached to Go (protocol v1, "Transport and
  * bootstrap"). Answers what `startGo` in trial/p1.mjs answers, plus `service`,
  * so every P script can take either.
+ *
+ * Either child can then be killed (`kill`) or restarted (`restartGo`,
+ * `restartService`) without losing the pair's public root URLs, because a tab's
+ * URL has to survive a restart. A restarted child is told about its peer through
+ * `/v1/peer`, as at boot.
  */
 export async function startManaged({
   bin, cwd = REPO, env = process.env, scratch, roots, localSource = cwd,
@@ -139,130 +169,228 @@ export async function startManaged({
   writeFileSync(serviceLog, '');
   writeFileSync(goLog, '');
 
-  const serviceSecret = randomBytes(32).toString('hex');
-  const goSecret = randomBytes(32).toString('hex');
+  const basePort = port === 0 ? await freePortPair() : port;
 
   const kids = [];
   const shutdown = () => Promise.all(kids.map((kid) => terminate({ ...kid, graceMs }).catch(() => {})));
 
-  const serviceChild = spawn(
-    process.execPath,
-    [...serviceNodeArgs, path.join(REPO, 'trial', 'service-main.cjs')],
-    { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] },
-  );
-  const serviceExit = new Promise((resolve) => serviceChild.once('exit', (code, signal) => resolve({ code, signal })));
-  kids.push({ child: serviceChild, exitPromise: serviceExit });
-  for (const stream of [serviceChild.stdout, serviceChild.stderr]) {
-    stream.setEncoding('utf8');
-    stream.on('data', (chunk) => {
-      try {
-        appendFileSync(serviceLog, chunk);
-      } catch {
-        // A log that cannot be written is only a lost witness.
-      }
-    });
+  function pipeLog(streams, child, logPath) {
+    for (const stream of streams) {
+      stream.setEncoding('utf8');
+      stream.on('data', (chunk) => {
+        try {
+          appendFileSync(logPath, chunk);
+        } catch {
+          // A log that cannot be written is only a lost witness.
+        }
+      });
+    }
+    child.stdin.on('error', () => {});
   }
-  serviceChild.stdin.on('error', () => {});
 
-  let goChild = null;
-  let goExit = null;
-  let serviceUrl = null;
-  let serviceEpoch = null;
-  let flushed = null;
+  // The service process, from spawn to its READY line: its URL, epoch and secret.
+  async function startServiceChild() {
+    const secret = randomBytes(32).toString('hex');
+    const child = spawn(
+      process.execPath,
+      [...serviceNodeArgs, path.join(REPO, 'trial', 'service-main.cjs')],
+      { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] },
+    );
+    const exitPromise = new Promise((resolve) => child.once('exit', (code, signal) => resolve({ code, signal })));
+    kids.push({ child, exitPromise });
+    pipeLog([child.stdout, child.stderr], child, serviceLog);
 
-  try {
-    const serviceLines = lineReader(serviceChild.stdout);
-    serviceChild.stdin.write(`${JSON.stringify({ v: 1, secret: serviceSecret })}\n`);
-    const readyLine = await waitFor(serviceLines.next(/^READY (\{.*\})$/), {
-      child: serviceChild, name: 'service', timeoutMs, step: 'the service’s READY line',
+    const lines = lineReader(child.stdout);
+    child.stdin.write(`${JSON.stringify({ v: 1, secret })}\n`);
+    const readyLine = await waitFor(lines.next(/^READY (\{.*\})$/), {
+      child, name: 'service', timeoutMs, step: 'the service\u2019s READY line',
     });
-    const serviceReady = JSON.parse(/^READY (\{.*\})$/.exec(readyLine)[1]);
-    serviceUrl = serviceReady.url;
-    serviceEpoch = serviceReady.epoch;
+    const ready = JSON.parse(/^READY (\{.*\})$/.exec(readyLine)[1]);
+    return {
+      child, exitPromise, lines, secret, url: ready.url, epoch: ready.epoch,
+    };
+  }
 
-    goChild = spawn(bin, [
+  // The Go process, from spawn to its READY line, bootstrapped with the service
+  // it should consult: its control URL, epoch, secret and the roots it serves.
+  async function startGoChild(service) {
+    const secret = randomBytes(32).toString('hex');
+    const child = spawn(bin, [
       '--root', roots[0],
       '--root', roots[1],
-      '--port', String(port),
+      '--port', String(basePort),
       '--local-source', localSource,
       '--bootstrap-stdin',
     ], { cwd, env, stdio: ['pipe', 'pipe', 'inherit'] });
-    goExit = new Promise((resolve) => goChild.once('exit', (code, signal) => resolve({ code, signal })));
-    kids.push({ child: goChild, exitPromise: goExit });
-    goChild.stdout.setEncoding('utf8');
-    goChild.stdout.on('data', (chunk) => {
-      try {
-        appendFileSync(goLog, chunk);
-      } catch {
-        // A log that cannot be written is only a lost witness.
-      }
-    });
-    goChild.stdin.on('error', () => {});
+    const exitPromise = new Promise((resolve) => child.once('exit', (code, signal) => resolve({ code, signal })));
+    kids.push({ child, exitPromise });
+    pipeLog([child.stdout], child, goLog);
 
-    const goLines = lineReader(goChild.stdout);
-    goChild.stdin.write(`${JSON.stringify({
+    const lines = lineReader(child.stdout);
+    child.stdin.write(`${JSON.stringify({
       v: 1,
-      secret: goSecret,
-      service: { url: serviceUrl, secret: serviceSecret, epoch: serviceEpoch },
+      secret,
+      service: { url: service.url, secret: service.secret, epoch: service.epoch },
     })}\n`);
-    const goReadyLine = await waitFor(goLines.next(/^READY (\{.*\})$/), {
-      child: goChild, name: 'go host', timeoutMs, step: 'the go host’s READY line',
+    const readyLine = await waitFor(lines.next(/^READY (\{.*\})$/), {
+      child, name: 'go host', timeoutMs, step: 'the go host\u2019s READY line',
     });
-    const goReady = JSON.parse(/^READY (\{.*\})$/.exec(goReadyLine)[1]);
+    const ready = JSON.parse(/^READY (\{.*\})$/.exec(readyLine)[1]);
+    return {
+      child, exitPromise, lines, secret, control: ready.control, epoch: ready.epoch, roots: ready.roots, ready,
+    };
+  }
 
-    serviceChild.stdin.write(`${JSON.stringify({
+  // The service's half of the bootstrap: Go's control URL, secret, epoch and
+  // READY roots, answered with ATTACHED once it has registered every root.
+  async function attachService(service, host) {
+    service.child.stdin.write(`${JSON.stringify({
       host: {
-        url: goReady.control,
-        secret: goSecret,
-        epoch: goReady.epoch,
-        roots: goReady.roots,
+        url: host.control,
+        secret: host.secret,
+        epoch: host.epoch,
+        roots: host.roots,
       },
     })}\n`);
-    await waitFor(serviceLines.next(/^ATTACHED$/), {
-      child: serviceChild, name: 'service', timeoutMs, step: 'the service’s answer to the attach',
+    await waitFor(service.lines.next(/^ATTACHED$/), {
+      child: service.child, name: 'service', timeoutMs, step: 'the service\u2019s answer to the attach',
     });
+  }
+
+  async function postPeer(url, secret, body) {
+    const answer = await fetch(`${url}/v1/peer`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${secret}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
+    if (answer.status !== 200) {
+      throw new Error(`${url}/v1/peer answered ${answer.status}: ${await answer.text()}`);
+    }
+    return answer.json().catch(() => null);
+  }
+
+  const publicUrls = (readyRoots) => (readyRoots ?? []).map((root) => root.url);
+
+  let session = null;
+  let goStarted = false;
+
+  try {
+    const service = await startServiceChild();
+    const go = await startGoChild(service);
+    goStarted = true;
+    await attachService(service, go);
+
+    const target = assertReady(go.ready, roots[0]);
+    if (typeof go.control !== 'string' || !go.control) {
+      throw new Error('the go host names no control URL');
+    }
 
     async function stop() {
-      flushed = null;
+      session.flushed = null;
       try {
-        const answer = await fetch(`${serviceUrl}/v1/flush`, {
+        const answer = await fetch(`${session.service.url}/v1/flush`, {
           method: 'POST',
           headers: {
-            authorization: `Bearer ${serviceSecret}`,
+            authorization: `Bearer ${session.service.secret}`,
             'content-type': 'application/json',
           },
           body: JSON.stringify({ deadlineMs: 10000 }),
         });
-        flushed = await answer.json();
+        session.flushed = await answer.json();
       } catch {
-        flushed = null;
+        session.flushed = null;
       }
-      session.flushed = flushed;
-      await terminate({ child: serviceChild, exitPromise: serviceExit, graceMs });
-      await terminate({ child: goChild, exitPromise: goExit, graceMs });
+      await terminate({ child: session.service.child, exitPromise: session.service.exitPromise, graceMs });
+      await terminate({ child: session.child, exitPromise: session.goExit, graceMs });
     }
 
-    const target = assertReady(goReady, roots[0]);
-    if (typeof goReady.control !== 'string' || !goReady.control) {
-      throw new Error('the go host names no control URL');
+    // SIGKILL one child and answer how it went, without restarting anything.
+    async function kill(which) {
+      if (which !== 'go' && which !== 'service') throw new Error(`the supervisor runs no ${which}`);
+      const record = which === 'go' ? session : session.service;
+      if (!exited(record.child)) record.child.kill('SIGKILL');
+      return which === 'go' ? session.goExit : session.service.exitPromise;
     }
-    const session = {
+
+    // A new Go process over the same roots and port, told to the service through
+    // its /v1/peer so every open consultation is aborted and every room
+    // reconciled; the public root URLs stay what a tab already has.
+    async function restartGo() {
+      const before = publicUrls(session.readyRoots);
+      await terminate({ child: session.child, exitPromise: session.goExit, graceMs });
+      const go = await startGoChild(session.service);
+      const target_ = assertReady(go.ready, roots[0]);
+      session.child = go.child;
+      session.goExit = go.exitPromise;
+      session.secret = go.secret;
+      session.control = go.control;
+      session.goEpoch = go.epoch;
+      session.readyRoots = go.roots;
+      session.url = target_.url;
+      session.root = target_.root;
+      await postPeer(session.service.url, session.service.secret, {
+        url: go.control, secret: go.secret, epoch: go.epoch,
+      });
+      const after = publicUrls(session.readyRoots);
+      if (JSON.stringify(before) !== JSON.stringify(after)) {
+        throw new Error(`a restarted go host serves ${JSON.stringify(after)}, not ${JSON.stringify(before)}`);
+      }
+      return session;
+    }
+
+    // A new service process, told to Go through its /v1/peer before it attaches,
+    // so its first calls to Go carry an epoch Go accepts; then the host line and
+    // its ATTACHED answer, exactly as at boot.
+    async function restartService() {
+      await terminate({ child: session.service.child, exitPromise: session.service.exitPromise, graceMs });
+      const service_ = await startServiceChild();
+      await postPeer(session.control, session.secret, {
+        url: service_.url, secret: service_.secret, epoch: service_.epoch,
+      });
+      session.service = {
+        url: service_.url,
+        secret: service_.secret,
+        epoch: service_.epoch,
+        child: service_.child,
+        exitPromise: service_.exitPromise,
+        logPath: serviceLog,
+      };
+      await attachService(service_, {
+        control: session.control, secret: session.secret, epoch: session.goEpoch, roots: session.readyRoots,
+      });
+      return session;
+    }
+
+    session = {
       ...target,
-      secret: goSecret,
-      control: goReady.control,
-      readyRoots: goReady.roots,
-      child: goChild,
+      secret: go.secret,
+      control: go.control,
+      goEpoch: go.epoch,
+      readyRoots: go.roots,
+      child: go.child,
+      goExit: go.exitPromise,
       logPath: goLog,
       service: {
-        url: serviceUrl, secret: serviceSecret, epoch: serviceEpoch, child: serviceChild, logPath: serviceLog,
+        url: service.url,
+        secret: service.secret,
+        epoch: service.epoch,
+        child: service.child,
+        exitPromise: service.exitPromise,
+        logPath: serviceLog,
       },
       flushed: null,
+      kill,
+      restartGo,
+      restartService,
       stop,
     };
     return session;
   } catch (error) {
     await shutdown();
-    const name = goChild ? 'go-host.log' : 'service.log';
+    const name = goStarted ? 'go-host.log' : 'service.log';
     const logPath = path.join(scratch, name);
     throw new Error(`${error?.message || String(error)}; last of ${name}:\n${tailOf(logPath)}`);
   }

@@ -182,6 +182,42 @@ test('epoch headers are sent only by a connection that names both epochs', async
   assert.equal(control.requests[3].path.startsWith('/v1/read'), true);
 });
 
+test('a refused checkpoint throws with the refusal\u2019s code', async () => {
+  const target = { rootId: 'root-0', logicalPath: 'a.html', identity: 'room-7' };
+  const room = { key: '/x/a.html', nodeId: 'n1', seq: 4 };
+  let opId = null;
+  const control = await fakeControl((record) => {
+    opId = record.body.opId;
+    return { status: 409, json: { msg: 'x', msgType: 'error', code: 'moved-or-deleted' } };
+  });
+  connect(control);
+
+  await assert.rejects(host().checkpoint(...CALL, { target, room }), (error) => {
+    assert.equal(error.code, 'moved-or-deleted');
+    assert.equal(error.status, 409);
+    return true;
+  });
+  assert.equal(checkpointContext(opId), null);
+});
+
+test('a refusal without a code keeps its status and no code', async () => {
+  const target = { rootId: 'root-0', logicalPath: 'a.html', identity: 'room-7' };
+  const room = { key: '/x/a.html', nodeId: 'n1', seq: 4 };
+  let opId = null;
+  const control = await fakeControl((record) => {
+    opId = record.body.opId;
+    return { status: 500, json: { msg: 'x', msgType: 'error' } };
+  });
+  connect(control);
+
+  await assert.rejects(host().checkpoint(...CALL, { target, room }), (error) => {
+    assert.equal(error.status, 500);
+    assert.equal(error.code, undefined);
+    return true;
+  });
+  assert.equal(checkpointContext(opId), null);
+});
+
 test('a transport failure is host-unreachable and the context is gone', async () => {
   const target = { rootId: 'root-0', logicalPath: 'a.html', identity: 'room-7' };
   const room = { key: '/x/a.html', nodeId: 'n1', seq: 4 };

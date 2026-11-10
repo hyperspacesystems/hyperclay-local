@@ -64,6 +64,79 @@ function firstFrame(target, query) {
   });
 }
 
+// A call to Go's control API, answering the parsed JSON of a 200.
+function controlCall(target, method, pathname, body) {
+  const payload = body === undefined ? null : Buffer.from(JSON.stringify(body), 'utf8');
+  const headers = { authorization: `Bearer ${target.secret}` };
+  if (payload) {
+    headers['content-type'] = 'application/json';
+    headers['content-length'] = String(payload.length);
+  }
+  return new Promise((resolve, reject) => {
+    const req = http.request(`${target.control}${pathname}`, { method, headers }, (response) => {
+      const chunks = [];
+      response.on('data', (chunk) => chunks.push(chunk));
+      response.on('end', () => {
+        const text = Buffer.concat(chunks).toString('utf8');
+        if (response.statusCode !== 200) {
+          reject(new Error(`${pathname} answered ${response.statusCode}: ${text}`));
+          return;
+        }
+        try {
+          resolve(text ? JSON.parse(text) : null);
+        } catch (error) {
+          reject(error);
+        }
+      });
+      response.on('error', reject);
+    });
+    req.on('error', reject);
+    if (payload) req.write(payload);
+    req.end();
+  });
+}
+
+// Every frame of Go's control stream, in the order it arrives, until the
+// returned function closes the stream.
+function streamFrames(target, frames) {
+  const req = http.request(`${target.control}/v1/events`, {
+    method: 'GET',
+    headers: { authorization: `Bearer ${target.secret}`, accept: 'application/x-ndjson' },
+  }, (response) => {
+    let buffer = '';
+    response.setEncoding('utf8');
+    response.on('data', (chunk) => {
+      buffer += chunk;
+      let index;
+      while ((index = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, index);
+        buffer = buffer.slice(index + 1);
+        if (!line.trim()) continue;
+        try {
+          frames.push(JSON.parse(line));
+        } catch {
+          // A line that is not a frame is not one of the frames counted.
+        }
+      }
+    });
+    response.on('error', () => {});
+  });
+  req.on('error', () => {});
+  req.end();
+  return () => req.destroy();
+}
+
+// A loopback port nothing listens on, so a connection to it is refused.
+function closedPortUrl() {
+  return new Promise((resolve) => {
+    const server = http.createServer();
+    server.listen(0, '127.0.0.1', () => {
+      const { port } = server.address();
+      server.close(() => resolve(`http://127.0.0.1:${port}`));
+    });
+  });
+}
+
 function liveStub() {
   return { markBrowserSave() {}, broadcast() {} };
 }
@@ -348,6 +421,71 @@ test('the Go document host adapter', { skip: SKIP }, async (t) => {
       second();
     }
     assert.equal(adapterCounts().kinds['browser-save'].committed, before.committed + 1);
+  });
+
+  await t.test('a commit whose reply was lost asks Go what became of the op', async () => {
+    const filePath = path.join(roots[0], 'notes.html');
+    const created = await host.commit({
+      kind: 'create',
+      name: 'notes.html',
+      filePath,
+      bytes: document('notes-one'),
+      expected: { type: 'absent' },
+      context: {},
+    });
+    assert.equal(created.outcome, 'committed');
+    const current = await host.read('notes.html');
+    assert.equal(typeof current.checksum, 'string');
+
+    const frames = [];
+    const stop = streamFrames(go, frames);
+    try {
+      await wait(200);
+      const armed = await controlCall(go, 'POST', '/v1/fault', { point: 'drop-reply', rel: 'notes.html' });
+      assert.equal(armed.armed, 1);
+
+      const saved = await host.commit({
+        kind: 'browser-save',
+        name: 'notes.html',
+        filePath,
+        bytes: document('notes-two'),
+        expected: { type: 'checksum', value: current.checksum },
+        context: {},
+      });
+      assert.equal(saved.outcome, 'committed');
+      assert.equal(typeof saved.etag, 'string');
+      assert.ok(saved.etag.length > 0, saved.etag);
+      assert.match(fs.readFileSync(filePath, 'utf8'), /notes-two/);
+
+      const counted = await until(() => frames.filter((frame) => frame.type === 'commit' && frame.rel === 'notes.html').length > 0);
+      assert.equal(counted, true, 'no commit frame arrived');
+      await wait(500);
+      const commits = frames.filter((frame) => frame.type === 'commit' && frame.rel === 'notes.html');
+      assert.equal(commits.length, 1, JSON.stringify(commits));
+
+      const op = await controlCall(go, 'GET', `/v1/op/${commits[0].opId}`);
+      assert.equal(op.state, 'committed');
+      assert.equal(op.answer.outcome, 'committed');
+      assert.equal(frames.filter((frame) => frame.type === 'commit' && frame.opId === commits[0].opId).length, 1);
+    } finally {
+      stop();
+    }
+  });
+
+  await t.test('an op Go never received keeps the failure', async () => {
+    const closed = await closedPortUrl();
+    setConnection({ url: closed, secret: go.secret, roots: { [roots[0]]: 'root-0' } });
+    const started = Date.now();
+    try {
+      await assert.rejects(host.commit({ kind: 'browser-save', name: 'unheard.html', bytes: document('unheard') }), (error) => {
+        assert.equal(error.code, 'host-unreachable');
+        assert.match(error.opId, /^[0-9a-f]{32}$/);
+        return true;
+      });
+    } finally {
+      connect(go);
+    }
+    assert.ok(Date.now() - started < 10000, `the failure took ${Date.now() - started}ms`);
   });
 
   await t.test('a restarted host makes the stream say gap first', async () => {
