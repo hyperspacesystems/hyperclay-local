@@ -1,6 +1,7 @@
 'use strict';
 
 const http = require('http');
+const path = require('path');
 const { realpathSync } = require('fs');
 const { randomBytes } = require('crypto');
 const { getConnection } = require('./go-process.cjs');
@@ -176,8 +177,32 @@ function createGoDocumentHost({ ctx }) {
     return result;
   }
 
-  async function read(name) {
-    const query = `?root=${encodeURIComponent(rootId())}&name=${encodeURIComponent(name)}`;
+  // Local's read goes by the file path alone, and the sync engine passes no name
+  // when it has only the path (reconcile/execute.js readLocalBytes). So a given
+  // path decides the name: its place under the served root. A path whose folder
+  // does not exist is a missing file, as Local's ENOENT is; one outside the root
+  // is refused.
+  function nameOf(name, filePath, root = ctx.root) {
+    if (typeof filePath !== 'string' || !filePath) return name;
+    const base = realpathSync(root.path);
+    let folder;
+    try {
+      folder = realpathSync(path.dirname(filePath));
+    } catch (error) {
+      if (error.code === 'ENOENT') return null;
+      throw error;
+    }
+    const rel = path.relative(base, path.join(folder, path.basename(filePath)));
+    if (!rel || rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) {
+      throw new Error(`the Go document host does not serve ${filePath}`);
+    }
+    return rel.split(path.sep).join('/');
+  }
+
+  async function read(name, filePath) {
+    const rel = nameOf(name, filePath);
+    if (rel === null) return null;
+    const query = `?root=${encodeURIComponent(rootId())}&name=${encodeURIComponent(rel)}`;
     const answer = await request('GET', `/v1/read${query}`);
     if (!answer || answer.exists !== true) return null;
     return { bytes: decodeReadBytes(answer.bytes), checksum: answer.checksum ?? null };

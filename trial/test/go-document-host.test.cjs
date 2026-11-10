@@ -203,6 +203,16 @@ test('the Go document host adapter', { skip: SKIP }, async (t) => {
     assert.equal(await host.read('not-here.html'), null);
   });
 
+  await t.test('a read by path alone, as the sync engine makes it, reads the same file', async () => {
+    const byName = await host.read('index.html');
+    const byPath = await host.read(null, path.join(roots[0], 'index.html'));
+    assert.ok(byPath, 'read(null, filePath) found nothing for a file that exists');
+    assert.deepEqual(byPath.bytes, byName.bytes);
+    assert.equal(byPath.checksum, byName.checksum);
+    assert.equal(await host.read(null, path.join(roots[0], 'no-folder', 'x.html')), null);
+    await assert.rejects(host.read(null, path.join(roots[1], 'index.html')), /does not serve/);
+  });
+
   await t.test('a restructure moves a document', async () => {
     fs.writeFileSync(path.join(roots[0], 'move-me.html'), document('move'));
     const moved = await host.restructure({ kind: 'move', steps: [{ from: 'move-me.html', to: 'moved.html' }] });
