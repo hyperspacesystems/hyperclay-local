@@ -132,7 +132,7 @@ function terminate({ child, exitPromise, graceMs }) {
  */
 export async function startManaged({
   bin, cwd = REPO, env = process.env, scratch, roots, localSource = cwd,
-  serviceNodeArgs = [], timeoutMs = READY_TIMEOUT_MS, graceMs = STOP_GRACE_MS,
+  serviceNodeArgs = [], port = 0, timeoutMs = READY_TIMEOUT_MS, graceMs = STOP_GRACE_MS,
 }) {
   const serviceLog = path.join(scratch, 'service.log');
   const goLog = path.join(scratch, 'go-host.log');
@@ -183,7 +183,7 @@ export async function startManaged({
     goChild = spawn(bin, [
       '--root', roots[0],
       '--root', roots[1],
-      '--port', '0',
+      '--port', String(port),
       '--local-source', localSource,
       '--bootstrap-stdin',
     ], { cwd, env, stdio: ['pipe', 'pipe', 'inherit'] });

@@ -39,7 +39,7 @@ const MAX_BODY = 64 * 1024 * 1024;
 const RECONCILE_MEMORY_MS = 5 * 60 * 1000;
 // The room-owning public routes Go forwards arrive under this prefix.
 const ROUTE_PREFIX = '/v1/route';
-const SUPERVISOR_PATHS = new Set(['/v1/flush', '/v1/peer', '/v1/snapshot/take']);
+const SUPERVISOR_PATHS = new Set(['/v1/flush', '/v1/peer', '/v1/snapshot/take', '/v1/checkpoint-wait']);
 
 // The consultation a piece of room code is running for, so the authority's
 // recovered-copy writer knows where its artifact goes.
@@ -905,6 +905,53 @@ function createTrialService({
       });
       reply({ unsaved, timedOut: Boolean(result.timedOut) });
     }, (error) => reply({ error: failedWith(error) }, 500));
+  });
+
+  // Local's HTTP suite's /checkpoint-wait, answered where the rooms live: until
+  // the document's room is clean and no checkpoint is pending, or the budget
+  // runs out (tests/helpers/host-http-fixture.cjs, the same loop).
+  handlers.set('/v1/checkpoint-wait', (body, reply) => {
+    const record = roots.get(body.root);
+    if (!record || typeof body.name !== 'string' || !body.name) {
+      reply({ error: 'bad-request' }, 400);
+      return;
+    }
+    let key = path.join(record.path, body.name);
+    try {
+      key = realpathSync(key);
+    } catch {
+      // A document that is not there has no room to wait for.
+    }
+    const timeoutMs = Number.isFinite(body.timeoutMs) ? Math.max(0, body.timeoutMs) : 10000;
+    const started = Date.now();
+    const deadline = started + timeoutMs;
+    let observed = false;
+    (async () => {
+      for (;;) {
+        const pending = checkpoint.pending(key);
+        if (pending) {
+          observed = true;
+          try {
+            await pending;
+          } catch {
+            // A failed attempt leaves the room dirty, which the next pass sees.
+          }
+          continue;
+        }
+        const room = authority.rooms.get(key);
+        if (room && authority.roomIsDirty(room)) {
+          observed = true;
+          if (Date.now() >= deadline) {
+            reply({ error: 'checkpoint-timeout', detail: `room still dirty after ${Date.now() - started} ms`, observed }, 504);
+            return;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 25));
+          continue;
+        }
+        reply({ ok: true, dirty: false, observed, waitedMs: Date.now() - started });
+        return;
+      }
+    })().catch((error) => reply({ error: failedWith(error) }, 500));
   });
 
   // The snapshot a tab's relay left for the next upload, taken once. A repeat
