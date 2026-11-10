@@ -774,6 +774,43 @@ function createDocumentHost(deps) {
     await fs.copyFile(from, to, fs.constants.COPYFILE_EXCL);
   }
 
+  // The structure lane's room half before any entry moves: the authority's plan
+  // for these steps, which holds every document they touch. Null without an
+  // authority, and for the copy kinds, which take no plan.
+  function prepareRestructure({ kind, rootId = null, steps, entries, token }) {
+    const policy = STRUCTURE_KINDS[kind];
+    const authority = ctx.localAuthority;
+    if (!authority || policy.copy) return null;
+    return authority.prepareStructure(token, {
+      rootId,
+      steps: steps.map((step, index) => ({
+        from: entries[index].from, fromRel: step.from,
+        to: policy.retire ? null : entries[index].to, toRel: policy.retire ? null : step.to,
+      })),
+    });
+  }
+
+  // Its confirmation once the entries moved: the completed steps commit into the
+  // authority, and the plan is released on every outcome.
+  function settleRestructure({ plan, completed, copiedSteps = [], token }) {
+    if (!plan) return;
+    const authority = ctx.localAuthority;
+    try {
+      if (completed) authority.commitStructure(plan, completed, token, { copiedSteps });
+    } finally {
+      authority.releaseStructure(plan, token);
+    }
+  }
+
+  // A copy's confirmation, after each entry lands: the copied destination is
+  // admitted as a live document path.
+  function admitCopy({ rootId = null, step, entry, token }) {
+    const authority = ctx.localAuthority;
+    if (!authority) return;
+    authority.setAdmission(token, { rootId, logicalPath: step.to,
+      canonicalPath: entry.to.canonical, active: true, prefix: entry.from.isDir });
+  }
+
   async function restructure({ kind, rootId = null, steps, context = {} }) {
     if (!Object.hasOwn(STRUCTURE_KINDS, kind)) throw new TypeError(`Unknown structure kind: ${kind}`);
     const policy = STRUCTURE_KINDS[kind];
@@ -787,10 +824,7 @@ function createDocumentHost(deps) {
         for (const [index, entry] of entries.entries()) {
           await fs.mkdir(path.dirname(entry.to.canonical), { recursive: true });
           await copyStructure(entry.from.location, entry.to.canonical);
-          if (authority) {
-            authority.setAdmission(token, { rootId, logicalPath: steps[index].to,
-              canonicalPath: entry.to.canonical, active: true, prefix: entry.from.isDir });
-          }
+          admitCopy({ rootId, step: steps[index], entry, token });
           completed = index + 1;
         }
       } catch (error) {
@@ -799,13 +833,7 @@ function createDocumentHost(deps) {
       const outcome = !failure ? 'committed' : completed ? 'partial' : 'failed';
       return withCause({ outcome, completed, reason: failure ? (failure.code ?? 'failed') : null }, failure);
     }
-    const plan = authority ? authority.prepareStructure(token, {
-      rootId,
-      steps: steps.map((step, index) => ({
-        from: entries[index].from, fromRel: step.from,
-        to: policy.retire ? null : entries[index].to, toRel: policy.retire ? null : step.to,
-      })),
-    }) : null;
+    const plan = prepareRestructure({ kind, rootId, steps, entries, token });
     let completed = 0;
     let failure = null;
     const copiedSteps = [];
@@ -817,13 +845,7 @@ function createDocumentHost(deps) {
     } catch (error) {
       failure = error;
     } finally {
-      if (plan) {
-        try {
-          if (completed) authority.commitStructure(plan, completed, token, { copiedSteps });
-        } finally {
-          authority.releaseStructure(plan, token);
-        }
-      }
+      settleRestructure({ plan, completed, copiedSteps, token });
     }
     const outcome = !failure ? 'committed' : completed ? 'partial' : 'failed';
     return withCause({ outcome, completed, reason: failure ? (failure.code ?? 'failed') : null }, failure);
@@ -953,6 +975,7 @@ function createDocumentHost(deps) {
       prepareReplace, admitReplace, settleReplace,
       admitRebase, settleRebase, settleCreate, settleExact: confirmExact,
       renderCheckpoint,
+      prepareRestructure, settleRestructure, admitCopy,
     },
   };
 }
