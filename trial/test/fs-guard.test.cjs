@@ -184,6 +184,22 @@ main().catch((error) => {
   assert.equal(report.counts.allowed, 0);
 });
 
+test("the sync engine's root marker, temp file and rename included, is sync state", () => {
+  const { root } = plant();
+  const marker = path.join(__dirname, '..', '..', 'src', 'sync-engine', 'root-marker.js');
+  const script = String.raw`
+const { writeRootMarker } = require(process.env.GUARD_TEST_MARKER);
+writeRootMarker(process.env.GUARD_TEST_ROOT, 'root-1');
+`;
+  const { result, report } = runGuard(script, {
+    roots: [root],
+    env: { GUARD_TEST_ROOT: root, GUARD_TEST_MARKER: marker },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(report.forbidden, []);
+  assert.ok(find(report.allowed, 'writeFileSync', '.hyperclay/sync-root.json.tmp'), 'the temp write is recorded as allowed');
+});
+
 test('without FS_GUARD_ROOTS the guard stays dormant but writes still happen', () => {
   const { root } = plant();
   const script = String.raw`

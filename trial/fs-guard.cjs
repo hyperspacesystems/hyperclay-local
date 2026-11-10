@@ -63,7 +63,9 @@ function toPathString(target) {
 }
 
 function classifyRelative(rel, op) {
-  if (rel === '.hyperclay/sync-root.json' || rel.startsWith('.hyperclay/conflicts/')) {
+  // The root marker is written to its own temp file and renamed into place
+  // (src/sync-engine/root-marker.js), so both names are the marker's write.
+  if (rel === '.hyperclay/sync-root.json' || rel === '.hyperclay/sync-root.json.tmp' || rel.startsWith('.hyperclay/conflicts/')) {
     return { class: 'sync-state', allowed: true };
   }
   for (const dir of GO_STORAGE_DIRS) {
