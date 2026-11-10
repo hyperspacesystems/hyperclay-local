@@ -68,6 +68,33 @@ function liveStub() {
   return { markBrowserSave() {}, broadcast() {} };
 }
 
+// A relay snapshot posted to the served root's own `/_/sync`, the way a browser
+// tab hands the platform its unstripped working state.
+function postRelay(target, rel, html) {
+  const body = Buffer.from(JSON.stringify({ snapshot: html }), 'utf8');
+  return new Promise((resolve, reject) => {
+    const req = http.request(`${target.url}/_/sync`, {
+      method: 'POST',
+      headers: {
+        'Document-URL': `${target.url}/${rel}`,
+        'content-type': 'application/json',
+        'content-length': String(body.length),
+      },
+    }, (response) => {
+      const chunks = [];
+      response.on('data', (chunk) => chunks.push(chunk));
+      response.on('end', () => resolve({
+        status: response.statusCode,
+        body: Buffer.concat(chunks).toString('utf8'),
+      }));
+      response.on('error', reject);
+    });
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+}
+
 test('the Go document host adapter', { skip: SKIP }, async (t) => {
   const tmp = realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'hcl-go-host-')));
   const bin = path.join(tmp, 'managed-trial');
@@ -190,6 +217,29 @@ test('the Go document host adapter', { skip: SKIP }, async (t) => {
     assert.equal(await host.pageState({ op: 'write', name: 'moved.html', record: { v: 1, rev: 'rev-1', tag: 'tag-1' } }), undefined);
     await host.pageState({ op: 'move', name: 'moved.html', to: 'moved-again.html' });
     await host.pageState({ op: 'drop', name: 'moved-again.html' });
+  });
+
+  await t.test('takeSnapshot answers a relay snapshot once, then null', async (t) => {
+    const rel = 'relayed.html';
+    const html = document('relayed');
+    const relayed = await postRelay(go, rel, html);
+    if (relayed.status === 404) {
+      t.skip('pending G9b: Go has no /v1/snapshot/take yet');
+      return;
+    }
+    assert.equal(relayed.status, 200, `the relay answered ${relayed.status}: ${relayed.body}`);
+    let taken;
+    try {
+      taken = await host.takeSnapshot(rel);
+    } catch (error) {
+      if (error.code === 'pending-g9b') {
+        t.skip('pending G9b: Go has no /v1/snapshot/take yet');
+        return;
+      }
+      throw error;
+    }
+    assert.equal(taken && taken.html, html);
+    assert.equal(await host.takeSnapshot(rel), null);
   });
 
   await t.test('hooks and unknown kinds are refused before any request', async () => {
