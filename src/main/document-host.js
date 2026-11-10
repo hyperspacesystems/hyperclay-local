@@ -820,6 +820,9 @@ function createDocumentHost(deps) {
 }
 
 function createRootDocumentHost({ ctx, live = require('./utils/root-live.js').createRootLive(ctx.root), emit = () => {}, logger = null, loadCheckpoint, getObserver = () => null }) {
+  if (process.env.HYPERCLAY_LOCAL_DOCUMENT_HOST === 'go') {
+    return require(path.join(__dirname, '..', '..', 'trial', 'go-document-host.cjs')).createGoDocumentHost({ ctx, live, emit, logger });
+  }
   const { getConsentRegistry, resolveWritePath, validateSegments } = require('./utils/path-resolver.js');
   const { snapshotStoreFor } = require('./utils/snapshot-store.js');
   const { TAILWIND_DIR, VERSIONS_DIR } = require('./utils/artifact-paths.js');
