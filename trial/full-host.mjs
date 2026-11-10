@@ -17,13 +17,17 @@ import { startManaged } from './supervisor.mjs';
 
 const require = createRequire(import.meta.url);
 const { createWorkspaceLifecycle } = require('../src/main/workspace/lifecycle.js');
+const { compileTailwind } = require('tailwind-hyperclay');
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const FIXTURE = path.join(REPO, 'trial', 'managed-fixture.mjs');
 const HTTP_RUN = path.join(REPO, 'tests', 'http', 'run.mjs');
-const CONDITIONS = ['p9', 'p10'];
+const CONDITIONS = ['p9', 'p10', 'p11', 'p13'];
 const PROFILE = 'local-full';
 const DOC = 'p9.html';
+const TW_DOC = 'tw.html';
+const TW_STYLESHEET = 'tw';
+const GUARD_DOC = 'guard.html';
 const MANIFEST_DEADLINE_MS = 90000;
 
 const P10_CASES = [
@@ -55,9 +59,9 @@ function parseArgs(argv) {
     else if (flag === '--go-bin') args.goBin = value;
     else args.out = value;
   }
-  if (!args.condition) throw new Error('--condition is required (p9 or p10)');
+  if (!args.condition) throw new Error('--condition is required (p9, p10, p11 or p13)');
   if (!CONDITIONS.includes(args.condition)) {
-    throw new Error(`unknown --condition: ${args.condition} (p9 or p10)`);
+    throw new Error(`unknown --condition: ${args.condition} (p9, p10, p11 or p13)`);
   }
   if (!args.goBin) throw new Error('--go-bin is required');
   if (!args.out) throw new Error('--out is required');
@@ -277,6 +281,54 @@ export function judgeP9({
   };
 }
 
+export function judgeP11({ outputMatches, saveBeforeCompile, staleInstalls } = {}) {
+  const count = (value) => (Number.isFinite(Number(value)) ? Number(value) : 0);
+  const matches = count(outputMatches);
+  const beforeCompile = count(saveBeforeCompile);
+  const stale = count(staleInstalls);
+  const reasons = [];
+  if (matches !== 3) reasons.push(`the stylesheet matched the expected CSS ${matches} of 3 times`);
+  if (beforeCompile !== 1) reasons.push(`the save waited for its compile, or the held compile published before release (saveBeforeCompile=${beforeCompile})`);
+  if (stale !== 0) reasons.push(`an older compile replaced the newer stylesheet (staleInstalls=${stale})`);
+  return {
+    pass: reasons.length === 0,
+    outputMatches: matches,
+    saveBeforeCompile: beforeCompile,
+    staleInstalls: stale,
+    reasons,
+  };
+}
+
+export function judgeP13({ raised, notices, restored } = {}) {
+  const count = (value) => (Number.isFinite(Number(value)) ? Number(value) : 0);
+  const raisedCount = count(raised);
+  const noticeCount = count(notices);
+  const restoredCount = count(restored);
+  const reasons = [];
+  if (raisedCount !== 2) reasons.push(`the guard raised ${raisedCount} of 2 events`);
+  if (noticeCount !== 2) reasons.push(`${noticeCount} of 2 data-loss notices reached a live stream`);
+  if (restoredCount !== 2) reasons.push(`${restoredCount} of 2 restores brought the three items back`);
+  return {
+    pass: reasons.length === 0,
+    raised: raisedCount,
+    notices: noticeCount,
+    restored: restoredCount,
+    reasons,
+  };
+}
+
+function p11Summary(verdict) {
+  const head = `P11 ${verdict.pass ? 'PASS' : 'FAIL'} ` +
+    `outputMatches=${verdict.outputMatches} saveBeforeCompile=${verdict.saveBeforeCompile} staleInstalls=${verdict.staleInstalls}`;
+  return verdict.pass ? head : [head, ...verdict.reasons].join('\n');
+}
+
+function p13Summary(verdict) {
+  const head = `P13 ${verdict.pass ? 'PASS' : 'FAIL'} ` +
+    `raised=${verdict.raised} notices=${verdict.notices} restored=${verdict.restored}`;
+  return verdict.pass ? head : [head, ...verdict.reasons].join('\n');
+}
+
 function p10Summary(verdict) {
   const head = `P10 ${verdict.pass ? 'PASS' : 'FAIL'} ` +
     `liveReads=${verdict.liveReads} preservedDirty=${verdict.preservedDirty} staleWrites=${verdict.staleWrites}`;
@@ -332,6 +384,407 @@ export async function runP10({ goBin, out } = {}) {
     return { report, exitCode: verdict.pass ? 0 : 1 };
   } finally {
     if (fixture) await stopFixture(fixture);
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+async function waitUntil(predicate, timeoutMs, intervalMs = 50) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const value = await predicate();
+    if (value) return value;
+    if (Date.now() >= deadline) return null;
+    await wait(intervalMs);
+  }
+}
+
+async function fetchText(target, options = {}) {
+  const response = await fetch(target, options);
+  const text = await response.text();
+  let body = null;
+  try { body = text ? JSON.parse(text) : null; } catch { body = text; }
+  return {
+    status: response.status, body, text, headers: response.headers,
+  };
+}
+
+function saveDocument(rootUrl, name, html, headers = {}) {
+  return fetchText(`${rootUrl}/_/save`, {
+    method: 'POST',
+    headers: { 'content-type': 'text/html', 'document-url': `${rootUrl}/${name}`, ...headers },
+    body: html,
+  });
+}
+
+function postJson(target, body) {
+  return fetchText(target, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+function rootUrlAt(session, index) {
+  const entry = (session.readyRoots ?? [])[index];
+  if (!entry || !entry.url) throw new Error(`the go host names no root at index ${index}`);
+  return entry.url;
+}
+
+async function startTrialSession({ bin, scratch, roots }) {
+  const port = await chooseBasePort();
+  try {
+    return await startManaged({
+      bin, scratch, roots, port, env: { ...process.env, HYPERCLAY_PAGE_COMPACTION: '0' },
+    });
+  } catch (error) {
+    throw couldNotDemonstrate(`the managed session did not start: ${error?.message || String(error)}`);
+  }
+}
+
+function controlFaultFor(session) {
+  return async (body) => {
+    const response = await fetch(`${session.control}/v1/fault`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${session.secret}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
+    const text = await response.text();
+    let parsed = null;
+    try { parsed = text ? JSON.parse(text) : null; } catch { parsed = text; }
+    return { status: response.status, body: parsed };
+  };
+}
+
+// The document a Tailwind save compiles: one link to the site's stylesheet and
+// one element carrying the classes under test.
+function twDocument(classes) {
+  return `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>tw</title>
+    <link rel="stylesheet" href="/tailwindcss/${TW_STYLESHEET}.css">
+  </head>
+  <body>
+    <div class="${classes}">tailwind</div>
+  </body>
+</html>
+`;
+}
+
+// trial/test/service-routes.test.cjs's PLAIN, rendered with the list items given.
+const GUARD_ITEMS = [
+  '      <li><span class="name">alpha</span><input type="checkbox" checked></li>',
+  '      <li><span class="name">beta</span><input type="checkbox"></li>',
+  '      <li><span class="name">gamma</span><input type="checkbox" checked></li>',
+];
+
+function guardDocument(items) {
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>List</title>
+    <script type="application/json" data-rules-name="api" data-rules-version="1">{"title":"h1","items":["ul.items li",{"name":".name","done":"input@checked"}]}</script>
+  </head>
+  <body>
+    <h1>List</h1>
+    <ul class="items">
+${items.join('\n')}
+    </ul>
+  </body>
+</html>
+`;
+}
+
+// A tab's live subscription: GET /_/sync for one document, every SSE event's
+// data kept for the caller.
+async function openLiveStream({
+  origin, docPath, lane, clientId, signal,
+}) {
+  const documentUrl = `${origin}/${docPath}`;
+  const query = new URLSearchParams({ 'document-url': documentUrl, lane, 'client-id': clientId });
+  const response = await fetch(`${origin}/_/sync?${query}`, {
+    headers: { 'document-url': documentUrl },
+    signal,
+  });
+  const events = [];
+  if (response.status !== 200) {
+    return { status: response.status, lane, events, close: async () => {} };
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  const pump = (async () => {
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let at;
+        while ((at = buffer.indexOf('\n\n')) >= 0) {
+          const chunk = buffer.slice(0, at);
+          buffer = buffer.slice(at + 2);
+          const event = { event: 'message', data: '' };
+          for (const line of chunk.split('\n')) {
+            if (line.startsWith('event: ')) event.event = line.slice(7);
+            else if (line.startsWith('data: ')) event.data += line.slice(6);
+          }
+          events.push(event);
+        }
+      }
+    } catch {}
+  })();
+  const close = async () => {
+    try { await reader.cancel(); } catch {}
+    await pump;
+  };
+  return { status: 200, lane, events, close };
+}
+
+export async function runP11({ goBin, out } = {}) {
+  const bin = path.resolve(goBin);
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'full-host-p11-'));
+  const rootA = path.join(tmp, 'root-a');
+  const rootB = path.join(tmp, 'root-b');
+  const docPath = path.join(rootA, TW_DOC);
+  const cssPath = path.join(rootA, '.hyperclay', 'tailwindcss', `${TW_STYLESHEET}.css`);
+  for (const dir of [rootA, rootB, path.join(tmp, 'scratch-1'), path.join(tmp, 'scratch-2')]) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  const detail = { steps: {} };
+  let outputMatches = 0;
+  let saveBeforeCompile = 0;
+  let staleInstalls = 1;
+  let session = null;
+  try {
+    const readCss = () => {
+      try { return fs.readFileSync(cssPath, 'utf8'); } catch { return null; }
+    };
+    const expectedCss = () => compileTailwind(fs.readFileSync(docPath, 'utf8'));
+
+    session = await startTrialSession({ bin, scratch: path.join(tmp, 'scratch-1'), roots: [rootA, rootB] });
+    let urlA = rootUrlAt(session, 0);
+
+    const first = await saveDocument(urlA, TW_DOC, twDocument('text-red-500 p-4'));
+    detail.steps.saveFirst = { status: first.status, body: first.body };
+    const firstAppeared = await waitUntil(() => readCss() !== null, 15000);
+    const firstExpected = await expectedCss();
+    const firstCss = readCss();
+    detail.steps.first = { appeared: firstAppeared === true, bytes: firstCss === null ? null : firstCss.length };
+    if (firstAppeared && firstCss === firstExpected) outputMatches += 1;
+    else detail.steps.first.mismatch = 'the stylesheet is not the expected CSS for the saved bytes';
+
+    const second = await saveDocument(urlA, TW_DOC, twDocument('text-red-500 p-4 bg-blue-200'));
+    detail.steps.saveSecond = { status: second.status, body: second.body };
+    const secondChanged = await waitUntil(() => readCss() !== null && readCss() !== firstCss, 15000);
+    const secondExpected = await expectedCss();
+    const secondCss = readCss();
+    detail.steps.second = { changed: secondChanged === true, bytes: secondCss === null ? null : secondCss.length };
+    if (secondChanged && secondCss === secondExpected) outputMatches += 1;
+    else detail.steps.second.mismatch = 'the changed stylesheet is not the expected CSS for the new bytes';
+
+    const beforeRestart = await expectedCss();
+    await session.stop();
+    session = null;
+    session = await startTrialSession({ bin, scratch: path.join(tmp, 'scratch-2'), roots: [rootA, rootB] });
+    urlA = rootUrlAt(session, 0);
+    const served = await fetchText(`${urlA}/tailwindcss/${TW_STYLESHEET}.css`);
+    detail.steps.restart = { status: served.status, bytes: served.text.length };
+    if (served.status === 200 && served.text === beforeRestart) outputMatches += 1;
+    else detail.steps.restart.mismatch = `GET /tailwindcss/${TW_STYLESHEET}.css answered ${served.status} with ${
+      served.text === beforeRestart ? 'the expected CSS' : 'other bytes'}`;
+
+    const fault = controlFaultFor(session);
+    const heldCount = async () => {
+      const answer = await fault({ point: 'held', rel: TW_STYLESHEET });
+      return answer.body && answer.body.held;
+    };
+
+    const armedHold = await fault({ point: 'tailwind-hold', rel: TW_STYLESHEET, count: 1 });
+    const releaseSaved = await saveDocument(urlA, TW_DOC, twDocument('m-8'));
+    const becameHeld = await waitUntil(async () => (await heldCount()) === 1, 5000);
+    const duringHold = readCss();
+    const heldOut = duringHold !== null && !duringHold.includes('.m-8');
+    const released = await fault({ point: 'release', rel: TW_STYLESHEET });
+    const heldExpected = await expectedCss();
+    const afterRelease = await waitUntil(() => {
+      const css = readCss();
+      return css !== null && css.includes('.m-8') && css === heldExpected;
+    }, 15000);
+    detail.steps.saveBeforeCompile = {
+      armed: armedHold.body,
+      save: releaseSaved.status,
+      held: becameHeld === true,
+      unchangedWhileHeld: heldOut,
+      released: released.body,
+      installedAfterRelease: afterRelease === true,
+    };
+    if (releaseSaved.status === 200 && becameHeld && heldOut &&
+        released.body && released.body.released === 1 && afterRelease) {
+      saveBeforeCompile = 1;
+    }
+
+    const armedStale = await fault({ point: 'tailwind-hold', rel: TW_STYLESHEET, count: 1 });
+    const oldSave = await saveDocument(urlA, TW_DOC, twDocument('underline'));
+    const oldHeld = await waitUntil(async () => (await heldCount()) === 1, 5000);
+    const newSave = await saveDocument(urlA, TW_DOC, twDocument('italic'));
+    const italicExpected = await expectedCss();
+    const italicInstalled = await waitUntil(() => readCss() === italicExpected, 15000);
+    const releasedStale = await fault({ point: 'release', rel: TW_STYLESHEET });
+    await wait(1500);
+    const afterStaleRelease = readCss();
+    detail.steps.stale = {
+      armed: armedStale.body,
+      oldSave: oldSave.status,
+      held: oldHeld === true,
+      newSave: newSave.status,
+      installed: italicInstalled === true,
+      released: releasedStale.body,
+      stillNewer: afterStaleRelease === italicExpected,
+    };
+    staleInstalls = afterStaleRelease === italicExpected ? 0 : 1;
+
+    const verdict = judgeP11({ outputMatches, saveBeforeCompile, staleInstalls });
+    const report = {
+      schema: 1,
+      condition: 'p11',
+      goBin: bin,
+      verdict: verdict.pass ? 'pass' : 'fail',
+      pass: verdict.pass,
+      outputMatches: verdict.outputMatches,
+      saveBeforeCompile: verdict.saveBeforeCompile,
+      staleInstalls: verdict.staleInstalls,
+      reasons: verdict.reasons,
+      detail,
+      summary: p11Summary(verdict),
+    };
+    return { report, exitCode: verdict.pass ? 0 : 1 };
+  } finally {
+    if (session) {
+      try { await session.stop(); } catch {}
+    }
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+export async function runP13({ goBin, out } = {}) {
+  const bin = path.resolve(goBin);
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'full-host-p13-'));
+  const rootA = path.join(tmp, 'root-a');
+  const rootB = path.join(tmp, 'root-b');
+  const docPath = path.join(rootA, GUARD_DOC);
+  for (const dir of [rootA, rootB, path.join(tmp, 'scratch')]) fs.mkdirSync(dir, { recursive: true });
+  const abort = new AbortController();
+  const detail = {};
+  const streams = [];
+  let raised = 0;
+  let notices = 0;
+  let restored = 0;
+  let session = null;
+  try {
+    session = await startTrialSession({ bin, scratch: path.join(tmp, 'scratch'), roots: [rootA, rootB] });
+    const urlA = rootUrlAt(session, 0);
+
+    const seeded = await saveDocument(urlA, GUARD_DOC, guardDocument(GUARD_ITEMS));
+    detail.seed = { status: seeded.status, body: seeded.body };
+
+    streams.push(await openLiveStream({
+      origin: urlA, docPath: GUARD_DOC, lane: 'live', clientId: 'tab-live', signal: abort.signal,
+    }));
+    streams.push(await openLiveStream({
+      origin: urlA, docPath: GUARD_DOC, lane: 'saved', clientId: 'tab-saved', signal: abort.signal,
+    }));
+    detail.streams = streams.map((stream) => ({ lane: stream.lane, status: stream.status }));
+    await wait(200);
+
+    const raisedNotices = () => streams.reduce((total, stream) => total + stream.events.filter((event) => {
+      if (!event.data) return false;
+      let parsed = null;
+      try { parsed = JSON.parse(event.data); } catch { return false; }
+      return Boolean(parsed) && parsed.msgType === 'data-loss' && parsed.action === 'raised';
+    }).length, 0);
+
+    const step = async (label, mutate) => {
+      const noticesBefore = raisedNotices();
+      const mutation = await mutate();
+
+      const event = await waitUntil(async () => {
+        const answer = await fetchText(`${urlA}/_/data-loss?file=${encodeURIComponent(GUARD_DOC)}`);
+        const body = answer.body;
+        return body && body.event && typeof body.event.id === 'string' ? body.event : null;
+      }, 10000);
+      if (event) raised += 1;
+
+      const notified = await waitUntil(() => raisedNotices() > noticesBefore, 10000);
+      if (notified) notices += 1;
+
+      let restore = { status: null, body: null };
+      if (event) {
+        restore = await postJson(`${urlA}/_/data-loss/${encodeURIComponent(event.id)}`, {
+          file: GUARD_DOC, id: event.id, choice: 'restore',
+        });
+      }
+
+      const back = await waitUntil(async () => {
+        const answer = await fetchText(`${urlA}/_/api/${encodeURIComponent(GUARD_DOC)}`);
+        const body = answer.body;
+        return body && Array.isArray(body.items) && body.items.length === 3 ? body : null;
+      }, 10000);
+      if (restore.status === 200 && restore.body && restore.body.status === 'restored' && back) restored += 1;
+
+      detail[label] = {
+        mutation,
+        event: event ? { id: event.id, status: event.status, restorable: event.restorable } : null,
+        notice: notified === true,
+        noticeData: streams.flatMap((stream) => stream.events)
+          .map((entry) => { try { return JSON.parse(entry.data); } catch { return null; } })
+          .filter((parsed) => parsed && parsed.msgType === 'data-loss')
+          .map((parsed) => parsed.action),
+        restore: { status: restore.status, body: restore.body },
+        items: back ? back.items.length : null,
+      };
+    };
+
+    // A browser save that drops two of the three items, with the provenance
+    // header a person's save carries (Save-Trigger: user, ui-gestured).
+    await step('browserSave', async () => {
+      const saved = await saveDocument(urlA, GUARD_DOC, guardDocument(GUARD_ITEMS.slice(0, 1)), { 'save-trigger': 'user' });
+      return { status: saved.status, body: saved.body, headers: { 'save-trigger': 'user' } };
+    });
+
+    // Another program writing the same loss straight to disk.
+    await step('outsideEdit', async () => {
+      fs.writeFileSync(docPath, guardDocument(GUARD_ITEMS.slice(0, 1)));
+      return { wrote: docPath };
+    });
+
+    const verdict = judgeP13({ raised, notices, restored });
+    const report = {
+      schema: 1,
+      condition: 'p13',
+      goBin: bin,
+      verdict: verdict.pass ? 'pass' : 'fail',
+      pass: verdict.pass,
+      raised: verdict.raised,
+      notices: verdict.notices,
+      restored: verdict.restored,
+      reasons: verdict.reasons,
+      detail,
+      summary: p13Summary(verdict),
+    };
+    return { report, exitCode: verdict.pass ? 0 : 1 };
+  } finally {
+    abort.abort();
+    for (const stream of streams) {
+      try { await stream.close(); } catch {}
+    }
+    if (session) {
+      try { await session.stop(); } catch {}
+    }
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 }
@@ -608,9 +1061,10 @@ export async function main(argv) {
   const out = resolveOut(args.out);
   let result;
   try {
-    result = args.condition === 'p10'
-      ? await runP10({ goBin: args.goBin, out })
-      : await runP9({ goBin: args.goBin, out });
+    if (args.condition === 'p11') result = await runP11({ goBin: args.goBin, out });
+    else if (args.condition === 'p13') result = await runP13({ goBin: args.goBin, out });
+    else if (args.condition === 'p10') result = await runP10({ goBin: args.goBin, out });
+    else result = await runP9({ goBin: args.goBin, out });
   } catch (error) {
     if (error && error.code === 'could-not-demonstrate') {
       const report = {

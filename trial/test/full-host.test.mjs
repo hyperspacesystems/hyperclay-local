@@ -6,7 +6,9 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-import { judgeP9, judgeP10 } from '../full-host.mjs';
+import {
+  judgeP9, judgeP10, judgeP11, judgeP13,
+} from '../full-host.mjs';
 import { GITHUB_ROOT } from '../setup.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -55,10 +57,10 @@ test('an --out that is not empty is refused without starting a host', () => {
 test('an unknown --condition is refused without starting a host', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'full-host-test-out-'));
   try {
-    const run = refuse(['--condition', 'p11', '--go-bin', MISSING_BIN, '--out', dir]);
+    const run = refuse(['--condition', 'p12', '--go-bin', MISSING_BIN, '--out', dir]);
     assert.equal(run.signal, null);
     assert.equal(run.status, 2, run.stderr);
-    assert.match(run.stderr, /unknown --condition: p11/);
+    assert.match(run.stderr, /unknown --condition: p12/);
     assert.deepEqual(fs.readdirSync(dir), []);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -161,5 +163,61 @@ for (const [label, change] of P9_FAILURES) {
     const verdict = judgeP9(withTerm(change));
     assert.equal(verdict.pass, false);
     assert.equal(verdict.reasons.length, 1, verdict.reasons.join('; '));
+  });
+}
+
+const P11_OK = { outputMatches: 3, saveBeforeCompile: 1, staleInstalls: 0 };
+
+test('P11 passes only when all three terms hold', () => {
+  const verdict = judgeP11(P11_OK);
+  assert.equal(verdict.pass, true, verdict.reasons.join('; '));
+  assert.deepEqual(verdict.reasons, []);
+  assert.equal(verdict.outputMatches, 3);
+  assert.equal(verdict.saveBeforeCompile, 1);
+  assert.equal(verdict.staleInstalls, 0);
+});
+
+const P11_FAILURES = [
+  ['one of the three stylesheets did not match', (m) => { m.outputMatches = 2; }, /2 of 3/],
+  ['the save waited for its compile', (m) => { m.saveBeforeCompile = 0; }, /saveBeforeCompile=0/],
+  ['an older compile replaced newer output', (m) => { m.staleInstalls = 1; }, /staleInstalls=1/],
+];
+
+for (const [label, change, pattern] of P11_FAILURES) {
+  test(`P11 fails when ${label}`, () => {
+    const measured = { ...P11_OK };
+    change(measured);
+    const verdict = judgeP11(measured);
+    assert.equal(verdict.pass, false);
+    assert.equal(verdict.reasons.length, 1, verdict.reasons.join('; '));
+    assert.match(verdict.reasons[0], pattern);
+  });
+}
+
+const P13_OK = { raised: 2, notices: 2, restored: 2 };
+
+test('P13 passes only when all three counts are met', () => {
+  const verdict = judgeP13(P13_OK);
+  assert.equal(verdict.pass, true, verdict.reasons.join('; '));
+  assert.deepEqual(verdict.reasons, []);
+  assert.equal(verdict.raised, 2);
+  assert.equal(verdict.notices, 2);
+  assert.equal(verdict.restored, 2);
+});
+
+const P13_FAILURES = [
+  ['the guard raised no event', (m) => { m.raised = 1; }, /raised 1 of 2/],
+  ['a notice never reached a stream', (m) => { m.notices = 1; }, /1 of 2 data-loss notices/],
+  ['a restore did not bring the items back', (m) => { m.restored = 1; }, /1 of 2 restores/],
+];
+
+for (const [label, change, pattern] of P13_FAILURES) {
+  test(`P13 fails when ${label}`, () => {
+    const measured = { ...P13_OK };
+    change(measured);
+    const verdict = judgeP13(measured);
+    assert.equal(verdict.pass, false);
+    assert.equal(verdict.reasons.length, 1, verdict.reasons.join('; '));
+    assert.match(verdict.reasons[0], pattern);
   });
 }
