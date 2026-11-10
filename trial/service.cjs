@@ -23,7 +23,7 @@ const { withDocumentWrite, withStructureChange } = require(path.join(SRC, 'utils
 const { withReader, disk } = require(path.join(SRC, 'document-reader.js'));
 const { createRootLive } = require(path.join(SRC, 'utils', 'root-live.js'));
 const { RootObserver } = require(path.join(SRC, 'root-observer.js'));
-const { pageWriteFailure } = require(path.join(SRC, 'server.js'));
+const { pageWriteFailure, createApp, getAndClearSnapshot } = require(path.join(SRC, 'server.js'));
 const { writeContexts } = require(path.join(SRC, 'write-contexts.js'));
 const { documentEtag } = require(path.join(SRC, 'spec-wire.js'));
 const { logicalBytes } = require(path.join(SRC, 'page-state-store.js'));
@@ -37,6 +37,9 @@ const roomsPackage = () => require('@panphora/clayjs/server/rooms');
 const BEARER = 'Bearer ';
 const MAX_BODY = 64 * 1024 * 1024;
 const RECONCILE_MEMORY_MS = 5 * 60 * 1000;
+// The room-owning public routes Go forwards arrive under this prefix.
+const ROUTE_PREFIX = '/v1/route';
+const SUPERVISOR_PATHS = new Set(['/v1/flush', '/v1/peer', '/v1/snapshot/take']);
 
 // The consultation a piece of room code is running for, so the authority's
 // recovered-copy writer knows where its artifact goes.
@@ -293,6 +296,11 @@ function createTrialService({
   const handlers = new Map();
   let go = null;
 
+  // Every Local host this process builds writes through Go: the app mounted on
+  // the forwarded routes, the observer's, the checkpoint's. The lane halves the
+  // handlers run are the one exception (inProcessLanes), and they never write.
+  process.env.HYPERCLAY_LOCAL_DOCUMENT_HOST = 'go';
+
   const authority = createLocalAuthority({ withDocument: withDocumentWrite, publishRecovered });
   const checkpoint = createLocalCheckpoint({ authority });
   authority.setCheckpointService(checkpoint);
@@ -431,7 +439,8 @@ function createTrialService({
       const prepared = await root.lanes.prepareSave({ name, bytes: incoming, pageConversion });
       return root.lanes.admitSave({
         name, filePath, origin: saveOrigin(lane, body.origin),
-        content: prepared.content, fileContent: prepared.fileContent, dataLossPrev: text(body.dataLossPrev),
+        content: prepared.content, fileContent: prepared.fileContent,
+        dataLossPrev: text(body.dataLossPrev) ?? text(body.current?.logical),
         ifMatch: headers['if-match'] ?? null, pageConversion, pageWrite: headers['page-write'] ?? null,
         pageFormat: headers['page-format'] ?? null, persistentToken: context?.persistentToken ?? null,
         target, token, writeSafetyVersion: writers.safetyVersion,
@@ -810,10 +819,136 @@ function createTrialService({
     return given.length === expected.length && timingSafeEqual(given, expected);
   }
 
-  // Go sends its own epoch and the one it knows for this process.
-  function epochCurrent(req) {
+  // Go sends its own epoch and the one it knows for this process. The
+  // supervisor is not the service's peer: its calls carry no epoch, as its
+  // calls to Go carry none (control.go `controlEpochAuthorized`).
+  function epochCurrent(req, pathname) {
+    if (req.headers['x-trial-epoch'] === undefined && SUPERVISOR_PATHS.has(pathname)) return true;
     return Boolean(go) && req.headers['x-trial-epoch'] === go.epoch && req.headers['x-trial-peer-epoch'] === epoch;
   }
+
+  // A room-owning public request Go forwarded (protocol v1, `/v1/route/*`):
+  // Local's own app for that root answers it, seeing the request as the tab
+  // sent it to Go's public listener. Go set the root and the public host from
+  // its own resolution; the private headers go no further.
+  function forwardToApp(req, res) {
+    const record = roots.get(String(req.headers['x-trial-root'] ?? ''));
+    const publicHost = req.headers['x-trial-public-host'];
+    if (!record || !record.app || typeof publicHost !== 'string' || !publicHost) return send(res, 400, { error: 'route' });
+    req.url = req.url.slice(ROUTE_PREFIX.length) || '/';
+    if (!req.url.startsWith('/')) req.url = `/${req.url}`;
+    req.headers.host = publicHost;
+    delete req.headers.authorization;
+    for (const name of Object.keys(req.headers)) {
+      if (name.startsWith('x-trial-')) delete req.headers[name];
+    }
+    record.app(req, res);
+    return undefined;
+  }
+
+  // Go's notices for a path (the data-loss guard raised or resolved, data API
+  // warnings) arrive on its event stream and go to the tabs through this
+  // process's live hub, in stream order (protocol v1, "Go's notices reach the
+  // tabs through the event stream"). The stream is followed from attach, and
+  // again from where it stood after any disconnect.
+  let events = null;
+  function followEvents() {
+    let since = '';
+    let stopped = false;
+    let request = null;
+    const connect = () => {
+      if (stopped) return;
+      const connection = getConnection();
+      request = http.request(`${connection.url}/v1/events?since=${encodeURIComponent(since)}`, {
+        method: 'GET', headers: { authorization: `${BEARER}${connection.secret}`, accept: 'application/x-ndjson' },
+      }, (response) => {
+        let buffer = '';
+        response.setEncoding('utf8');
+        response.on('data', (chunk) => {
+          buffer += chunk;
+          for (let index = buffer.indexOf('\n'); index >= 0; index = buffer.indexOf('\n')) {
+            const line = buffer.slice(0, index);
+            buffer = buffer.slice(index + 1);
+            let frame;
+            try {
+              frame = JSON.parse(line);
+            } catch {
+              continue;
+            }
+            if (frame.cursor) since = frame.cursor;
+            if (frame.type === 'notice') roots.get(frame.root)?.live.notify(frame.rel, frame.payload);
+          }
+        });
+        response.on('error', () => {});
+        response.on('close', () => {
+          if (!stopped) setTimeout(connect, 200).unref();
+        });
+      });
+      request.on('error', () => {
+        if (!stopped) setTimeout(connect, 500).unref();
+      });
+      request.end();
+    };
+    connect();
+    return () => {
+      stopped = true;
+      request?.destroy();
+    };
+  }
+
+  // The supervisor's calls (protocol v1, "The supervisor calls the service").
+  handlers.set('/v1/flush', (body, reply) => {
+    checkpoint.flushDirty({ timeoutMs: Number(body.deadlineMs) || 5000 }).then((result) => {
+      const unsaved = result.unsaved.map((key) => {
+        const target = authority.checkpointTargets(key)[0];
+        return target ? { root: target.rootId, name: target.logicalPath } : { root: null, name: key };
+      });
+      reply({ unsaved, timedOut: Boolean(result.timedOut) });
+    }, (error) => reply({ error: failedWith(error) }, 500));
+  });
+
+  // The snapshot a tab's relay left for the next upload, taken once. A repeat
+  // with the same takeId answers the same, so a lost reply does not erase the
+  // snapshot the upload needs.
+  const takes = new Map();
+  handlers.set('/v1/snapshot/take', (body, reply) => {
+    prune(takes);
+    if (takes.has(body.takeId)) {
+      reply(takes.get(body.takeId).answer);
+      return;
+    }
+    const answer = { snapshot: getAndClearSnapshot(body.name, body.root) };
+    takes.set(body.takeId, { answer, at: Date.now() });
+    reply(answer);
+  });
+
+  // A restarted Go: every consultation of the old one is aborted (its handlers
+  // release their reservations and holds), and every open room is reconciled
+  // from what the new Go reads before it admits edits (protocol v1, Failures,
+  // "Go restart").
+  handlers.set('/v1/peer', (body, reply) => {
+    if (typeof body.url !== 'string' || typeof body.secret !== 'string' || typeof body.epoch !== 'string') {
+      reply({ error: 'peer needs url, secret and epoch' }, 400);
+      return;
+    }
+    for (const consultation of consultations.values()) consultation.abort('epoch');
+    tombstones.clear();
+    touched.clear();
+    takes.clear();
+    go = { url: body.url, secret: body.secret, epoch: body.epoch };
+    const byPath = {};
+    for (const record of roots.values()) byPath[record.path] = record.id;
+    setConnection({ url: body.url, secret: body.secret, epoch, peerEpoch: body.epoch, roots: byPath });
+    events?.();
+    events = followEvents();
+    reply({ ok: true, epoch });
+    for (const key of authority.rooms.keys()) {
+      for (const target of authority.checkpointTargets(key).slice(0, 1)) {
+        reconcile({ root: target.rootId, name: target.logicalPath, canonicalPath: key })
+          .catch((error) => logError(`reconcile of ${target.logicalPath} after a Go restart failed:`, error));
+      }
+    }
+  });
 
   function send(res, status, body) {
     const payload = Buffer.from(JSON.stringify(body), 'utf8');
@@ -848,8 +983,9 @@ function createTrialService({
   async function handle(req, res) {
     if (req.headers.host !== `127.0.0.1:${server.address().port}`) return send(res, 403, { error: 'host' });
     if (!authorized(req)) return send(res, 401, { error: 'unauthorized' });
-    if (!epochCurrent(req)) return send(res, 409, { error: 'epoch', epoch });
     const { pathname } = new URL(req.url, 'http://service');
+    if (!epochCurrent(req, pathname)) return send(res, 409, { error: 'epoch', epoch });
+    if (pathname === ROUTE_PREFIX || pathname.startsWith(`${ROUTE_PREFIX}/`)) return forwardToApp(req, res);
     const handler = req.method === 'POST' ? handlers.get(pathname) : null;
     if (!handler) return send(res, 404, { error: 'not found' });
     const body = await readJson(req);
@@ -909,11 +1045,19 @@ function createTrialService({
         const record = {
           id: root.id, path: canonical, origin: entry.url, live, ctx, observer: ctx.observer, goHost, lanes: inProcessLanes(ctx),
         };
+        // Local's own app answers the routes Go forwards. Its document host is
+        // the Go adapter (this process runs with the trial switch on), which it
+        // registers with the checkpoint service in place of goHost.
+        record.app = createApp({ ...ctx, devHooks: null, isKnownPath: null });
         roots.set(root.id, record);
         rootsByPath.set(canonical, record);
       }
+      events?.();
+      events = followEvents();
     },
     close() {
+      events?.();
+      events = null;
       checkpoint.stopSweep();
       authority.close();
       server.closeAllConnections?.();
