@@ -130,3 +130,24 @@ test('the managed fixture answers what the http suite asks of a fixture', { skip
     assert.equal(ended.code, 0, `fixture exit ${ended.code} ${ended.signal || ''}\n${logs.join('')}`);
   });
 });
+
+test('the managed fixture refuses a root that contains LOCAL_APPS before starting anything', async () => {
+  const LOCAL_APPS = path.join(os.homedir(), 'Documents', 'GitHub', 'hyper', 'LOCAL_APPS');
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'managed-fixture-parent-')));
+  try {
+    for (const parent of [path.dirname(LOCAL_APPS), path.parse(LOCAL_APPS).root]) {
+      const manifestPath = path.join(tmp, `manifest-${crypto.randomBytes(4).toString('hex')}.json`);
+      const child = spawn(process.execPath, [
+        FIXTURE, '--manifest', manifestPath, '--go-bin', path.join(tmp, 'no-binary'), '--root', `root-a=${parent}`,
+      ], { stdio: ['ignore', 'pipe', 'pipe'] });
+      let stderr = '';
+      child.stderr.on('data', (chunk) => { stderr += chunk; });
+      const code = await new Promise((resolve) => child.once('exit', resolve));
+      assert.notEqual(code, 0, `--root ${parent} was accepted`);
+      assert.match(stderr, /contains LOCAL_APPS/);
+      assert.equal(fs.existsSync(manifestPath), false);
+    }
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});

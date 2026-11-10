@@ -206,6 +206,38 @@ test('refusals: a src inside LOCAL_APPS needs --allow-local-apps and a symlink i
   assert.throws(() => setup({ src: symlinkSrc, run: freshRunDir() }), /symlink: .*link\.htmlclay/);
 });
 
+// Run against a scratch home whose LOCAL_APPS is a fixture, so a regression
+// copies fixtures, never this machine's workspace.
+test('refusals: a src that contains LOCAL_APPS is refused, even with --allow-local-apps', () => {
+  const home = fs.realpathSync(tempDir('hcl-trial-home-'));
+  const hyper = path.join(home, 'Documents', 'GitHub', 'hyper');
+  writeFile(hyper, 'LOCAL_APPS/apps/a.html', '<p>a</p>');
+  writeFile(hyper, 'other/b.html', '<p>b</p>');
+  const runs = [freshRunDir(), freshRunDir()];
+  const script = `
+    import { setup } from ${JSON.stringify(new URL(`file://${SETUP}`).href)};
+    const results = [];
+    for (const [index, allowLocalApps] of [false, true].entries()) {
+      try {
+        setup({ src: ${JSON.stringify(hyper)}, run: ${JSON.stringify(runs)}[index], allowLocalApps });
+        results.push('accepted');
+      } catch (error) {
+        results.push(error.message);
+      }
+    }
+    console.log(JSON.stringify(results));
+  `;
+  const child = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+    env: { ...process.env, HOME: home }, encoding: 'utf8',
+  });
+  assert.equal(child.status, 0, child.stderr);
+  const results = JSON.parse(child.stdout.trim().split('\n').pop());
+  assert.equal(results.length, 2);
+  for (const message of results) assert.match(message, /contains LOCAL_APPS/);
+  for (const run of runs) assert.equal(fs.existsSync(run), false);
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
 test('mutation proof: dropping the .hyperclay/*/personal exclusion fails the clean-source run', () => {
   const src = buildSource();
   const run = freshRunDir();

@@ -44,6 +44,9 @@ function parseRoot(value) {
   if (realDir === realLocalApps || realDir.startsWith(realLocalApps + path.sep)) {
     throw new Error(`--root ${id} refuses ${resolved}: its real path is inside LOCAL_APPS (${LOCAL_APPS})`);
   }
+  if (realDir === path.parse(realDir).root || realLocalApps.startsWith(realDir + path.sep)) {
+    throw new Error(`--root ${id} refuses ${resolved}: its real path contains LOCAL_APPS (${LOCAL_APPS})`);
+  }
   let stat = null;
   try { stat = fs.statSync(resolved); } catch {}
   if (!stat || !stat.isDirectory()) throw new Error(`--root ${id} is not an existing directory: ${resolved}`);

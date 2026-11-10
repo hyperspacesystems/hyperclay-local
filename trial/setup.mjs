@@ -56,6 +56,11 @@ export function isInside(child, parent) {
   return child === parent || child.startsWith(parent + path.sep);
 }
 
+// Whether dir holds target; a filesystem root holds every path.
+function holds(dir, target) {
+  return dir === path.parse(dir).root ? target.startsWith(dir) : isInside(target, dir);
+}
+
 function matchesPattern(segments, pattern) {
   const wanted = pattern.split('/');
   if (wanted.length > segments.length) return false;
@@ -213,7 +218,11 @@ export function setup({ src, run, allowLocalApps = false, excluded = EXCLUDED, l
   if (typeof run !== 'string' || !run) throw new Error('--run is required');
 
   const srcReal = realOrNearest(src);
-  if (!allowLocalApps && isInside(srcReal, LOCAL_APPS)) {
+  const liveReal = realOrNearest(LOCAL_APPS);
+  if (srcReal !== liveReal && holds(srcReal, liveReal)) {
+    throw new Error(`refusing to read ${srcReal}: it contains LOCAL_APPS (${LOCAL_APPS}), which syncs to hyperclay.com; copy LOCAL_APPS itself with --allow-local-apps, or a folder that does not hold it`);
+  }
+  if (!allowLocalApps && isInside(srcReal, liveReal)) {
     throw new Error(`refusing to read ${srcReal}: it is inside LOCAL_APPS (${LOCAL_APPS}); pass --allow-local-apps only for an approved trial run`);
   }
   let srcStat;
