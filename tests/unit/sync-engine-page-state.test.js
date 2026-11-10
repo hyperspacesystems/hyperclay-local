@@ -74,7 +74,11 @@ const writeQueue = require('../../src/main/utils/write-queue');
 const {
   storePageState, readPageState, writePageState, pageStatePath
 } = require('../../src/main/page-state-store');
-const { sendPageState } = require('../../src/sync-engine/page-state');
+const { createRootDocumentHost } = require('../../src/main/document-host');
+const {
+  sendPageState, applyPageRecord, moveDocumentPageState, moveFolderPageState,
+  dropDocumentPageState, dropFolderPageState
+} = require('../../src/sync-engine/page-state');
 
 const TEMPLATE = fsSync.readFileSync(nodePath.join(__dirname, '../fixtures/ypage-template.html'), 'utf8');
 const { state: TEMPLATE_STATE } = splitPage(TEMPLATE);
@@ -414,5 +418,95 @@ describe('an upload sends a record only for the file it was written from', () =>
     await expect(sendPageState(engine, 7, 'gone.html')).resolves.toBe(false);
 
     expect(apiClient.putPageState).not.toHaveBeenCalled();
+  });
+});
+
+describe('the sync engine writes page state through the document host', () => {
+  const rejectingHost = () => ({ pageState: jest.fn(async () => { throw new Error('sidecar refused'); }) });
+
+  beforeEach(() => {
+    engine.documentHost = createRootDocumentHost({
+      ctx: { root: { id: 'test-root', path: root } },
+      live: engine.live,
+      emit: () => {},
+    });
+  });
+
+  test('applyPageRecord writes the sidecar', async () => {
+    await applyPageRecord(engine, 'page.html', TEMPLATE_STATE);
+
+    expect(await readPageState(root, 'page.html')).toEqual(TEMPLATE_STATE);
+  });
+
+  test('a renamed document moves its sidecar', async () => {
+    await writePage('A.html');
+
+    await moveDocumentPageState(engine, 'A.html', 'B.html');
+
+    expect(await readPageState(root, 'A.html')).toBeNull();
+    expect(await readPageState(root, 'B.html')).toEqual(TEMPLATE_STATE);
+  });
+
+  test('a renamed folder moves its documents\u2019 sidecars', async () => {
+    await writePage('Notes/A.html');
+
+    await moveFolderPageState(engine, 'Notes', 'Archive');
+
+    expect(await readPageState(root, 'Notes/A.html')).toBeNull();
+    expect(await readPageState(root, 'Archive/A.html')).toEqual(TEMPLATE_STATE);
+  });
+
+  test('a deleted document drops its sidecar', async () => {
+    await writePage('page.html');
+
+    await dropDocumentPageState(engine, 'page.html');
+
+    expect(await readPageState(root, 'page.html')).toBeNull();
+  });
+
+  test('a deleted folder drops its documents\u2019 sidecars', async () => {
+    await writePage('Notes/A.html');
+
+    await dropFolderPageState(engine, 'Notes');
+
+    expect(await readPageState(root, 'Notes/A.html')).toBeNull();
+  });
+
+  test('a host that refuses a move is logged and the rename stands', async () => {
+    await writePage('A.html');
+    await writePage('Notes/A.html');
+    engine.documentHost = rejectingHost();
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await expect(moveDocumentPageState(engine, 'A.html', 'B.html')).resolves.toBeUndefined();
+      await expect(moveFolderPageState(engine, 'Notes', 'Archive')).resolves.toBeUndefined();
+
+      expect(warn).toHaveBeenCalledWith('[SYNC] Could not move the page state for A.html:', 'sidecar refused');
+      expect(warn).toHaveBeenCalledWith('[SYNC] Could not move the page state for Notes:', 'sidecar refused');
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test('a host that refuses a drop is logged and the delete stands', async () => {
+    await writePage('page.html');
+    await writePage('Notes/A.html');
+    engine.documentHost = rejectingHost();
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await expect(dropDocumentPageState(engine, 'page.html')).resolves.toBeUndefined();
+      await expect(dropFolderPageState(engine, 'Notes')).resolves.toBeUndefined();
+
+      expect(warn).toHaveBeenCalledWith('[SYNC] Could not drop the page state for page.html:', 'sidecar refused');
+      expect(warn).toHaveBeenCalledWith('[SYNC] Could not drop the page state for Notes:', 'sidecar refused');
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test('a host that refuses a write makes the download fail', async () => {
+    engine.documentHost = rejectingHost();
+
+    await expect(applyPageRecord(engine, 'page.html', TEMPLATE_STATE)).rejects.toThrow('sidecar refused');
   });
 });

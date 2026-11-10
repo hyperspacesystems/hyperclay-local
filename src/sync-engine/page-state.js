@@ -9,9 +9,7 @@
  */
 
 const path = require('upath');
-const {
-  readPageState, writePageState, dropPageState, dropPageStateDir, movePageState, movePageStateDir
-} = require('../main/page-state-store');
+const { readPageState } = require('../main/page-state-store');
 const { getPageState, putPageState } = require('./api-client');
 const { documentHostFor } = require('./local-boundary');
 
@@ -50,14 +48,14 @@ async function readPageRecord(engine, nodeId, rel) {
 /** The server's record beside the file, written before the file itself. */
 async function applyPageRecord(engine, rel, record) {
   if (!record || !PAGE_PATTERN.test(rel)) return;
-  await writePageState(engine.syncFolder, rel, record);
+  await documentHostFor(engine).pageState({ op: 'write', name: rel, record });
 }
 
 // A relocation already happened on disk; a sidecar that cannot follow it is
 // logged and left behind, never allowed to undo the content move.
-async function moveState(engine, fromRel, toRel, move) {
+async function moveState(engine, fromRel, toRel, op) {
   try {
-    await move(engine.syncFolder, fromRel, toRel);
+    await documentHostFor(engine).pageState({ op, name: fromRel, to: toRel });
   } catch (error) {
     console.warn(`[SYNC] Could not move the page state for ${fromRel}:`, reasonOf(error));
   }
@@ -66,13 +64,13 @@ async function moveState(engine, fromRel, toRel, move) {
 /** A renamed document takes its merge state with it. */
 async function moveDocumentPageState(engine, fromRel, toRel) {
   if (!fromRel || fromRel === toRel || !PAGE_PATTERN.test(fromRel)) return;
-  await moveState(engine, fromRel, toRel, movePageState);
+  await moveState(engine, fromRel, toRel, 'move');
 }
 
 /** A renamed folder takes its documents' merge state with it. */
 async function moveFolderPageState(engine, fromRel, toRel) {
   if (!fromRel || fromRel === toRel) return;
-  await moveState(engine, fromRel, toRel, movePageStateDir);
+  await moveState(engine, fromRel, toRel, 'moveDir');
 }
 
 // A deleted document's state goes with it: a copy restored from trash rebuilds its
@@ -80,7 +78,7 @@ async function moveFolderPageState(engine, fromRel, toRel) {
 async function dropDocumentPageState(engine, rel) {
   if (!rel || !PAGE_PATTERN.test(rel)) return;
   try {
-    await dropPageState(engine.syncFolder, rel);
+    await documentHostFor(engine).pageState({ op: 'drop', name: rel });
   } catch (error) {
     console.warn(`[SYNC] Could not drop the page state for ${rel}:`, reasonOf(error));
   }
@@ -90,7 +88,7 @@ async function dropDocumentPageState(engine, rel) {
 async function dropFolderPageState(engine, rel) {
   if (!rel) return;
   try {
-    await dropPageStateDir(engine.syncFolder, rel);
+    await documentHostFor(engine).pageState({ op: 'dropDir', name: rel });
   } catch (error) {
     console.warn(`[SYNC] Could not drop the page state for ${rel}:`, reasonOf(error));
   }

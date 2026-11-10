@@ -14,6 +14,7 @@ function stubDocumentHost(overrides = {}) {
       completed: steps.length,
       reason: null,
     })),
+    pageState: jest.fn(async () => undefined),
     ...overrides,
   };
 }
