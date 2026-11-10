@@ -860,6 +860,59 @@ function createDocumentHost(deps) {
     }
   }
 
+  // The checkpoint's room half, run inside the document boundary the caller
+  // holds: the room and its generation still match, the document is read once
+  // with its identity, the room is reconciled with that read, and a dirty room is
+  // rendered over it. Writes nothing. Answers `render` with what the save lane
+  // needs, or Local's `clean`, `current` or `refused`.
+  async function renderCheckpoint({
+    core, key, roomIdentity, generation, target, room, claim, token,
+    readCurrent = async () => {
+      const handle = await fs.open(key, 'r');
+      try {
+        const readIdentity = await handle.stat({ bigint: true });
+        return { html: await handle.readFile('utf8'), readIdentity };
+      } finally { await handle.close(); }
+    },
+  }) {
+    const authority = ctx.localAuthority;
+    authority.validateAdmission(claim, target, token);
+    if (authority.rooms.get(key) !== room || String(room.nodeId) !== String(roomIdentity)) {
+      return { kind: 'refused', reason: 'invalid-identity' };
+    }
+    let currentHtml;
+    let readIdentity;
+    try {
+      ({ html: currentHtml, readIdentity } = await readCurrent());
+    }
+    catch (error) {
+      if (error.code === 'ENOENT') return { kind: 'refused', reason: 'invalid-identity' };
+      throw error;
+    }
+    if (authority.logicalHtml) currentHtml = await authority.logicalHtml(target, currentHtml);
+    const observed = await authority.reconcileDisk(target, currentHtml, token);
+    if (observed.kind === 'replacement' || authority.rooms.get(key) !== room ||
+        (room.pageTransition?.id ?? null) !== generation) {
+      return { kind: 'refused', reason: 'invalid-identity' };
+    }
+    let capture;
+    try { capture = core.captureCheckpoint(room, { nodeId: target.identity, roomKey: key }); }
+    catch (error) { return { kind: 'refused', reason: 'invalid-document', error }; }
+    if (!authority.roomIsDirty(room)) return { kind: 'clean' };
+    if (core.isCheckpointCurrent(currentHtml, capture)) {
+      authority.rooms.markSaved(room, capture);
+      return { kind: 'current' };
+    }
+    const { JSDOM } = require('jsdom');
+    const rendered = core.renderCheckpoint(currentHtml, capture, {
+      createDocument: createDocument ?? (() => new JSDOM('<!doctype html><html><body></body></html>', {
+        runScripts: undefined, resources: undefined,
+      }).window.document),
+    });
+    if (rendered.kind !== 'ok') return { kind: 'refused', reason: rendered.reason ?? 'invalid-document' };
+    return { kind: 'render', html: rendered.html, revision: rendered.revision, capture, currentHtml, readIdentity };
+  }
+
   // A dirty room's unsaved edits, rendered and stored through the save lane. The
   // caller hands in the room it means and the page generation it was made at, and
   // the save lane runs inside the boundary this call already holds.
@@ -870,47 +923,11 @@ function createDocumentHost(deps) {
     const authority = ctx.localAuthority;
     const claim = authority.captureAdmission(target);
     return withDocument(() => ({ canonicalPath: key }), async (_locked, token) => {
-      authority.validateAdmission(claim, target, token);
-      if (authority.rooms.get(key) !== room || String(room.nodeId) !== String(roomIdentity)) {
-        return { kind: 'refused', reason: 'invalid-identity' };
-      }
-      let currentHtml;
-      let readIdentity;
-      try {
-        const handle = await fs.open(key, 'r');
-        try {
-          readIdentity = await handle.stat({ bigint: true });
-          currentHtml = await handle.readFile('utf8');
-        } finally { await handle.close(); }
-      }
-      catch (error) {
-        if (error.code === 'ENOENT') return { kind: 'refused', reason: 'invalid-identity' };
-        throw error;
-      }
-      if (authority.logicalHtml) currentHtml = await authority.logicalHtml(target, currentHtml);
-      const observed = await authority.reconcileDisk(target, currentHtml, token);
-      if (observed.kind === 'replacement' || authority.rooms.get(key) !== room ||
-          (room.pageTransition?.id ?? null) !== generation) {
-        return { kind: 'refused', reason: 'invalid-identity' };
-      }
-      let capture;
-      try { capture = core.captureCheckpoint(room, { nodeId: target.identity, roomKey: key }); }
-      catch (error) { return { kind: 'refused', reason: 'invalid-document', error }; }
-      if (!authority.roomIsDirty(room)) return { kind: 'clean' };
-      if (core.isCheckpointCurrent(currentHtml, capture)) {
-        authority.rooms.markSaved(room, capture);
-        return { kind: 'current' };
-      }
-      const { JSDOM } = require('jsdom');
-      const rendered = core.renderCheckpoint(currentHtml, capture, {
-        createDocument: createDocument ?? (() => new JSDOM('<!doctype html><html><body></body></html>', {
-          runScripts: undefined, resources: undefined,
-        }).window.document),
-      });
-      if (rendered.kind !== 'ok') return { kind: 'refused', reason: rendered.reason ?? 'invalid-document' };
+      const rendered = await renderCheckpoint({ core, key, roomIdentity, generation, target, room, claim, token });
+      if (rendered.kind !== 'render') return rendered;
       const written = await commitSave({
-        name, filePath: key, bytes: rendered.html, dataLossPrev: currentHtml,
-        userDriven: false, saveId: '', readIdentity, context: { target, token },
+        name, filePath: key, bytes: rendered.html, dataLossPrev: rendered.currentHtml,
+        userDriven: false, saveId: '', readIdentity: rendered.readIdentity, context: { target, token },
       }, { origin: 'checkpoint' });
       if (written.outcome === 'indeterminate') throw written.error;
       if (written.outcome === 'committed') dataGuard.noteSeen(baseDir, name, written.stored);
@@ -934,6 +951,7 @@ function createDocumentHost(deps) {
       prepareSave, admitSave, settleSave, recordSaveProvenance,
       prepareReplace, admitReplace, settleReplace,
       admitRebase, settleRebase, settleCreate, settleExact: confirmExact,
+      renderCheckpoint,
     },
   };
 }
