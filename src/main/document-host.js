@@ -3,6 +3,7 @@ const { calculateChecksum } = require('../sync-engine/utils');
 const path = require('upath');
 const { logicalBytes } = require('./page-state-store.js');
 const { publishRecoveredCopy } = require('./utils/backup.js');
+const { reader } = require('./document-reader');
 
 const KINDS = {
   'browser-save': { lane: 'save', origin: 'save' },
@@ -238,7 +239,7 @@ function createDocumentHost(deps) {
   // here.
   async function admitReplace({
     name, filePath, content, edit = false, safety = false, target = null, token = null,
-    readCurrent = async () => logicalBytes(baseDir, name, await fs.readFile(filePath)),
+    readCurrent = async () => logicalBytes(baseDir, name, await reader().readFile(filePath)),
     writeSafetyVersion = html => createBackup(baseDir, name.replace(/\.(html|htmlclay)$/, ''), html),
     writeRecoveredCopy = html => publishRecoveredCopy(baseDir, name, html),
   }) {
@@ -386,7 +387,7 @@ function createDocumentHost(deps) {
     // the state its sidecar holds is put back here too. A page conversion is the
     // one save where the absence is the point, so that one is never put back.
     if (!pageConversion) {
-      const rebased = await rebaseStaleSave(baseDir, name, content, newestVersionFiles);
+      const rebased = await rebaseStaleSave(baseDir, name, content, reader().versionFiles ?? newestVersionFiles);
       if (rebased) content = rebased.html;
     }
     const write = await splitWrite(baseDir, name, content, { keepState: !pageConversion });

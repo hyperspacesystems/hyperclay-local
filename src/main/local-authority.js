@@ -9,6 +9,7 @@ const { compatibleContinuation, renderRecovered } = require('./external-recovery
 const { logicalDocument } = require('./page-state-store');
 const { needsAdoption } = require('./page-rebase.js');
 const { createPresenceRelay } = require('./presence');
+const { reader } = require('./document-reader');
 
 const EVENT_NAMES = new Set(['data', 'data-state', 'data-writer']);
 const RATE_LIMIT = Object.freeze({ rate: 25, burst: 40, idleMs: 60 * 1000 });
@@ -47,7 +48,7 @@ function createLocalAuthority({ rooms, withDocument, readSaved, publishRecovered
   // The saved document a room is seeded from is the logical one: the file on disk
   // with the page editor's merge state put back, which is what the editor holds.
   if (!readSaved) readSaved = async (target) => {
-    const html = await fs.promises.readFile(target.canonicalPath, 'utf8');
+    const html = await reader().readFile(target.canonicalPath, 'utf8');
     const root = roots.get(target.rootId);
     return root && target.logicalPath ? logicalDocument(root.path, target.logicalPath, html) : html;
   };
@@ -1140,7 +1141,7 @@ function createLocalAuthority({ rooms, withDocument, readSaved, publishRecovered
 
     let stat;
     try {
-      stat = await fs.promises.stat(canonicalPath, { bigint: true });
+      stat = await reader().stat(canonicalPath, { bigint: true });
     } catch {
       return null;
     }

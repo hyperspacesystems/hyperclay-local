@@ -4,6 +4,7 @@ const { VERSIONS_DIR } = require('./utils/artifact-paths');
 const { readPageState } = require('./page-state-store.js');
 const { canonicalizeBase, rebaseOntoCanonical, assertRealDirChain } = require('./utils/real-dir-chain');
 const { VERSION_NAME, compareNewestFirst } = require('./utils/prune-versions.js');
+const { reader } = require('./document-reader');
 
 const rooms = () => require('@panphora/clayjs/server/rooms');
 const createDocument = () => {
@@ -35,7 +36,7 @@ async function rebaseStaleSave(baseDir, name, content, newestFirst, { stored = n
       storedHtml = parts.file;
       state = parts.state ?? await readPageState(baseDir, name, { rev: pageRev(stored), exact: true });
     } else {
-      try { storedHtml = await fs.readFile(path.join(baseDir, name), 'utf8'); } catch { return null; }
+      try { storedHtml = await reader().readFile(path.join(baseDir, name), 'utf8'); } catch { return null; }
       state = await readPageState(baseDir, name, { rev: pageRev(storedHtml), exact: true });
     }
     if (!state || state.rev === rev) return null;
@@ -45,7 +46,7 @@ async function rebaseStaleSave(baseDir, name, content, newestFirst, { stored = n
       const found = [];
       for (const file of files) {
         let html;
-        try { html = await fs.readFile(path.join(dir, file), 'utf8'); } catch { continue; }
+        try { html = await reader().readFile(path.join(dir, file), 'utf8'); } catch { continue; }
         if (html.includes(wanted) && pageRev(html) === wanted) found.push(html);
       }
       return found;

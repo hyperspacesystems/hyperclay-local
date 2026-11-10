@@ -6,10 +6,21 @@ const crypto = require('crypto');
 const rooms = () => require('@panphora/clayjs/server/rooms');
 const { PAGE_STATE_DIR } = require('./utils/artifact-paths');
 const { atomicWriteFile } = require('./utils/write-queue');
+const { reader } = require('./document-reader');
 
 async function exists(target) {
   try {
     await fs.access(target);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// exists, through the reader: a file the reader cannot stat is absent.
+async function readerHas(target) {
+  try {
+    await reader().stat(target);
     return true;
   } catch {
     return false;
@@ -71,11 +82,11 @@ async function adoptLegacyPageState(baseDir, name) {
   const extension = name.match(PAGE_EXTENSION);
   if (!extension) return null;
   const other = name.slice(0, -extension[0].length) + (extension[0].toLowerCase() === '.html' ? '.htmlclay' : '.html');
-  if (await exists(path.join(baseDir, other))) return null;
+  if (await readerHas(path.join(baseDir, other))) return null;
   const legacy = legacyPageStatePath(baseDir, name);
   let text;
   try {
-    text = await fs.readFile(legacy, 'utf8');
+    text = await reader().readFile(legacy, 'utf8');
   } catch (err) {
     if (err.code === 'ENOENT') return null;
     throw err;
@@ -94,7 +105,7 @@ async function adoptLegacyPageState(baseDir, name) {
 async function readStored(baseDir, name) {
   let text;
   try {
-    text = await fs.readFile(pageStatePath(baseDir, name), 'utf8');
+    text = await reader().readFile(pageStatePath(baseDir, name), 'utf8');
   } catch (err) {
     if (err.code !== 'ENOENT') throw err;
     return adoptLegacyPageState(baseDir, name);
