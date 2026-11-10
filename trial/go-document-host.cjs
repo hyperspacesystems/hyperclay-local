@@ -74,9 +74,19 @@ function sendable(value) {
   return value !== undefined;
 }
 
+// Local stamps a download with `new Date(modifiedAt)`, and the engine hands it a
+// server ISO string or a stat's Date, while Go takes milliseconds. A value Local
+// would skip (falsy) is not sent.
+function stampOf(value) {
+  if (!value) return undefined;
+  const ms = new Date(value).getTime();
+  return Number.isFinite(ms) ? ms : undefined;
+}
+
 function bodyFor(request) {
   const body = {};
-  for (const [key, value] of Object.entries(request)) {
+  for (const [key, raw] of Object.entries(request)) {
+    const value = key === 'modifiedAt' ? stampOf(raw) : raw;
     if (UNSENDABLE.has(key) || !sendable(value)) continue;
     body[key] = key === 'bytes' ? encodeBytes(value) : value;
   }

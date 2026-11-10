@@ -199,6 +199,22 @@ test('the Go document host adapter', { skip: SKIP }, async (t) => {
     assert.deepEqual(fs.readFileSync(path.join(roots[0], 'logo.png')), PNG);
   });
 
+  await t.test('a sync download stamps the server time, whether it comes as a string or a Date', async () => {
+    const stamp = '2026-10-01T12:34:56.789Z';
+    for (const [name, modifiedAt] of [['stamped-string.html', stamp], ['stamped-date.html', new Date(stamp)]]) {
+      const written = await host.commit({
+        kind: 'sync-download',
+        name,
+        filePath: path.join(roots[0], name),
+        bytes: document(name),
+        expected: { type: 'absent' },
+        modifiedAt,
+      });
+      assert.equal(written.outcome, 'committed', `${name}: ${written.reason}`);
+      assert.equal(fs.statSync(path.join(roots[0], name)).mtimeMs, Date.parse(stamp));
+    }
+  });
+
   await t.test('reading a missing file answers null', async () => {
     assert.equal(await host.read('not-here.html'), null);
   });
