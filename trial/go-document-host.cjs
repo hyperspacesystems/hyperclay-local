@@ -58,6 +58,12 @@ function adapterCounts() {
 // room, its target, and the admission claim captured before the lock.
 const pendingCheckpoints = new Map();
 
+// Rooms whose last checkpoint may have landed without its fsync (an
+// indeterminate answer), by document path. Until POST /v1/durable proves the
+// bytes on disk, the room's next checkpoint must not take them as saved
+// (protocol v1, /v1/durable).
+const unprovenCheckpoints = new Set();
+
 function checkpointContext(opHandle) {
   return pendingCheckpoints.get(opHandle) ?? null;
 }
@@ -293,6 +299,7 @@ function createGoDocumentHost({ ctx, checkpointClaim = serviceMode ? serviceMode
   // opId, so what the checkpoint holds waits in pendingCheckpoints until Go
   // answers. An indeterminate answer throws, and the scheduler retries it.
   async function checkpoint({ name, filePath }, { roomIdentity, generation }, { target, room }) {
+    if (unprovenCheckpoints.has(filePath)) await proveDurable(name, filePath);
     const opId = randomBytes(16).toString('hex');
     const claim = checkpointClaim ? checkpointClaim(target) : null;
     pendingCheckpoints.set(opId, { target, room, claim, filePath });
@@ -306,13 +313,35 @@ function createGoDocumentHost({ ctx, checkpointClaim = serviceMode ? serviceMode
         error.code = answer.reason ?? 'indeterminate';
         error.indeterminate = true;
         error.opId = opId;
+        unprovenCheckpoints.add(filePath);
         throw error;
       }
+      if (answer.kind === 'ok') unprovenCheckpoints.delete(filePath);
       if (answer.written) answer.written = decodeBytes(answer.written);
       return answer;
     } finally {
       pendingCheckpoints.delete(opId);
     }
+  }
+
+  // The bytes an indeterminate checkpoint left are taken as saved only once Go
+  // has fsynced them. A failed or raced proof throws, so the scheduler retries
+  // and the room stays dirty.
+  async function proveDurable(name, filePath) {
+    const current = await read(name, filePath);
+    if (!current) {
+      unprovenCheckpoints.delete(filePath);
+      return;
+    }
+    const answer = await request('POST', '/v1/durable', {
+      body: { root: rootId(), name: nameOf(name, filePath), checksum: current.checksum },
+    });
+    if (!answer || answer.durable !== true) {
+      const error = new Error(`${name} changed before its last checkpoint was proven on disk`);
+      error.code = 'durable-unproven';
+      throw error;
+    }
+    unprovenCheckpoints.delete(filePath);
   }
 
   // One newline-delimited stream of the host's frames, resumed from the last
@@ -420,4 +449,16 @@ function createGoDocumentHost({ ctx, checkpointClaim = serviceMode ? serviceMode
   };
 }
 
-module.exports = { createGoDocumentHost, adapterCounts, checkpointContext, configureService };
+// The service marks a checkpoint whose settle came back indeterminate before
+// Go answers the adapter, and its observer asks while the mark stands.
+function markCheckpointUnproven(filePath) {
+  unprovenCheckpoints.add(filePath);
+}
+
+function checkpointUnproven(filePath) {
+  return unprovenCheckpoints.has(filePath);
+}
+
+module.exports = {
+  createGoDocumentHost, adapterCounts, checkpointContext, configureService, markCheckpointUnproven, checkpointUnproven,
+};

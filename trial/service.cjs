@@ -30,7 +30,9 @@ const { logicalBytes } = require(path.join(SRC, 'page-state-store.js'));
 const { newestVersionFiles } = require(path.join(SRC, 'page-rebase.js'));
 const { loadCheckpoint } = require(path.join(SRC, 'utils', 'page-api.js'));
 const { setConnection, getConnection } = require('./go-process.cjs');
-const { createGoDocumentHost, checkpointContext, configureService } = require('./go-document-host.cjs');
+const {
+  createGoDocumentHost, checkpointContext, configureService, markCheckpointUnproven, checkpointUnproven,
+} = require('./go-document-host.cjs');
 
 const roomsPackage = () => require('@panphora/clayjs/server/rooms');
 
@@ -528,6 +530,8 @@ function createTrialService({
             reader.state.settled = true;
             reader.state.identity = step.settle.identity ?? null;
             await settleLane(root, body, step.settle, admitted, target, token, context);
+          } else if (step.settle.outcome === 'indeterminate' && body.origin === 'checkpoint') {
+            markCheckpointUnproven(filePath);
           }
           consultation.answer({ ok: true });
         } catch (error) {
@@ -652,6 +656,11 @@ function createTrialService({
       if (event === 'unlink') return;
       const bytes = raw(current.bytes);
       if (bytes.length === 0) return;
+      // The file a checkpoint wrote without a proven fsync: the room keeps those
+      // edits unsaved until the adapter's /v1/durable proof (protocol v1), and
+      // its next checkpoint reads the file through renderCheckpoint's own
+      // reconcileDisk, so nothing is applied from it here.
+      if (checkpointUnproven(canonicalPath)) return;
       const target = authority.bindTarget({ rootId: root.id, logicalPath: name, canonicalPath, origin: null, live: root.live });
       const judged = await root.observer._judgeHtml(canonicalPath, name, target, bytes, identityStat(current.identity, true));
       if (judged.kind === 'self') return;
