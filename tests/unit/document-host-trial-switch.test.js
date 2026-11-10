@@ -32,14 +32,36 @@ test('the variable unset builds the in-process host', () => {
   expect(typeof host.restructure).toBe('function');
 });
 
-test('the variable set to go loads the trial adapter and fails closed without it', () => {
+const ADAPTER = upath.join(__dirname, '..', '..', 'trial', 'go-document-host.cjs');
+
+test('the variable set to go builds the trial adapter', () => {
+  process.env[VARIABLE] = 'go';
+  const adapter = { trial: true };
+  let host = null;
+  jest.isolateModules(() => {
+    jest.doMock(ADAPTER, () => ({ createGoDocumentHost: () => adapter }));
+    host = require('../../src/main/document-host').createRootDocumentHost({ ctx: ctx() });
+  });
+  jest.dontMock(ADAPTER);
+  expect(host).toBe(adapter);
+});
+
+test('the variable set to go fails closed when the trial adapter is not packed', () => {
   process.env[VARIABLE] = 'go';
   let error = null;
-  try {
-    createRootDocumentHost({ ctx: ctx() });
-  } catch (thrown) {
-    error = thrown;
-  }
+  jest.isolateModules(() => {
+    jest.doMock(ADAPTER, () => {
+      const missing = new Error(`Cannot find module '${ADAPTER}'`);
+      missing.code = 'MODULE_NOT_FOUND';
+      throw missing;
+    });
+    try {
+      require('../../src/main/document-host').createRootDocumentHost({ ctx: ctx() });
+    } catch (thrown) {
+      error = thrown;
+    }
+  });
+  jest.dontMock(ADAPTER);
   expect(error).not.toBe(null);
   expect(error.code).toBe('MODULE_NOT_FOUND');
   expect(error.message).toContain('trial/go-document-host.cjs');

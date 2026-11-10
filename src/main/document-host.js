@@ -324,24 +324,14 @@ function createDocumentHost(deps) {
     return { outcome: 'committed', reason: null, etag: documentEtag(content), stored, content };
   }
 
-  async function commitSave(request, { origin }) {
-    const {
-      name, filePath, bytes, dataLossPrev, userDriven, saveId,
-      ifMatch, pageConversion, pageWrite, pageFormat,
-      persistentToken = null, readIdentity = null, context = {},
-    } = request;
-    const { target = null, token = null } = context;
-    let content = bytes;
-    // ANCILLARY DISK CONVENTION: versions dir and backups use baseName without
-    // extension (matches platform's versions/{baseName}/ layout).
-    // Do NOT reuse `backupName` as a liveSync channel key — liveSync keys must
-    // carry the extension (Rule 1).
-    const backupName = name.replace(/\.(html|htmlclay)$/, '');
-
+  // The save lane's first half, which consults no room and writes nothing:
+  // Local's normalization, the rebase of a save made against an older page, and
+  // the split into the logical document and the file part that reaches disk.
+  async function prepareSave({ name, bytes, pageConversion = null }) {
     // Normalized once, and before anything is admitted or backed up: the page
     // admission below has to decide against the exact bytes this call would
     // store, and a refusal must leave no backup and no written byte behind.
-    content = canonicalForWrite(formatHtml(scopeTailwindLink(name, content)));
+    let content = canonicalForWrite(formatHtml(scopeTailwindLink(name, bytes)));
 
     // The logical document keeps the page editor's merge state and is what every
     // admission, stamp, broadcast and answer below describes. Only the file part
@@ -358,84 +348,191 @@ function createDocumentHost(deps) {
       if (rebased) content = rebased.html;
     }
     const write = await splitWrite(baseDir, name, content, { keepState: !pageConversion });
-    let fileContent = write.file;
-    content = write.logical;
+    return { content: write.logical, fileContent: write.file };
+  }
+
+  // The save lane's room admission, before the first backup. Returns the
+  // admitted document, its file part with the page format floor, and the page
+  // reservation, which the caller releases once the write is settled. A throw
+  // after a reservation was taken releases it here, so it never outlives a
+  // refused save.
+  async function admitSave({
+    name, filePath, origin, content, fileContent, dataLossPrev = null, ifMatch = null,
+    pageConversion = null, pageWrite = null, pageFormat = null, persistentToken = null, target, token,
+    writeSafetyVersion = html => createBackup(baseDir, name.replace(/\.(html|htmlclay)$/, ''), html),
+  }) {
+    const authority = ctx.localAuthority;
+    let pageToken = null;
+    try {
+      // The shared rooms package owns page authority: an initialization or a
+      // conversion is admitted here, before the first backup, and its
+      // reservation is held across the backup and the atomic write so no
+      // frame can change the room while the disk result is pending.
+      const { checkPageWriteAdmission, pageLineageLost, checkPageFormatAdmission, formatCapability, withPageFormatFloor, PAGE_FORMAT, PAGE_FORMAT_UPGRADE } = require('@panphora/clayjs/server/rooms');
+      const { createDocument } = require('./page-rebase.js');
+      const rooms = authority.rooms;
+      const open = rooms.get(filePath);
+      const room = open && String(open.nodeId) === String(target.identity) ? open : null;
+      const currentHtml = dataLossPrev ?? '';
+      const admission = checkPageWriteAdmission({
+        currentHtml, html: content, header: pageConversion ?? null, ifMatch, room,
+        pageWrite: pageWrite ?? null, createDocument,
+      });
+      const capability = origin === 'checkpoint' ? PAGE_FORMAT : formatCapability(pageFormat);
+      const admitted = authority.admittedFormats(filePath);
+      const format = checkPageFormatAdmission({ currentHtml, html: content, capability, admitted });
+      content = format.html;
+      fileContent = withPageFormatFloor(fileContent, format.floor);
+      if (admission === 'initial') {
+        pageToken = rooms.reservePageInitial(filePath, {
+          nodeId: target.identity, currentHtml, html: content, ifMatch,
+          pageWrite: pageWrite ?? null, createDocument,
+        });
+      } else if (admission === 'conversion') {
+        pageToken = rooms.reservePage(filePath, {
+          nodeId: target.identity, header: pageConversion, currentHtml, html: content, ifMatch,
+          pageWrite: pageWrite ?? null, createDocument,
+        });
+      } else if (admission === 'ordinary' && room && pageLineageLost(room, content)) {
+        // The open room still holds the article this save replaces, and the
+        // document being written no longer carries the page tag that bound them:
+        // an outside edit or a code save replaced the page under it. Restore's
+        // pattern, applied here: the room's unsaved edits become a version of
+        // their own, and the room restarts on the new document instead of
+        // keeping the old page store, which its next checkpoint would render
+        // back over the replacement. A room whose edits cannot be kept is
+        // refused, so the person can save them rather than lose them.
+        if (authority.roomIsDirty(room)) {
+          let kept = null;
+          try {
+            kept = ctx.localCheckpoint
+              ? await ctx.localCheckpoint.safetyBackup(filePath, currentHtml)
+              : null;
+          } catch (error) {
+            console.error(`Refusing a save of ${name}: the open room cannot be backed up`, error);
+          }
+          if (kept === null) {
+            const error = new Error('Unsaved edits could not be kept. Save them before replacing this page.');
+            error.code = 'unsaved-edits';
+            throw error;
+          }
+          if (!(await writeSafetyVersion(kept))) {
+            const error = new Error('Unsaved edits could not be kept. Save them before replacing this page.');
+            error.code = 'unsaved-edits';
+            throw error;
+          }
+        }
+        pageToken = rooms.reservePageReplacement(filePath, {
+          nodeId: target.identity, html: content,
+        });
+      }
+      if (persistentToken) rooms.checkPersistent(persistentToken, { html: content });
+      // An outside edit the room keeps (same revision or merged onto an older
+      // one) waits for a tab to adopt it, and until then the room's unsaved
+      // edits live only in memory: they get a recovered copy, rendered over
+      // the document this write replaces.
+      if (room && origin !== 'checkpoint' && !pageToken && content.includes('data-page') && needsAdoption(content)) {
+        await authority.recoverUnsavedEdits(target, token);
+      }
+      return { content, fileContent, pageToken };
+    } catch (error) {
+      if (pageToken) authority.rooms.releasePage(pageToken);
+      throw error;
+    }
+  }
+
+  // The save lane's confirmation half, run the moment the bytes are on disk.
+  async function settleSave({ name, origin, content, fileContent, pageToken = null, target = null, token = null, persistentToken = null }) {
+    const authority = ctx.localAuthority;
+    const authorityWrite = Boolean(authority && target && token);
+    // The bytes are on disk: the page reservation commits into the one room,
+    // and the authority stamps and publishes exactly what landed, once per
+    // registered alias of this canonical file.
+    if (pageToken) authority.rooms.commitPage(pageToken);
+    if (authorityWrite) {
+      await authority.confirmKnownWrite(target, content, token, {
+        sender: origin === 'api' ? 'data-api' : 'server-save', persistentToken,
+      });
+    }
+
+    // Morph view-mode tabs with the persisted on-disk HTML. Edit-mode tabs
+    // are untouched — they sync via /live-sync/save on the live lane.
+    //
+    // A data API write has no tab behind it to relay its snapshot, so it has to
+    // reach edit-mode tabs the way an external disk change does: the same
+    // `external-change` notify the observer's _notifyExternal sends, so ClayJS
+    // runs it through dirty-region protection before morphing. The saved-lane
+    // broadcast stays, for the viewers. Same payload as the observer, different
+    // sender — the writer here is the data API, not the file system.
+    //
+    // With an authority the saved lane is already published, once per alias, by
+    // the confirmation above; this route is still its own publisher for a
+    // no-authority caller, which is every legacy createApp(dir).
+    const adopt = origin !== 'checkpoint' && content.includes('data-page') && needsAdoption(content);
+    if (adopt) {
+      ctx.observer?.publishExternal(
+        name,
+        Buffer.from(content, 'utf8'),
+        `${path.basename(name)} was changed outside the editor`,
+        { saved: false, continues: true }
+      );
+    }
+    if (origin === 'api' && !adopt) {
+      live.notify(name, {
+        msgType: 'warning',
+        msg: `${path.basename(name)} was updated through the data API`,
+        action: 'reload',
+        data: Buffer.byteLength(fileContent, 'utf8') <= MAX_EXTERNAL_HTML
+          ? { kind: 'external-change', html: fileContent, sender: 'data-api', etag: documentEtag(content) }
+          : { kind: 'external-change', sender: 'data-api' },
+      });
+    }
+    if (!authorityWrite) {
+      live.broadcast(name, { html: fileContent, sender: origin === 'api' ? 'data-api' : 'server-save' }, { lane: 'saved' });
+    }
+  }
+
+  // The provenance bit platform sync reads when it uploads this page.
+  function recordSaveProvenance(name, userDriven) {
+    // Record the provenance bit for platform sync. The sync engine reads it
+    // when uploading, so the platform guard can split a UI save from a
+    // background-script save. The snapshot beside it comes from
+    // /live-sync/save, which is why this merges rather than replaces: the two
+    // lanes contribute different halves of the same entry.
+    {
+      const prev = store.snapshots.get(name);
+      store.snapshots.set(name, {
+        html: prev ? prev.html : null,
+        userDriven,
+        timestamp: Date.now()
+      });
+    }
+  }
+
+  async function commitSave(request, { origin }) {
+    const {
+      name, filePath, bytes, dataLossPrev, userDriven, saveId,
+      ifMatch, pageConversion, pageWrite, pageFormat,
+      persistentToken = null, readIdentity = null, context = {},
+    } = request;
+    const { target = null, token = null } = context;
+    // ANCILLARY DISK CONVENTION: versions dir and backups use baseName without
+    // extension (matches platform's versions/{baseName}/ layout).
+    // Do NOT reuse `backupName` as a liveSync channel key — liveSync keys must
+    // carry the extension (Rule 1).
+    const backupName = name.replace(/\.(html|htmlclay)$/, '');
+
+    let { content, fileContent } = await prepareSave({ name, bytes, pageConversion });
 
     const authority = ctx.localAuthority;
     const authorityWrite = Boolean(authority && target && token);
     let pageToken = null;
     try {
       if (authorityWrite) {
-        // The shared rooms package owns page authority: an initialization or a
-        // conversion is admitted here, before the first backup, and its
-        // reservation is held across the backup and the atomic write so no
-        // frame can change the room while the disk result is pending.
-        const { checkPageWriteAdmission, pageLineageLost, checkPageFormatAdmission, formatCapability, withPageFormatFloor, PAGE_FORMAT, PAGE_FORMAT_UPGRADE } = require('@panphora/clayjs/server/rooms');
-        const { createDocument } = require('./page-rebase.js');
-        const rooms = authority.rooms;
-        const open = rooms.get(filePath);
-        const room = open && String(open.nodeId) === String(target.identity) ? open : null;
-        const currentHtml = dataLossPrev ?? '';
-        const admission = checkPageWriteAdmission({
-          currentHtml, html: content, header: pageConversion ?? null, ifMatch, room,
-          pageWrite: pageWrite ?? null, createDocument,
-        });
-        const capability = origin === 'checkpoint' ? PAGE_FORMAT : formatCapability(pageFormat);
-        const admitted = authority.admittedFormats(filePath);
-        const format = checkPageFormatAdmission({ currentHtml, html: content, capability, admitted });
-        content = format.html;
-        fileContent = withPageFormatFloor(fileContent, format.floor);
-        if (admission === 'initial') {
-          pageToken = rooms.reservePageInitial(filePath, {
-            nodeId: target.identity, currentHtml, html: content, ifMatch,
-            pageWrite: pageWrite ?? null, createDocument,
-          });
-        } else if (admission === 'conversion') {
-          pageToken = rooms.reservePage(filePath, {
-            nodeId: target.identity, header: pageConversion, currentHtml, html: content, ifMatch,
-            pageWrite: pageWrite ?? null, createDocument,
-          });
-        } else if (admission === 'ordinary' && room && pageLineageLost(room, content)) {
-          // The open room still holds the article this save replaces, and the
-          // document being written no longer carries the page tag that bound them:
-          // an outside edit or a code save replaced the page under it. Restore's
-          // pattern, applied here: the room's unsaved edits become a version of
-          // their own, and the room restarts on the new document instead of
-          // keeping the old page store, which its next checkpoint would render
-          // back over the replacement. A room whose edits cannot be kept is
-          // refused, so the person can save them rather than lose them.
-          if (authority.roomIsDirty(room)) {
-            let kept = null;
-            try {
-              kept = ctx.localCheckpoint
-                ? await ctx.localCheckpoint.safetyBackup(filePath, currentHtml)
-                : null;
-            } catch (error) {
-              console.error(`Refusing a save of ${name}: the open room cannot be backed up`, error);
-            }
-            if (kept === null) {
-              const error = new Error('Unsaved edits could not be kept. Save them before replacing this page.');
-              error.code = 'unsaved-edits';
-              throw error;
-            }
-            if (!(await createBackup(baseDir, backupName, kept))) {
-              const error = new Error('Unsaved edits could not be kept. Save them before replacing this page.');
-              error.code = 'unsaved-edits';
-              throw error;
-            }
-          }
-          pageToken = rooms.reservePageReplacement(filePath, {
-            nodeId: target.identity, html: content,
-          });
-        }
-        if (persistentToken) rooms.checkPersistent(persistentToken, { html: content });
-        // An outside edit the room keeps (same revision or merged onto an older
-        // one) waits for a tab to adopt it, and until then the room's unsaved
-        // edits live only in memory: they get a recovered copy, rendered over
-        // the document this write replaces.
-        if (room && origin !== 'checkpoint' && !pageToken && content.includes('data-page') && needsAdoption(content)) {
-          await authority.recoverUnsavedEdits(target, token);
-        }
+        ({ content, fileContent, pageToken } = await admitSave({
+          name, filePath, origin, content, fileContent, dataLossPrev, ifMatch,
+          pageConversion, pageWrite, pageFormat, persistentToken, target, token,
+        }));
       }
 
       // Check if this is the first save (no versions exist yet)
@@ -520,51 +617,8 @@ function createDocumentHost(deps) {
         saveId
       });
 
-      // The bytes are on disk: the page reservation commits into the one room,
-      // and the authority stamps and publishes exactly what landed, once per
-      // registered alias of this canonical file.
-      if (pageToken) authority.rooms.commitPage(pageToken);
-      if (authorityWrite) {
-        await authority.confirmKnownWrite(target, content, token, {
-          sender: origin === 'api' ? 'data-api' : 'server-save', persistentToken,
-        });
-      }
+      await settleSave({ name, origin, content, fileContent, pageToken, target, token, persistentToken });
 
-      // Morph view-mode tabs with the persisted on-disk HTML. Edit-mode tabs
-      // are untouched — they sync via /live-sync/save on the live lane.
-      //
-      // A data API write has no tab behind it to relay its snapshot, so it has to
-      // reach edit-mode tabs the way an external disk change does: the same
-      // `external-change` notify the observer's _notifyExternal sends, so ClayJS
-      // runs it through dirty-region protection before morphing. The saved-lane
-      // broadcast stays, for the viewers. Same payload as the observer, different
-      // sender — the writer here is the data API, not the file system.
-      //
-      // With an authority the saved lane is already published, once per alias, by
-      // the confirmation above; this route is still its own publisher for a
-      // no-authority caller, which is every legacy createApp(dir).
-      const adopt = origin !== 'checkpoint' && content.includes('data-page') && needsAdoption(content);
-      if (adopt) {
-        ctx.observer?.publishExternal(
-          name,
-          Buffer.from(content, 'utf8'),
-          `${path.basename(name)} was changed outside the editor`,
-          { saved: false, continues: true }
-        );
-      }
-      if (origin === 'api' && !adopt) {
-        live.notify(name, {
-          msgType: 'warning',
-          msg: `${path.basename(name)} was updated through the data API`,
-          action: 'reload',
-          data: Buffer.byteLength(fileContent, 'utf8') <= MAX_EXTERNAL_HTML
-            ? { kind: 'external-change', html: fileContent, sender: 'data-api', etag: documentEtag(content) }
-            : { kind: 'external-change', sender: 'data-api' },
-        });
-      }
-      if (!authorityWrite) {
-        live.broadcast(name, { html: fileContent, sender: origin === 'api' ? 'data-api' : 'server-save' }, { lane: 'saved' });
-      }
       // Refresh the per-site API data sidecar BEFORE the fallible Tailwind compile,
       // so a Tailwind failure can't skip it and leave stale API data on disk
       // (mirrors the platform ordering in node-content.js). Non-fatal: a sidecar
@@ -598,19 +652,7 @@ function createDocumentHost(deps) {
       // not skip the snapshot cache below.
       await refreshTailwind(content);
 
-      // Record the provenance bit for platform sync. The sync engine reads it
-      // when uploading, so the platform guard can split a UI save from a
-      // background-script save. The snapshot beside it comes from
-      // /live-sync/save, which is why this merges rather than replaces: the two
-      // lanes contribute different halves of the same entry.
-      {
-        const prev = store.snapshots.get(name);
-        store.snapshots.set(name, {
-          html: prev ? prev.html : null,
-          userDriven,
-          timestamp: Date.now()
-        });
-      }
+      recordSaveProvenance(name, userDriven);
       return { outcome: 'committed', reason: null, etag: documentEtag(content), stored, content, file: fileContent };
     } finally {
       if (pageToken) authority.rooms.releasePage(pageToken);
@@ -826,7 +868,10 @@ function createDocumentHost(deps) {
     throw new TypeError(`Unknown page-state operation: ${op}`);
   }
 
-  return { commit, read, restructure, checkpoint, events, pageState };
+  return {
+    commit, read, restructure, checkpoint, events, pageState,
+    lanes: { prepareSave, admitSave, settleSave, recordSaveProvenance },
+  };
 }
 
 function createRootDocumentHost({ ctx, live = require('./utils/root-live.js').createRootLive(ctx.root), emit = () => {}, logger = null, loadCheckpoint, getObserver = () => null }) {
