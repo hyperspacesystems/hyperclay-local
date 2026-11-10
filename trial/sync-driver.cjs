@@ -174,7 +174,9 @@ const handlers = {
       getApiKey: () => apiKey,
       settingsStore: { get: () => settings, save: () => {} },
       observerFor: () => observer,
-      takeSnapshot: (rel, rootId) => adapterFor(rootId).host.takeSnapshot(rel, rootId),
+      // The settings id picks the root's adapter, whose context is that root;
+      // the adapter's own root argument names a Go root, never a settings id.
+      takeSnapshot: (rel, rootId) => adapterFor(rootId).host.takeSnapshot(rel),
     });
     await manager.startEnabledSessions();
     return manager.snapshot();
@@ -208,6 +210,9 @@ const handlers = {
     return out;
   },
   async conflicts({ root }) { return loadConflicts(metaDirFor(root)); },
+  // The engine's own path: SyncManager hands the root's settings id to the
+  // takeSnapshot it was built with, exactly as an upload does.
+  async takeSnapshot({ root, rel }) { return manager.takeSnapshot(rel, root); },
   async goLog() {
     const dir = path.join(RUN, 'go');
     if (!fs.existsSync(dir)) return '';

@@ -175,6 +175,10 @@ test('the sync driver runs the manager through the Go host', { skip: SKIP }, asy
     assert.deepEqual(checksums, expected);
   });
 
+  await t.test('an upload asks the root its snapshot through the root settings id', async () => {
+    assert.equal(await callDriver(child, 'takeSnapshot', { root: ROOT_ID, rel: 'index.html' }), null);
+  });
+
   await t.test('counts answers the adapter tally', async () => {
     const counts = await callDriver(child, 'counts');
     assert.equal(typeof counts.kinds, 'object');
