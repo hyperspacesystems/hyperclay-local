@@ -130,6 +130,17 @@ function makeContext({ manifest, overrideUrl, requests, seeded, signal }) {
     manifest,
     signal,
     rootUrl,
+    host: 'hyperclay-local',
+
+    // The package engine has no version listing of its own; its alias cases ask the
+    // host through this hook.
+    async versions(context, dirPath) {
+      const answer = await context.controlRequest(
+        `/list?root=${encodeURIComponent('root-a')}&path=${encodeURIComponent(dirPath)}`,
+      );
+      if (answer.status !== 200) throw new Error(`control list of ${dirPath}: ${answer.status}`);
+      return answer.body.exists ? answer.body.entries : [];
+    },
 
     async seed(rootId, docPath, text) {
       const bytes = Buffer.isBuffer(text) ? text : Buffer.from(String(text ?? ''), 'utf8');

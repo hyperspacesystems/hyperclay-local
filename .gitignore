@@ -52,6 +52,9 @@ logs
 
 # Electron specific
 *.tgz
+# ...but the conformance package is installed from a repo-local tarball, so the
+# archive itself is an input: ignored, no runner would ever have it.
+!/vendor/host-conformance.tgz
 *.tar.gz
 
 # Auto-generated files
@@ -59,6 +62,7 @@ package-lock.json (optional - remove this line if you want to commit it)
 .notarization-submissions-*.json
 UPLOAD_REPORT.md
 .deploy
+.conformance/
 test-box-out/
 .chrome-for-testing/
 src/main/offline-runtime/.staging-*/

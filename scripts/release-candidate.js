@@ -17,7 +17,7 @@ function fullInventory() {
   jobs.push({ id: 'test-windows', kind: 'test', platform: 'windows',
     command: 'npm test -- --runInBand' });
   jobs.push(
-    { id: 'conformance', kind: 'test' },
+    { id: 'conformance', kind: 'test', artifacts: ['conformance-linux'] },
     { id: 'license', kind: 'test' },
     { id: 'audit', kind: 'test', command: 'npm audit --omit=dev --audit-level=critical' },
     { id: 'offline-runtime', kind: 'test', command: 'node scripts/check-offline-runtime-release.mjs' }
@@ -27,7 +27,8 @@ function fullInventory() {
   }
   for (const arch of ['x64', 'arm64']) {
     for (const check of ['appimage-launch', 'server-save', 'popover', 'autostart']) {
-      jobs.push({ id: `linux-${arch}-${check}`, kind: 'desktop', platform: `linux-${arch}` });
+      jobs.push({ id: `linux-${arch}-${check}`, kind: 'desktop', platform: `linux-${arch}`,
+        ...(check === 'server-save' ? { artifacts: [`conformance-linux-${arch}-artifact`] } : {}) });
     }
   }
   jobs.push(

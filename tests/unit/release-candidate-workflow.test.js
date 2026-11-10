@@ -272,15 +272,49 @@ exports.S3Client = class { async send(command) {
 test('contract CLI prints exactly the graph ids and retained artifact names', () => {
   const result = spawnSync(process.execPath, [path.join(root, 'scripts/release-candidate.js'), 'contract'], { encoding: 'utf8' });
   expect(result.status).toBe(0);
-  const artifacts = ['identity', 'build-macos', 'build-windows', 'build-linux-x64',
-    'build-linux-arm64', 'linux-update-signing', 'update-feed'];
+  const artifacts = ['identity', 'conformance-linux', 'build-macos', 'build-windows', 'build-linux-x64',
+    'build-linux-arm64', 'conformance-linux-x64-artifact', 'conformance-linux-arm64-artifact',
+    'linux-update-signing', 'update-feed'];
   expect(JSON.parse(result.stdout)).toEqual({ checks: graph.map(job => job.id), artifacts });
   expect(graph.flatMap(job => job.artifacts || [])).toEqual(artifacts);
   for (const name of artifacts) {
+    const uploaded = name === 'identity' || name.startsWith('conformance-');
     expect(Object.values(workflow.jobs).some(job => job.steps.some(step =>
-      name === 'identity' ? step.uses === 'actions/upload-artifact@v4' && step.with.name === name
+      uploaded ? step.uses === 'actions/upload-artifact@v4' && step.with.name === name
         : step.run === `node ../trusted/scripts/platform-candidate-outputs.js retain ${name}`))).toBe(true);
   }
+});
+
+test('conformance evidence runs through the candidate wrapper and uploads one report per platform', () => {
+  const platforms = { conformance: 'linux', 'linux-x64-server-save': 'linux-x64-artifact',
+    'linux-arm64-server-save': 'linux-arm64-artifact' };
+  for (const [id, platform] of Object.entries(platforms)) {
+    const job = workflow.jobs[id];
+    const evidence = job.steps.find(step => step.uses === 'actions/upload-artifact@v4'
+      && step.with.name === `conformance-${platform}`);
+    expect(evidence).toEqual({ uses: 'actions/upload-artifact@v4', if: 'always()',
+      with: { name: `conformance-${platform}`, path: `candidate/.conformance/conformance-${platform}.json`,
+        'if-no-files-found': 'error' } });
+    expect(job.steps.some(step => step['continue-on-error'])).toBe(false);
+    for (const step of job.steps) expect(step.run || '').not.toMatch(/conformance.*\|\|\s*true/);
+  }
+  const gate = workflow.jobs.conformance.steps.find(step => step.run?.includes('conformance-candidate.mjs'));
+  expect(gate.run).toBe('node scripts/conformance-candidate.mjs --platform linux');
+  expect(gate.env).toEqual({ MANIFEST_IDENTITY: '${{ inputs.manifest_identity }}',
+    WORKFLOW_SHA: '${{ github.workflow_sha }}' });
+  expect(candidateContract().artifacts.filter(name => name.startsWith('conformance-')))
+    .toEqual(Object.values(platforms).map(platform => `conformance-${platform}`));
+  for (const id of ['linux-x64-server-save', 'linux-arm64-server-save']) {
+    const command = workflow.jobs[id].steps.find(step => step.run?.includes('bash tests/linux/run-all.sh'));
+    expect(command.env.CONFORMANCE_PLATFORM).toBe(platforms[id]);
+    expect(command.env.MANIFEST_IDENTITY).toBe('${{ inputs.manifest_identity }}');
+    expect(command.env.WORKFLOW_SHA).toBe('${{ github.workflow_sha }}');
+  }
+  const check = fs.readFileSync(path.join(root, 'tests/linux/server-save.sh'), 'utf8');
+  expect(check).toContain('node scripts/conformance-candidate.mjs --platform "${CONFORMANCE_PLATFORM:-}"');
+  expect(check).toContain('node scripts/conformance.mjs');
+  expect(check).toContain('--url "$URL" --root "$home/apps" --page "$PAGE" --doc "$URLPATH" --target "$URLPATH"');
+  expect(check).not.toContain('tests/conformance/host-test.mjs');
 });
 
 
@@ -289,11 +323,11 @@ test('GitHub artifact inventory allows only identity and check evidence, with co
   const uploads = steps.filter(step => step.uses?.startsWith('actions/upload-artifact@'));
   expect(uploads.length).toBeGreaterThan(0);
   for (const step of uploads) {
-    expect(step.with.name).toMatch(/^(identity|diagnostics-.+|suite-coverage|notarization-receipt)$/);
+    expect(step.with.name).toMatch(/^(identity|conformance-[a-z0-9-]+|diagnostics-.+|suite-coverage|notarization-receipt)$/);
     const paths = step.with.path.split(/\r?\n/).map(value => value.trim()).filter(Boolean);
     for (const file of paths) {
       expect(file).not.toMatch(/(?:candidate\.tar|\.(?:tar|gz|zip|dmg|exe|AppImage|sig|blockmap)(?:$|[/*])|(?:^|\/)(?:dist|executables|retained|transfer|feeds|signatures|build[^/]*)(?:\/|$)|latest[^/]*\.ya?ml)/i);
-      expect(file).toMatch(/^(identity\/identity\.json|candidate\/(?:diagnostics|linux-check-artifacts)\/[^*]*)$/);
+      expect(file).toMatch(/^(identity\/identity\.json|candidate\/(?:diagnostics|linux-check-artifacts)\/[^*]*|candidate\/\.conformance\/[^*]*\.json)$/);
     }
   }
   expect(steps.filter(step => step.uses?.startsWith('actions/download-artifact@'))).toEqual([]);

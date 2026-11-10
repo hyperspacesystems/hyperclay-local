@@ -2474,7 +2474,7 @@ function createApp(ctxOrDir, devHooks = null, isKnownPath = null) {
       // not keeps the per-tab stream it has always used.
       // `wire` because this host serves §11's two routes, so `clay.wire` pages and
       // the `htmlclay wire` CLI can drive a local process from a document here.
-      const body = { spec: 1, extensions: ['conditional', 'data-read', 'data-write', 'format', 'receipts', 'scoped-stylesheet', 'sync', 'sync-worker', 'upload', 'wire'] };
+      const body = { spec: 1, extensions: ['conditional', 'data-guard-v1', 'data-read', 'data-write', 'format', 'receipts', 'scoped-stylesheet', 'sync', 'sync-worker', 'upload', 'wire'] };
       // `page-recovery-v1`: the document block's `pageState.href` answers the page state
       // stored for these exact bytes, so a client may retire journaled page work against it.
       if (ctx.localAuthority) body.extensions.push('live-data', 'live-provenance', 'page', 'page-recovery-v1');

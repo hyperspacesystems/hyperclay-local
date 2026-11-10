@@ -38,12 +38,11 @@ jobs:
       # 25 minutes.
       - run: npm run test:app
 
-  # The conformance gate drives the Malleable HTML File host-test page against a real
-  # listener, in a browser, from the host's own origin. That origin is the point: the
-  # spec requires exact origin validation on every save, so a save can only be proven
-  # from the origin that will be allowed to make it, and the cross-origin refusal needs
-  # a real sandboxed iframe. `npm test` skips this unless HOST_GATE=1, because it wants
-  # a downloaded browser and no developer should pay that on every run.
+  # The conformance gate runs `npm run conformance`, which drives the installed
+  # host-conformance package against this host's own origin, in a browser and over
+  # HTTP. That origin is the point: the spec requires exact origin validation on every
+  # save, so a save can only be proven from the origin that will be allowed to make it.
+  # It is the one gate a release is gated on; `npm test` no longer knows anything about it.
   #
   # Linux only. The gate tests the protocol this host speaks, which is the same on every
   # platform, and the matrix above already proves the suite runs everywhere.
@@ -57,14 +56,12 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           npm-version: ${{ env.NPM_VERSION }}
 
-      # playwright is already a devDependency; this downloads the browser it drives.
+      # System libraries for the browser, then the pinned Chrome for Testing the
+      # launcher's page engine points playwright at.
       - run: npx playwright install-deps chromium
       - run: npm run browser:install && node scripts/chrome-for-testing/configure-linux-sandbox.cjs
 
-      - run: npm test -- --runInBand tests/integration/host-gate.test.js
-        env:
-          HOST_GATE: "1"
-          HOST_GATE_RUNNER: ${{ github.workspace }}/tests/conformance/host-test.mjs
+      - run: npm run conformance
 
   # The shipped AppImage, used the way a Linux user uses it: does it start on a
   # stock Ubuntu 24.04 (unprivileged user namespaces restricted, no libfuse2), does

@@ -406,10 +406,16 @@ jobs:
     - uses: ./trusted/.github/actions/candidate
     - run: npx playwright install-deps chromium
     - run: npm run browser:install && node scripts/chrome-for-testing/configure-linux-sandbox.cjs
-    - run: npm test -- --runInBand tests/integration/host-gate.test.js
+    - run: node scripts/conformance-candidate.mjs --platform linux
       env:
-        HOST_GATE: '1'
-        HOST_GATE_RUNNER: ${{ github.workspace }}/candidate/tests/conformance/host-test.mjs
+        MANIFEST_IDENTITY: ${{ inputs.manifest_identity }}
+        WORKFLOW_SHA: ${{ github.workflow_sha }}
+    - uses: actions/upload-artifact@v4
+      with:
+        name: conformance-linux
+        path: candidate/.conformance/conformance-linux.json
+        if-no-files-found: error
+      if: always()
     needs:
     - verify
   license:
@@ -722,6 +728,15 @@ jobs:
       env:
         SYSTEM_MUTATIONS: '1'
         CHECKS: server-save
+        CONFORMANCE_PLATFORM: linux-x64-artifact
+        MANIFEST_IDENTITY: ${{ inputs.manifest_identity }}
+        WORKFLOW_SHA: ${{ github.workflow_sha }}
+    - uses: actions/upload-artifact@v4
+      with:
+        name: conformance-linux-x64-artifact
+        path: candidate/.conformance/conformance-linux-x64-artifact.json
+        if-no-files-found: error
+      if: always()
     - uses: actions/upload-artifact@v4
       with:
         name: diagnostics-linux-x64-server-save
@@ -878,6 +893,15 @@ jobs:
       env:
         SYSTEM_MUTATIONS: '1'
         CHECKS: server-save
+        CONFORMANCE_PLATFORM: linux-arm64-artifact
+        MANIFEST_IDENTITY: ${{ inputs.manifest_identity }}
+        WORKFLOW_SHA: ${{ github.workflow_sha }}
+    - uses: actions/upload-artifact@v4
+      with:
+        name: conformance-linux-arm64-artifact
+        path: candidate/.conformance/conformance-linux-arm64-artifact.json
+        if-no-files-found: error
+      if: always()
     - uses: actions/upload-artifact@v4
       with:
         name: diagnostics-linux-arm64-server-save

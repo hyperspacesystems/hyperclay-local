@@ -133,6 +133,20 @@ test('refuses wrong app, missing values and invalid digests', () => {
   expect(() => identityArtifact({ ...inputs, candidate_sha256: 'bad' })).toThrow('invalid digest');
 });
 
+test('conformance evidence is declared once per platform', () => {
+  const graph = candidateJobGraph();
+  expect(graph.find(job => job.id === 'conformance').artifacts).toEqual(['conformance-linux']);
+  for (const arch of ['x64', 'arm64']) {
+    expect(graph.find(job => job.id === `linux-${arch}-server-save`).artifacts)
+      .toEqual([`conformance-linux-${arch}-artifact`]);
+    for (const check of ['appimage-launch', 'popover', 'autostart']) {
+      expect(graph.find(job => job.id === `linux-${arch}-${check}`).artifacts).toBeUndefined();
+    }
+  }
+  expect(graph.flatMap(job => job.artifacts || []).filter(name => name.startsWith('conformance')))
+    .toEqual(['conformance-linux', 'conformance-linux-x64-artifact', 'conformance-linux-arm64-artifact']);
+});
+
 test('no candidate job or step uploads or publishes', () => {
   for (const job of candidateJobGraph()) {
     expect(job.id).not.toMatch(/upload|publish/i);
