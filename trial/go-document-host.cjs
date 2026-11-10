@@ -52,6 +52,16 @@ function adapterCounts() {
   return { kinds };
 }
 
+// The checkpoints this process has asked the Go host for, by opId, until Go
+// answers. Go's render-checkpoint call names the opId as opHandle; the service's
+// handler reads what Local's checkpoint holds across its lock from here: the
+// room, its target, and the admission claim captured before the lock.
+const pendingCheckpoints = new Map();
+
+function checkpointContext(opHandle) {
+  return pendingCheckpoints.get(opHandle) ?? null;
+}
+
 function encodeBytes(value) {
   if (typeof value === 'string') return { encoding: 'utf8', data: value };
   if (Buffer.isBuffer(value)) return { encoding: 'base64', data: value.toString('base64') };
@@ -118,7 +128,7 @@ function answerError(answer, opId) {
   return error;
 }
 
-function createGoDocumentHost({ ctx }) {
+function createGoDocumentHost({ ctx, checkpointClaim = null }) {
   function rootId(root = ctx.root) {
     const connection = getConnection();
     if (typeof root === 'string') {
@@ -141,6 +151,10 @@ function createGoDocumentHost({ ctx }) {
     try {
       answer = await new Promise((resolve, reject) => {
         const headers = { authorization: `Bearer ${connection.secret}` };
+        if (connection.epoch && connection.peerEpoch) {
+          headers['x-trial-epoch'] = connection.epoch;
+          headers['x-trial-peer-epoch'] = connection.peerEpoch;
+        }
         if (payload) {
           headers['content-type'] = 'application/json';
           headers['content-length'] = String(payload.length);
@@ -263,10 +277,31 @@ function createGoDocumentHost({ ctx }) {
     return { html: snapshot.html ?? null, userDriven: snapshot.userDriven };
   }
 
-  async function checkpoint() {
-    const error = new Error('checkpoint needs rooms');
-    error.code = 'unsupported';
-    throw error;
+  // Local's checkpoint for a dirty room, run by the Go host: Go takes the
+  // document's lock and asks the service for the room half by this write's
+  // opId, so what the checkpoint holds waits in pendingCheckpoints until Go
+  // answers. An indeterminate answer throws, and the scheduler retries it.
+  async function checkpoint({ name, filePath }, { roomIdentity, generation }, { target, room }) {
+    const opId = randomBytes(16).toString('hex');
+    const claim = checkpointClaim ? checkpointClaim(target) : null;
+    pendingCheckpoints.set(opId, { target, room, claim, filePath });
+    try {
+      const answer = await request('POST', '/v1/checkpoint', {
+        body: { opId, root: rootId(), name, roomIdentity: String(roomIdentity), generation: generation ?? null },
+        opId,
+      });
+      if (answer.kind === 'indeterminate') {
+        const error = new Error(`the checkpoint of ${name} may not have reached disk`);
+        error.code = answer.reason ?? 'indeterminate';
+        error.indeterminate = true;
+        error.opId = opId;
+        throw error;
+      }
+      if (answer.written) answer.written = decodeBytes(answer.written);
+      return answer;
+    } finally {
+      pendingCheckpoints.delete(opId);
+    }
   }
 
   // One newline-delimited stream of the host's frames, resumed from the last
@@ -373,4 +408,4 @@ function createGoDocumentHost({ ctx }) {
   };
 }
 
-module.exports = { createGoDocumentHost, adapterCounts };
+module.exports = { createGoDocumentHost, adapterCounts, checkpointContext };

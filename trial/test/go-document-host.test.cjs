@@ -278,10 +278,9 @@ test('the Go document host adapter', { skip: SKIP }, async (t) => {
     assert.equal(requests, 0);
   });
 
-  await t.test('checkpoint is refused', async () => {
-    await assert.rejects(host.checkpoint({ name: 'index.html', filePath: 'x' }, {}, {}), (error) => {
-      assert.equal(error.message, 'checkpoint needs rooms');
-      assert.equal(error.code, 'unsupported');
+  await t.test('a checkpoint is refused by a Go host with no service attached', async () => {
+    await assert.rejects(host.checkpoint({ name: 'index.html', filePath: 'x' }, { roomIdentity: 1 }, {}), (error) => {
+      assert.equal(error.status, 404);
       return true;
     });
   });
