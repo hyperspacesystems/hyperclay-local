@@ -32,6 +32,10 @@ const STRUCTURE_KINDS = {
 const UNSENDABLE = new Set(['context', 'filePath', 'hooks']);
 
 const tally = { kinds: {} };
+// Every subscription to a root sees every commit frame, and a root has more than
+// one subscriber, so a commit is counted once per frame cursor, which is unique
+// within one Go process.
+const countedCommits = new Set();
 
 function countKind(kind) {
   if (!tally.kinds[kind]) tally.kinds[kind] = { adapter: 0, committed: 0 };
@@ -301,7 +305,8 @@ function createGoDocumentHost({ ctx }) {
         listener({ type: 'change', event: frame.event, rel: frame.rel });
         return;
       }
-      if (frame.type === 'commit' && frame.outcome === 'committed') {
+      if (frame.type === 'commit' && frame.outcome === 'committed' && !countedCommits.has(frame.cursor)) {
+        countedCommits.add(frame.cursor);
         countKind(frame.kind).committed += 1;
       }
     }

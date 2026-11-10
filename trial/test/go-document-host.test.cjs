@@ -328,6 +328,29 @@ test('the Go document host adapter', { skip: SKIP }, async (t) => {
     assert.equal(after.committed, before.committed + 1);
   });
 
+  await t.test('two subscriptions on one root count a commit once', async () => {
+    await wait(1800);
+    const before = adapterCounts().kinds['browser-save'] ?? { adapter: 0, committed: 0 };
+    const first = host.events(null, () => {});
+    const second = host.events(null, () => {});
+    try {
+      await wait(300);
+      const result = await host.commit({
+        kind: 'browser-save',
+        name: 'counted-once.html',
+        bytes: document('counted once'),
+        expected: { type: 'absent' },
+      });
+      assert.equal(result.outcome, 'committed');
+      await until(() => (adapterCounts().kinds['browser-save']?.committed ?? 0) > before.committed);
+      await wait(500);
+    } finally {
+      first();
+      second();
+    }
+    assert.equal(adapterCounts().kinds['browser-save'].committed, before.committed + 1);
+  });
+
   await t.test('a restarted host makes the stream say gap first', async () => {
     const stale = await firstFrame(go, '?since=0000000000000000:1');
     assert.equal(stale.type, 'gap');
