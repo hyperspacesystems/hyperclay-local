@@ -47,6 +47,8 @@ const { logicalBytes, readPageState, readPageRecord } = require('./page-state-st
 const roomsPackage = () => require('@panphora/clayjs/server/rooms');
 const cheerio = require('cheerio');
 const { createRootDocumentHost, canonicalForWrite } = require('./document-host.js');
+const { calculateChecksum } = require('../sync-engine/utils');
+const { writeContexts } = require('./write-contexts');
 
 const KIND_BY_ORIGIN = { save: 'browser-save', api: 'data-api' };
 
@@ -3363,6 +3365,100 @@ function createApp(ctxOrDir, devHooks = null, isKnownPath = null) {
     // marker gate as the GET, the same loopback-origin gate as every mutating
     // request, and the same commit path as /save. Bare `/_/api` writes index.html,
     // as the bare GET reads it.
+    // The page API write when the document host consults this process back while
+    // it holds the document's lock (the managed trial's service): the read, the
+    // checks, the persistent hold and the render run under this boundary as
+    // Local's do, then the boundary is released and the write goes to the host
+    // with the checksum it was rendered against and an opHandle under which the
+    // room's hold is found. A document that changed in between is written again
+    // from its read, twice at most. Answers null for a document with no page
+    // store, which the caller writes Local's own way.
+    async function releasedPageApiWrite(req, name, sourcePath, data, query, preparedWrite) {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        let pending = null;
+        const answered = await runDocumentWrite(req, name, sourcePath, async (target, token) => {
+          const bytes = await fs.readFile(target.canonicalPath).catch((error) => {
+            if (error.code === 'ENOENT') return null;
+            throw error;
+          });
+          const stored = bytes && await logicalBytes(baseDir, name, bytes);
+          const previous = stored?.toString('utf8');
+          if (!stored || !hasPageStore(previous)) return null;
+          const etag = documentEtag(stored);
+          const changed = await ctx.localAuthority.reconcileDisk(target, previous, token);
+          if (changed.kind === 'replacement') throw movedOrDeleted();
+          if (!req.headers['page-if-match']) {
+            return { status: 428, headers: { ETag: etag }, json: { code: 'revision-required', error: 'Page-If-Match is required' } };
+          }
+          if (!req.headers['if-match']) {
+            return { status: 428, headers: { ETag: etag }, json: { code: 'etag-required', error: 'If-Match is required' } };
+          }
+          if (String(req.headers['if-match']).trim() === '*' || !ifMatchSatisfied(req.headers['if-match'], stored)) {
+            return { status: 412, headers: { ETag: etag }, json: { error: 'Precondition Failed', message: `${name} changed since you read it. Nothing was written.` } };
+          }
+          const room = ctx.localAuthority.rooms.get(target.canonicalPath);
+          const held = room && String(room.nodeId) === String(target.identity)
+            ? ctx.localAuthority.rooms.holdPersistent(target.canonicalPath, { nodeId: target.identity, requireClean: false })
+            : null;
+          try {
+            const authoritative = await authoritativePageHtml(ctx.localAuthority, target, previous);
+            const options = { codec: (await loadPageModules()).codec,
+              ...(query.present ? { rules: preparedWrite.rules } : {}) };
+            const { readPageDocument, writePageDocument } = await loadPageModules();
+            const current = await readPageDocument(cheerio.load, authoritative, options);
+            if (current.revision !== req.headers['page-if-match']) {
+              return { status: 409, headers: { ETag: etag, 'Page-Revision': current.revision },
+                json: { code: 'revision-stale', error: 'The page revision has changed' } };
+            }
+            const result = await writePageDocument(cheerio.load, authoritative, data, {
+              ...options, expectedRevision: current.revision,
+            });
+            if (result.html === previous) {
+              const fresh = await readPageDocument(cheerio.load, previous, options);
+              return { status: 200, headers: { ETag: etag, 'Page-Revision': fresh.revision }, json: fresh.data };
+            }
+            pending = { target, html: result.html, previous, checksum: await calculateChecksum(bytes), held, options };
+            return undefined;
+          } catch (error) {
+            const refusal = pageFailure(error);
+            if (refusal) return refusal;
+            throw error;
+          } finally {
+            if (held && !pending) ctx.localAuthority.rooms.releasePersistent(held);
+          }
+        });
+        if (!pending) return answered;
+        const opHandle = crypto.randomBytes(16).toString('hex');
+        writeContexts.set(opHandle, { persistentToken: pending.held, target: pending.target });
+        let written;
+        try {
+          written = await documentHost.commit({
+            kind: 'data-api', name, filePath: pending.target.canonicalPath, bytes: pending.html,
+            dataLossPrev: pending.previous, userDriven: false, saveId: '', opHandle,
+            expected: { type: 'checksum', value: pending.checksum },
+            pageFormat: req.get('X-Clay-Page-Format'),
+            context: { target: pending.target, token: null },
+          });
+        } finally {
+          writeContexts.delete(opHandle);
+          if (pending.held) ctx.localAuthority.rooms.releasePersistent(pending.held);
+        }
+        if (written.outcome === 'refused' && written.reason === 'changed') continue;
+        if (written.outcome === 'indeterminate') throw written.error;
+        if (written.outcome !== 'committed') {
+          const refusal = written.refusal;
+          if (refusal) return { status: refusal.status, headers: refusal.headers ?? {}, json: refusal.body ?? { code: refusal.code } };
+          return { status: 409, headers: {}, json: { code: written.reason ?? 'refused', error: `${name} was not written` } };
+        }
+        const content = typeof written.content === 'string' ? written.content : String(written.content);
+        const { readPageDocument } = await loadPageModules();
+        const fresh = await readPageDocument(cheerio.load, content, pending.options);
+        return { status: 200, headers: { ETag: documentEtag(Buffer.from(content, 'utf8')),
+          'Page-Revision': fresh.revision }, json: fresh.data };
+      }
+      return { status: 503, headers: { 'Retry-After': '1' }, json: { reason: 'changed', retryable: true } };
+    }
+
     async function handleApiWrite(req, res, name) {
       const query = readDataQuery(req.originalUrl);
       if (query.error) return res.status(400).json(query.error);
@@ -3386,7 +3482,10 @@ function createApp(ctxOrDir, devHooks = null, isKnownPath = null) {
           ? await prepareSiteDataWriteLocal(query.present ? { dataParam: query.text } : {})
           : null;
         if (preparedWrite?.result) return sendApiResult(res, preparedWrite.result);
-        const result = ctx.localAuthority
+        const released = ctx.localAuthority && documentHost.releasesBoundary
+          ? await releasedPageApiWrite(req, name, sourcePath, data, query, preparedWrite)
+          : null;
+        const result = released ?? (ctx.localAuthority
           ? await runDocumentWrite(req, name, sourcePath, async (target, token) => {
               const bytes = await fs.readFile(target.canonicalPath).catch((error) => {
                 if (error.code === 'ENOENT') return null;
@@ -3461,7 +3560,7 @@ function createApp(ctxOrDir, devHooks = null, isKnownPath = null) {
                 name, filePath: sourcePath, content: html, dataLossPrev: previous, userDriven: false, saveId: '', origin: 'api',
                 pageFormat: req.get('X-Clay-Page-Format')
               })
-            });
+            }));
         if (result.status === 200) console.log(`Wrote data into ${name}`);
         return sendApiResult(res, result);
       } catch (error) {

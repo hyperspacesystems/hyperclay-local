@@ -62,6 +62,16 @@ function checkpointContext(opHandle) {
   return pendingCheckpoints.get(opHandle) ?? null;
 }
 
+// Set by the managed trial's service before it mounts Local's app on this
+// adapter: the host consults the service back while it holds a document's lock,
+// so a route that writes must release its own boundary first, and a checkpoint
+// captures the authority's admission claim before the lock.
+let serviceMode = null;
+
+function configureService(mode) {
+  serviceMode = mode ? { checkpointClaim: mode.checkpointClaim ?? null } : null;
+}
+
 function encodeBytes(value) {
   if (typeof value === 'string') return { encoding: 'utf8', data: value };
   if (Buffer.isBuffer(value)) return { encoding: 'base64', data: value.toString('base64') };
@@ -128,7 +138,7 @@ function answerError(answer, opId) {
   return error;
 }
 
-function createGoDocumentHost({ ctx, checkpointClaim = null }) {
+function createGoDocumentHost({ ctx, checkpointClaim = serviceMode ? serviceMode.checkpointClaim : null }) {
   function rootId(root = ctx.root) {
     const connection = getConnection();
     if (typeof root === 'string') {
@@ -196,6 +206,7 @@ function createGoDocumentHost({ ctx, checkpointClaim = null }) {
       content: decodeBytes(answer.content),
     };
     if (answer.checksum !== null && answer.checksum !== undefined) result.checksum = answer.checksum;
+    if (answer.refusal) result.refusal = answer.refusal;
     if (result.outcome === 'indeterminate') {
       const error = new Error(`${request_.kind} of ${request_.name} may not have landed`);
       error.code = result.reason ?? 'after-rename';
@@ -405,7 +416,8 @@ function createGoDocumentHost({ ctx, checkpointClaim = null }) {
 
   return {
     commit, read, restructure, checkpoint, events, pageState, takeSnapshot, isGoDocumentHost: true,
+    releasesBoundary: Boolean(serviceMode),
   };
 }
 
-module.exports = { createGoDocumentHost, adapterCounts, checkpointContext };
+module.exports = { createGoDocumentHost, adapterCounts, checkpointContext, configureService };
