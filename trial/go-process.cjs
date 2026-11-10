@@ -10,6 +10,7 @@ function setConnection(next) {
     url: next.url.replace(/\/+$/, ''),
     secret: next.secret,
     epoch: next.epoch ?? null,
+    peerEpoch: next.peerEpoch ?? null,
     roots: { ...(next.roots ?? {}) },
   };
   return connection;

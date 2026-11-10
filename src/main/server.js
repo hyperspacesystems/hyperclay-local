@@ -1229,6 +1229,53 @@ async function handleAuthorityLiveStream(ctx, req, res, { file, lane, resolveTar
 // root's observer stays collectable.
 const replayResetHooked = new WeakSet();
 
+// Hosted parity for the page-write refusals (hyperclay's
+// server-lib/page-write-http.js is the source of this table): the shared rooms
+// package refuses an unauthorized page initialization or conversion by
+// throwing one of its two error classes, and both hosts answer with the same
+// status, code and Retry-After. The rooms package stays lazily required, so
+// this only pulls it in on the refusal path of a save.
+const PAGE_WRITE_REFUSALS = {
+  'file-changed': [428, 'page-condition-required'],
+  'invalid-header': [400, 'page-conversion-refused'],
+  'invalid-capture': [422, 'page-conversion-refused'],
+  'invalid-source': [409, 'page-conversion-refused'],
+  'ambiguous-source': [409, 'page-conversion-refused'],
+  'room-page-authority': [409, 'page-conversion-refused'],
+  'implicit-conversion': [409, 'page-conversion-required'],
+  'seed-lineage': [409, 'page-lineage-stale'],
+  'nothing-to-write': [409, 'page-nothing-to-write'],
+  'source-changed': [409, 'page-conversion-stale'],
+  'room-changed': [409, 'page-conversion-stale'],
+  'room-required': [409, 'page-conversion-stale'],
+  'page-converting': [503, 'page-converting', 1],
+  budget: [503, 'page-capacity', 60],
+  'receipt-capacity': [503, 'page-capacity', 60],
+};
+
+const pageWriteFailure = (error) => {
+  if (!error) return null;
+  const { PageConversionError, PageFormatError, PAGE_FORMAT_UPGRADE } = require('@panphora/clayjs/server/rooms');
+  if (error && error.code === PAGE_FORMAT_UPGRADE) {
+    return { statusCode: 409, code: PAGE_FORMAT_UPGRADE, reason: PAGE_FORMAT_UPGRADE, minimum: error.minimum, message: error.message };
+  }
+  if (error.code === 'invalid-update') {
+    return { statusCode: 422, code: 'page-conversion-refused', reason: 'invalid-capture', message: 'The page content could not be read.' };
+  }
+  if (error instanceof PageFormatError) {
+    return { statusCode: 409, code: 'page-format', message: error.message };
+  }
+  if (!(error instanceof PageConversionError)) return null;
+  const [statusCode, code, retryAfter] = PAGE_WRITE_REFUSALS[error.reason] || [500, 'page-write-failed'];
+  return {
+    statusCode,
+    code,
+    message: statusCode === 500 ? 'Could not complete the page write.' : error.message,
+    reason: error.reason,
+    ...(retryAfter === undefined ? {} : { retryAfter }),
+  };
+};
+
 // Build and return the configured Express app without listening; RootServer in
 // root-servers.js wraps it. Tests drive the real route wiring (ordering + the marker
 // gate) via supertest against an ephemeral port instead of the hardcoded 4321.
@@ -2027,53 +2074,6 @@ function createApp(ctxOrDir, devHooks = null, isKnownPath = null) {
     // If you edit a file locally with a text editor, refresh the browser to see changes.
     // Disk sync is handled by polling + /sync/download (stripped content).
     console.log(`[LiveSync] Ready for browser-to-browser sync (no file watcher broadcast)`);
-
-    // Hosted parity for the page-write refusals (hyperclay's
-    // server-lib/page-write-http.js is the source of this table): the shared rooms
-    // package refuses an unauthorized page initialization or conversion by
-    // throwing one of its two error classes, and both hosts answer with the same
-    // status, code and Retry-After. The rooms package stays lazily required, so
-    // this only pulls it in on the refusal path of a save.
-    const PAGE_WRITE_REFUSALS = {
-      'file-changed': [428, 'page-condition-required'],
-      'invalid-header': [400, 'page-conversion-refused'],
-      'invalid-capture': [422, 'page-conversion-refused'],
-      'invalid-source': [409, 'page-conversion-refused'],
-      'ambiguous-source': [409, 'page-conversion-refused'],
-      'room-page-authority': [409, 'page-conversion-refused'],
-      'implicit-conversion': [409, 'page-conversion-required'],
-      'seed-lineage': [409, 'page-lineage-stale'],
-      'nothing-to-write': [409, 'page-nothing-to-write'],
-      'source-changed': [409, 'page-conversion-stale'],
-      'room-changed': [409, 'page-conversion-stale'],
-      'room-required': [409, 'page-conversion-stale'],
-      'page-converting': [503, 'page-converting', 1],
-      budget: [503, 'page-capacity', 60],
-      'receipt-capacity': [503, 'page-capacity', 60],
-    };
-
-    const pageWriteFailure = (error) => {
-      if (!error) return null;
-      const { PageConversionError, PageFormatError, PAGE_FORMAT_UPGRADE } = require('@panphora/clayjs/server/rooms');
-      if (error && error.code === PAGE_FORMAT_UPGRADE) {
-        return { statusCode: 409, code: PAGE_FORMAT_UPGRADE, reason: PAGE_FORMAT_UPGRADE, minimum: error.minimum, message: error.message };
-      }
-      if (error.code === 'invalid-update') {
-        return { statusCode: 422, code: 'page-conversion-refused', reason: 'invalid-capture', message: 'The page content could not be read.' };
-      }
-      if (error instanceof PageFormatError) {
-        return { statusCode: 409, code: 'page-format', message: error.message };
-      }
-      if (!(error instanceof PageConversionError)) return null;
-      const [statusCode, code, retryAfter] = PAGE_WRITE_REFUSALS[error.reason] || [500, 'page-write-failed'];
-      return {
-        statusCode,
-        code,
-        message: statusCode === 500 ? 'Could not complete the page write.' : error.message,
-        reason: error.reason,
-        ...(retryAfter === undefined ? {} : { retryAfter }),
-      };
-    };
 
     const documentHost = createRootDocumentHost({ ctx, live });
 
@@ -3917,5 +3917,6 @@ module.exports = {
   assetsDirFor,
   assetsFolderName,
   UPLOADS_FOLDER,
-  refusedUpload
+  refusedUpload,
+  pageWriteFailure
 };
