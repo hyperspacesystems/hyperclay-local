@@ -22,6 +22,7 @@ const { withDocumentWrite, withStructureChange } = require('./utils/write-queue'
 const { getConsentRegistry, resolveWritePath } = require('./utils/path-resolver');
 const { logicalBytes } = require('./page-state-store');
 const { rebaseStaleSave, newestVersionFiles } = require('./page-rebase');
+const { reader } = require('./document-reader');
 const { calculateChecksum } = require('../sync-engine/utils');
 const { createRootDocumentHost, MAX_EXTERNAL_HTML } = require('./document-host');
 
@@ -205,6 +206,66 @@ class RootObserver extends EventEmitter {
   }
 
   /**
+   * The authority's judgment of one HTML document's bytes, read by the caller
+   * with a stable stat (`before`): `self` when they are the bytes this host last
+   * confirmed, else the logical document the room should observe, rebased onto
+   * the page the authority last confirmed when it is an older copy of that page
+   * (`rebase`, with the checksum the rebase write must still find). Reads only
+   * through logicalBytes and rebaseStaleSave, which use the reader scope.
+   */
+  async _judgeHtml(canonicalPath, rel, target, bytes, before) {
+    // Classified against the logical document: the bytes on disk with the page
+    // editor's merge state put back, which is what this host stamps and publishes.
+    const logical = await logicalBytes(this.root.path, rel, bytes);
+
+    const stamp = this.localAuthority.confirmedStamp(canonicalPath);
+    if (stamp && stamp.identity === target.identity && stamp.etag === documentEtag(logical) &&
+        stamp.dev === before.dev && stamp.ino === before.ino &&
+        stamp.size === before.size && stamp.mtimeNs === before.mtimeNs) {
+      return { kind: 'self' };
+    }
+
+    // An older copy of a page (a checkout, an editor saving an older buffer) still
+    // belongs to the room its rev came from: rebased onto the stored page it is a
+    // continuation of that room, so the tabs merge it instead of being replaced.
+    // Judged on the file as written: the sidecar keeps the older article's state too, and a
+    // copy composed with it would look like a page of its own rather than a stale one. The
+    // disk already holds the copy, so it rebases onto the page the authority last confirmed.
+    const rebased = await rebaseStaleSave(this.root.path, rel, bytes.toString('utf8'), reader().versionFiles ?? newestVersionFiles,
+      { stored: this.localAuthority.confirmedDocument?.(canonicalPath) ?? null });
+    if (!rebased) return { kind: 'external', observed: logical };
+    return {
+      kind: 'rebase',
+      observed: await logicalBytes(this.root.path, rel, Buffer.from(rebased.html, 'utf8')),
+      expected: { type: 'checksum', value: await calculateChecksum(bytes) },
+    };
+  }
+
+  /** An outside edit the authority observes: the room continues or is replaced, and the tabs are told. */
+  async _applyExternal(rel, target, token, observed) {
+    const changed = await this.localAuthority.observeExternal(target, observed.toString('utf8'), token);
+    this._notifyExternal(rel, observed, null, {
+      reason: changed.kind === 'replacement' ? 'external-replacement' : undefined,
+      recovered: changed.recovered,
+      continues: changed.kind === 'continuation',
+    });
+    return changed;
+  }
+
+  /** The notice tabs get when their document was removed outside them. */
+  _notifyRemoved(rel, removal) {
+    this.live.notify(rel, {
+      msgType: 'warning',
+      msg: `${path.basename(rel)} was removed on disk outside this tab`,
+      action: 'reload',
+      data: {
+        kind: 'external-change', sender: 'file-system', reason: 'external-replacement',
+        ...(removal?.recovered && { recovered: removal.recovered }),
+      },
+    });
+  }
+
+  /**
    * Read and classify one HTML event while the document boundary is held. The
    * decision is the last confirmed stamp — runtime identity, byte ETag and stat
    * — never the in-memory browser-save flag, so a delayed event for our own
@@ -226,40 +287,16 @@ class RootObserver extends EventEmitter {
 
     if (bytes.length === 0 && !settled) return { kind: 'empty' };
 
-    // Classified against the logical document: the bytes on disk with the page
-    // editor's merge state put back, which is what this host stamps and publishes.
-    const logical = await logicalBytes(this.root.path, rel, bytes);
-
-    const stamp = this.localAuthority.confirmedStamp(canonicalPath);
-    if (stamp && stamp.identity === target.identity && stamp.etag === documentEtag(logical) &&
-        stamp.dev === before.dev && stamp.ino === before.ino &&
-        stamp.size === before.size && stamp.mtimeNs === before.mtimeNs) {
+    const judged = await this._judgeHtml(canonicalPath, rel, target, bytes, before);
+    if (judged.kind === 'self') {
       this.emit('change', { rel, kind: 'self' });
       return { kind: 'self' };
     }
-
-    // An older copy of a page (a checkout, an editor saving an older buffer) still
-    // belongs to the room its rev came from: rebased onto the stored page it is a
-    // continuation of that room, so the tabs merge it instead of being replaced.
-    let observed = logical;
-    // Judged on the file as written: the sidecar keeps the older article's state too, and a
-    // copy composed with it would look like a page of its own rather than a stale one. The
-    // disk already holds the copy, so it rebases onto the page the authority last confirmed.
-    const rebased = await rebaseStaleSave(this.root.path, rel, bytes.toString('utf8'), newestVersionFiles,
-      { stored: this.localAuthority.confirmedDocument?.(canonicalPath) ?? null });
-    if (rebased) {
-      observed = await logicalBytes(this.root.path, rel, Buffer.from(rebased.html, 'utf8'));
-      const written = await this._writeRebased(rel, target, token, observed,
-        { type: 'checksum', value: await calculateChecksum(bytes) });
+    if (judged.kind === 'rebase') {
+      const written = await this._writeRebased(rel, target, token, judged.observed, judged.expected);
       if (written.kind === 'unstable') return written;
     }
-
-    const changed = await this.localAuthority.observeExternal(target, observed.toString('utf8'), token);
-    this._notifyExternal(rel, observed, null, {
-      reason: changed.kind === 'replacement' ? 'external-replacement' : undefined,
-      recovered: changed.recovered,
-      continues: changed.kind === 'continuation',
-    });
+    await this._applyExternal(rel, target, token, judged.observed);
     return { kind: 'external', bytes };
   }
 
@@ -298,15 +335,7 @@ class RootObserver extends EventEmitter {
     // file that was replaced, not a deletion.
     if (replaced) return true;
 
-    this.live.notify(rel, {
-      msgType: 'warning',
-      msg: `${path.basename(rel)} was removed on disk outside this tab`,
-      action: 'reload',
-      data: {
-        kind: 'external-change', sender: 'file-system', reason: 'external-replacement',
-        ...(removal?.recovered && { recovered: removal.recovered }),
-      },
-    });
+    this._notifyRemoved(rel, removal);
 
     // Removal point. E adds recovery and retirement here, after the release.
     this.emit('raw', { event: 'unlink', rel });
