@@ -225,7 +225,7 @@ async function upload(engine, nodeId, entry, context, gen) {
   const baseline = engine.repo.getBaseline(nodeId) || {};
 
   const options = { modifiedAt: (await fs.stat(localPath)).mtime, ifMatch: baseline.remoteEtag };
-  const snap = engine.snapshots && engine.snapshots.take ? engine.snapshots.take(rel) : null;
+  const snap = engine.snapshots && engine.snapshots.take ? await engine.snapshots.take(rel) : null;
   if (snap) {
     options.snapshotHtml = snap.html;
     if (snap.userDriven !== undefined) options.userDriven = snap.userDriven;

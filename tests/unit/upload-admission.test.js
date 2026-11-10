@@ -147,6 +147,23 @@ afterEach(async () => {
   await fsp.rm(metaDir, { recursive: true, force: true });
 });
 
+describe('the editor snapshot an upload carries', () => {
+  it('reaches the upload when the snapshot store answers later', async () => {
+    // A document host in another process hands the snapshot over asynchronously,
+    // so the upload must wait for it rather than send a pending answer.
+    await seedUpload();
+    engine.snapshots = { take: jest.fn(async () => ({ html: '<html>working</html>', userDriven: true })) };
+
+    await executeDecision(engine, '901', { action: A.UPLOAD });
+
+    expect(engine.snapshots.take).toHaveBeenCalledWith('photo.png');
+    expect(api.putNodeContent).toHaveBeenCalledWith(
+      expect.anything(), expect.anything(), expect.anything(),
+      expect.objectContaining({ snapshotHtml: '<html>working</html>', userDriven: true }),
+    );
+  });
+});
+
 describe('an attachment over the cap stays local', () => {
   it('a create of an oversize attachment is never sent and is remembered', async () => {
     await engine.setUploadLimit(10);

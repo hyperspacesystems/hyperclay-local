@@ -188,9 +188,10 @@ module.exports = {
 
       // Cached browser snapshot (+ userDriven bit) for platform live sync.
       // The store is the engine's own: one per root, never the process-wide one.
+      // Awaited because a document host in another process answers it later.
       let snapshotHtml = null;
       let userDriven;
-      const snap = this.snapshots.take(filename);
+      const snap = await this.snapshots.take(filename);
       if (snap) {
         snapshotHtml = snap.html;
         userDriven = snap.userDriven;
