@@ -48,6 +48,7 @@ module.exports = {
     this._subscribedObserver = observer;
     this._disposeObserver = documentHostFor(this).events(null, ({ type, event, rel }) => {
       if (type === 'change') this._dispatchRaw(event, rel);
+      else if (type === 'gap') this._onHostGap();
     });
     this._onObserverError = (error) => {
       console.error('[SYNC] Watcher error:', error);
@@ -81,6 +82,16 @@ module.exports = {
       case 'unlink': return this._onUnlink(rel);
       case 'unlinkDir': return this._onUnlinkDir(rel);
     }
+  },
+
+  // A host that lost its event cursor may have missed changes. A live session runs its own
+  // start again: one fresh inventory and one full reconcile. A session that is not live
+  // already reconciles on its way back to live.
+  _onHostGap() {
+    if (!this.runner || this.runner.state !== 'live') return;
+    Promise.resolve(this.runner.start()).catch((error) => {
+      console.error('[SYNC] Reconcile after a host event gap failed:', error);
+    });
   },
 
   // --- Event handler shims ---

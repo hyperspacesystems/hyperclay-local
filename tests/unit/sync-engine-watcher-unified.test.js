@@ -123,4 +123,56 @@ describe('unified watcher — startUnifiedWatcher', () => {
     expect(syncEngine._subscribedObserver).toBe(observer);
     expect(observer.start).not.toHaveBeenCalled();
   });
+
+  describe('host event gap', () => {
+    let listener;
+
+    function startWithHostDouble() {
+      listener = null;
+      syncEngine.observer = fakeObserver();
+      syncEngine.documentHost = {
+        events: jest.fn((since, fn) => {
+          listener = fn;
+          return () => {};
+        })
+      };
+      syncEngine.startUnifiedWatcher();
+      expect(syncEngine.documentHost.events).toHaveBeenCalledWith(null, expect.any(Function));
+    }
+
+    it('a live session starts its runner again', () => {
+      startWithHostDouble();
+      syncEngine.runner = { state: 'live', start: jest.fn(async () => {}) };
+
+      listener({ type: 'gap' });
+
+      expect(syncEngine.runner.start).toHaveBeenCalledTimes(1);
+    });
+
+    it.each(['reconciling', 'paused', 'offline'])('a %s session does not start again', (state) => {
+      startWithHostDouble();
+      syncEngine.runner = { state, start: jest.fn(async () => {}) };
+
+      listener({ type: 'gap' });
+
+      expect(syncEngine.runner.start).not.toHaveBeenCalled();
+    });
+
+    it('a session without a runner does not throw', () => {
+      startWithHostDouble();
+      syncEngine.runner = null;
+
+      expect(() => listener({ type: 'gap' })).not.toThrow();
+    });
+
+    it('a change event still reaches _dispatchRaw', () => {
+      startWithHostDouble();
+      syncEngine._dispatchRaw = jest.fn();
+
+      listener({ type: 'change', event: 'change', rel: 'projects/a/index.html' });
+
+      expect(syncEngine._dispatchRaw).toHaveBeenCalledWith('change', 'projects/a/index.html');
+      expect(syncEngine._dispatchRaw).toHaveBeenCalledTimes(1);
+    });
+  });
 });
