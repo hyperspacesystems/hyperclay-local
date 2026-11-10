@@ -23,7 +23,7 @@ function byName(a, b) {
   return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
 }
 
-function realOrNearest(target) {
+export function realOrNearest(target) {
   let current = path.resolve(target);
   const tail = [];
   for (;;) {
@@ -40,7 +40,7 @@ function realOrNearest(target) {
   }
 }
 
-function isInside(child, parent) {
+export function isInside(child, parent) {
   return child === parent || child.startsWith(parent + path.sep);
 }
 
