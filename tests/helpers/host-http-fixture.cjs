@@ -5,14 +5,59 @@ const os = require('node:os');
 const path = require('node:path');
 const { URL } = require('node:url');
 
+const LOCAL_APPS = path.join(os.homedir(), 'Documents', 'GitHub', 'hyper', 'LOCAL_APPS');
+
+function realOrNearest(target) {
+  let current = path.resolve(target);
+  const tail = [];
+  for (;;) {
+    try {
+      const real = fs.realpathSync(current);
+      return tail.length ? path.join(real, ...tail) : real;
+    } catch (error) {
+      if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') throw error;
+      const parent = path.dirname(current);
+      if (parent === current) throw error;
+      tail.unshift(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
+function parseRoot(value) {
+  const text = String(value ?? '');
+  const at = text.indexOf('=');
+  if (at <= 0) throw new Error(`--root needs <id>=<dir>, got: ${text}`);
+  const id = text.slice(0, at);
+  const dir = text.slice(at + 1);
+  if (!/^[a-z0-9-]+$/.test(id)) throw new Error(`--root id must match [a-z0-9-]+: ${id}`);
+  if (!dir) throw new Error(`--root ${id} needs a directory`);
+  const resolved = path.resolve(dir);
+  const realLocalApps = realOrNearest(LOCAL_APPS);
+  const realDir = realOrNearest(resolved);
+  if (realDir === realLocalApps || realDir.startsWith(realLocalApps + path.sep)) {
+    throw new Error(`--root ${id} refuses ${resolved}: its real path is inside LOCAL_APPS (${LOCAL_APPS})`);
+  }
+  let stat = null;
+  try { stat = fs.statSync(resolved); } catch {}
+  if (!stat || !stat.isDirectory()) throw new Error(`--root ${id} is not an existing directory: ${resolved}`);
+  return { id, dir: resolved };
+}
+
 function parseArgs(argv) {
-  const args = { manifest: null, deadlineMs: 20000, source: null };
+  const args = { manifest: null, deadlineMs: 20000, source: null, roots: [] };
   for (let i = 0; i < argv.length; i += 1) {
     const flag = argv[i];
     const value = argv[i + 1];
     if (flag === '--manifest') { args.manifest = value; i += 1; }
     else if (flag === '--deadline-ms') { args.deadlineMs = Number(value); i += 1; }
     else if (flag === '--source') { args.source = value; i += 1; }
+    else if (flag === '--root') {
+      const root = parseRoot(value);
+      if (args.roots.some((entry) => entry.id === root.id)) throw new Error(`--root id repeated: ${root.id}`);
+      args.roots.push(root);
+      i += 1;
+    }
     else throw new Error(`unknown argument: ${flag}`);
   }
   if (!args.manifest) throw new Error('--manifest is required');
@@ -104,17 +149,22 @@ async function main() {
   const hostVersion = require(path.join(source, 'package.json')).version;
 
   fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), 'host-http-fixture-'));
-  const rootDirs = {
-    'root-a': path.join(fixtureDir, 'root-a'),
-    'root-b': path.join(fixtureDir, 'root-b'),
-  };
-  for (const dir of Object.values(rootDirs)) fs.mkdirSync(dir, { recursive: true });
+  const rootDirs = {};
+  let rootIds;
+  if (args.roots.length > 0) {
+    for (const root of args.roots) rootDirs[root.id] = root.dir;
+    rootIds = args.roots.map((root) => root.id);
+  } else {
+    rootIds = ['root-a', 'root-b'];
+    for (const id of rootIds) rootDirs[id] = path.join(fixtureDir, id);
+    for (const dir of Object.values(rootDirs)) fs.mkdirSync(dir, { recursive: true });
+  }
 
   const authority = createLocalAuthority({ withDocument: withDocumentWrite, pageCompaction: false });
   const checkpoint = createLocalCheckpoint({ authority, withDocument: withDocumentWrite });
   authority.setCheckpointService(checkpoint);
 
-  const roots = ['root-a', 'root-b'].map((id) => ({ id, kind: 'personal', path: rootDirs[id], port: 0 }));
+  const roots = rootIds.map((id) => ({ id, kind: 'personal', path: rootDirs[id], port: 0 }));
   for (const root of roots) {
     const observer = new RootObserver(root, { live: createRootLive(root), localAuthority: authority });
     observers.set(root.id, observer);
