@@ -6,8 +6,11 @@ import path from 'node:path';
 import http from 'node:http';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { buildRequests } from '../differential.mjs';
+
+const expressEtag = createRequire(import.meta.url)('etag');
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const DIFF = path.join(HERE, '..', 'differential.mjs');
@@ -85,7 +88,10 @@ function startServer(root, variant = {}) {
       res.writeHead(status, headers);
       res.end(body);
     };
-    const json = (body) => send(200, { 'Content-Type': 'application/json', ETag: '"v1"' }, JSON.stringify(body));
+    const json = (body) => {
+      const text = JSON.stringify(body);
+      send(200, { 'Content-Type': 'application/json', ETag: expressEtag(text, { weak: true }) }, text);
+    };
 
     if (url.pathname === '/_/meta') {
       let rel = '';
@@ -320,25 +326,28 @@ test('mutation: disabling body comparison hides the body byte', async () => {
   const source = fs.readFileSync(sourcePath, 'utf8');
   assert.equal(source.split(needle).length - 1, 1);
 
-  const mutantDir = tempDir('hcl-diff-mutant-');
-  const mutant = path.join(mutantDir, 'differential.mjs');
+  const mutant = path.join(path.dirname(sourcePath), `.differential-mutant-${process.pid}.mjs`);
   fs.writeFileSync(mutant, source.replace(needle, 'if (false && responseA.body !== responseB.body) {'));
 
   const variantB = { bodyByteFor: 'projects/alpha.html' };
-  await withServers({}, variantB, async ({ root, a, b }) => {
-    const realOut = tempDir('hcl-diff-out-');
-    const real = await runCli(['--a', a.url, '--b', b.url, '--root', root, '--out', realOut]);
-    assert.equal(real.status, 1, `${real.stdout}\n${real.stderr}`);
-    const realDoc = readJson(path.join(realOut, 'differences.json'));
-    assert.ok(differencesOn(realDoc, '/projects/alpha.html', 'body').length >= 1);
+  try {
+    await withServers({}, variantB, async ({ root, a, b }) => {
+      const realOut = tempDir('hcl-diff-out-');
+      const real = await runCli(['--a', a.url, '--b', b.url, '--root', root, '--out', realOut]);
+      assert.equal(real.status, 1, `${real.stdout}\n${real.stderr}`);
+      const realDoc = readJson(path.join(realOut, 'differences.json'));
+      assert.ok(differencesOn(realDoc, '/projects/alpha.html', 'body').length >= 1);
 
-    const mutantOut = tempDir('hcl-diff-mutant-out-');
-    const mutated = await runCli(['--a', a.url, '--b', b.url, '--root', root, '--out', mutantOut], mutant);
-    const mutantDoc = readJson(path.join(mutantOut, 'differences.json'));
-    assert.equal(differencesOn(mutantDoc, '/projects/alpha.html', 'body').length, 0);
-    assert.equal(mutated.status, 0, `mutated run should miss the body byte: ${mutated.stdout}`);
-    console.log(`mutated run: exit ${mutated.status}, differences ${mutantDoc.differences.length} -> ${path.join(mutantOut, 'differences.json')}`);
-  });
+      const mutantOut = tempDir('hcl-diff-mutant-out-');
+      const mutated = await runCli(['--a', a.url, '--b', b.url, '--root', root, '--out', mutantOut], mutant);
+      const mutantDoc = readJson(path.join(mutantOut, 'differences.json'));
+      assert.equal(differencesOn(mutantDoc, '/projects/alpha.html', 'body').length, 0);
+      assert.equal(mutated.status, 0, `mutated run should miss the body byte: ${mutated.stdout}`);
+      console.log(`mutated run: exit ${mutated.status}, differences ${mutantDoc.differences.length} -> ${path.join(mutantOut, 'differences.json')}`);
+    });
+  } finally {
+    fs.rmSync(mutant, { force: true });
+  }
 
   assert.equal(sha(fs.readFileSync(sourcePath)), before);
 });

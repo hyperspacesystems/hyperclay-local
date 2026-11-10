@@ -4,7 +4,10 @@ import http from 'node:http';
 import https from 'node:https';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+
+const expressEtag = createRequire(import.meta.url)('etag');
 
 const JUDGED_FAMILIES = ['document', 'document-source', 'meta', 'api', 'upload'];
 const EXTENDED_FAMILIES = ['listing', 'asset', 'versions'];
@@ -241,7 +244,30 @@ function truncate(value) {
   return `${text.slice(0, TRUNCATE)}…[${text.length - TRUNCATE} more characters]`;
 }
 
+// Express derives a JSON or text answer's ETag from its body, so when a normalization
+// rewrites the body, an ETag that was the hash of the original body is recomputed over
+// the normalized one. Any other ETag is left as the host sent it.
+function followBodyEtag(response, original) {
+  if (!response.ok || original === null || response.body === original) return;
+  const tag = response.headers.etag;
+  if (!tag) return;
+  for (const weak of [true, false]) {
+    if (tag === expressEtag(Buffer.from(original, 'latin1'), { weak })) {
+      response.headers.etag = expressEtag(Buffer.from(response.body, 'latin1'), { weak });
+      return;
+    }
+  }
+}
+
 function applyNormalization(request, responseA, responseB, sideA, sideB, allowances) {
+  const originalA = responseA.ok ? responseA.body : null;
+  const originalB = responseB.ok ? responseB.body : null;
+  normalizeBodies(request, responseA, responseB, sideA, sideB, allowances);
+  followBodyEtag(responseA, originalA);
+  followBodyEtag(responseB, originalB);
+}
+
+function normalizeBodies(request, responseA, responseB, sideA, sideB, allowances) {
   for (const [response, side] of [[responseA, sideA], [responseB, sideB]]) {
     if (!response.ok) continue;
     let changed = false;
