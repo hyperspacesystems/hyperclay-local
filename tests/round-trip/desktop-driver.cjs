@@ -67,6 +67,10 @@ process.on('message', async ({ id, cmd, args }) => {
     process.send({ id, ok: false, error: { message: error.message, code: error.code } });
   }
 });
+process.on('unhandledRejection', (reason) => {
+  const error = reason instanceof Error ? reason : new Error(String(reason));
+  console.error('[FATAL] Unhandled rejection:', error);
+});
 // An orphaned driver never outlives the test that forked it.
 process.on('disconnect', () => process.exit(0));
 process.send({ ready: true });

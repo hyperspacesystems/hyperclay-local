@@ -203,6 +203,32 @@ describe('refreshNode', () => {
     expect(syncEngine.documentHost.restructure).not.toHaveBeenCalled();
   });
 
+  it('reports no unhandled rejection when the shared list fails behind a busy lane', async () => {
+    const parentProcess = require('fs').readFileSync.constructor('return process')();
+    const seen = [];
+    const onUnhandled = (reason) => seen.push(reason);
+    parentProcess.on('unhandledRejection', onUnhandled);
+
+    try {
+      let releaseLane = null;
+      const laneHeld = syncEngine.serial(() => new Promise((resolve) => { releaseLane = resolve; }));
+      apiClient.listNodes.mockRejectedValue(Object.assign(new Error('another desktop moved a file'), { statusCode: 409 }));
+
+      const pending = syncEngine.refreshNode(11, { generation: 2 });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(seen).toEqual([]);
+
+      releaseLane();
+      await laneHeld;
+      await expect(pending).rejects.toMatchObject({ statusCode: 409 });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      expect(seen).toEqual([]);
+    } finally {
+      parentProcess.removeListener('unhandledRejection', onUnhandled);
+    }
+  });
+
   it('does nothing at all when its signal is stale', async () => {
     syncEngine.repo.seed([[11, { type: 'site', path: 'page.html', remoteEtag: SAME, localChecksum: SAME, syncedAt: Date.now() }]]);
     const controller = new AbortController();

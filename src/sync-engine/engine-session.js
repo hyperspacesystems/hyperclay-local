@@ -134,6 +134,7 @@ module.exports = {
     if (!this.nodeListInFlight) {
       this.nodeListInFlight = this.refreshInventory({ inventory: null, refreshed: new Set() })
         .finally(() => { this.nodeListInFlight = null; });
+      this.nodeListInFlight.catch(() => {});
     }
     const inventory = this.nodeListInFlight;
     return this.serial(async () => {
