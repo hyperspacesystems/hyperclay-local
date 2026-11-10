@@ -218,37 +218,38 @@ function createDocumentHost(deps) {
     return { outcome: 'committed', reason: null, etag: null, checksum: await calculateChecksum(stored), stored, content: bytes };
   }
 
-  // The one publish sequence for a write this app makes to a live document — the
-  // data-loss guard's writeBack and F1's restore both call it, so the two cannot
-  // drift. Format as the save path does, version the new bytes, write atomically,
-  // mark the write as ours so the watcher does not re-run the guard on it, morph
-  // view-mode tabs, then refresh everything derived from the bytes. Non-fatal on
-  // the derived artifacts, for the same reason the save route is: the document is
-  // already written, backed up and broadcast by that point.
-  // Returns the composed document, which is what the stamp describes.
-  async function commitReplace({ name, filePath: requestedPath, bytes, edit = false, safety = false, context = {} }) {
-    const { target = null, token = null } = context;
-    let filePath = requestedPath;
+  // The replace lane's first half, which consults no room and writes nothing.
+  async function prepareReplace({ name, bytes }) {
     // Response-scoped root metadata (a save token, this host's own documentetag)
     // comes back from clients and from a stored version, and none of it belongs in
     // the bytes this writes: stripped here, once, so the data-loss writeBack and the
     // restore route cannot each forget it.
     const html = canonicalForWrite(stripSaveToken(bytes));
-    const backupName = name.replace(/\.(html|htmlclay)$/, '');
     const formatted = formatHtml(scopeTailwindLink(name, html));
     const write = await splitWrite(baseDir, name, formatted);
-    const content = write.logical;
-    // An already owned helper: a caller arrives inside runDocumentWrite's boundary,
-    // so this claims nothing and locks nothing of its own. With an authority it
-    // proves that boundary and writes the path that boundary admitted.
+    return { content: write.logical, fileContent: write.file };
+  }
+
+  // The replace lane's admission, before the first backup: the room's replacement
+  // reservation, and with `safety` a version of what is being replaced (the room's
+  // unsaved edits rendered over it when a room is open) plus, for an edit of the
+  // page, a recovered copy of those edits. A refusal is answered, not thrown, as
+  // the lane refuses; a reservation taken before a refusal or a throw is released
+  // here.
+  async function admitReplace({
+    name, filePath, content, edit = false, safety = false, target = null, token = null,
+    readCurrent = async () => logicalBytes(baseDir, name, await fs.readFile(filePath)),
+    writeSafetyVersion = html => createBackup(baseDir, name.replace(/\.(html|htmlclay)$/, ''), html),
+    writeRecoveredCopy = html => publishRecoveredCopy(baseDir, name, html),
+  }) {
     const authority = ctx.localAuthority;
     const authorityWrite = Boolean(authority && target && token);
-    if (authorityWrite) {
-      assertWriteContext(token, target.canonicalPath);
-      filePath = target.canonicalPath;
-    }
     let pageToken = null;
-    let stored;
+    const refuse = reason => {
+      if (pageToken) authority.rooms.releasePage(pageToken);
+      pageToken = null;
+      return { pageToken: null, refusal: reason };
+    };
     try {
       if (authorityWrite && !edit) {
         // Explicit replacement admission, before the first backup, and held across
@@ -264,11 +265,11 @@ function createDocumentHost(deps) {
       if (safety) {
         let current = null;
         try {
-          current = await logicalBytes(baseDir, name, await fs.readFile(filePath));
+          current = await readCurrent();
         } catch (error) {
           if (error.code !== 'ENOENT') {
             console.error(`Refusing to replace ${name}: current file cannot be read`);
-            return refused('room-unavailable');
+            return refuse('room-unavailable');
           }
         }
         if (current !== null) {
@@ -283,12 +284,12 @@ function createDocumentHost(deps) {
               : await ctx.localCheckpoint.safetyBackup(filePath, currentHtml);
           } catch (error) {
             console.error(`Refusing to replace ${name}: live room cannot be backed up`, error);
-            return refused('room-unavailable');
+            return refuse('room-unavailable');
           }
-          const safetyCopy = await createBackup(baseDir, backupName, safetyHtml);
+          const safetyCopy = await writeSafetyVersion(safetyHtml);
           if (!safetyCopy) {
             console.error(`Refusing to replace ${name}: safety backup failed`);
-            return refused('backup-failed');
+            return refuse('backup-failed');
           }
           // The room keeps its unsaved edits through an edit-restore, so they are
           // written to a recovered copy too: they survive even if no tab adopts
@@ -296,26 +297,67 @@ function createDocumentHost(deps) {
           if (edit && ctx.localCheckpoint && ctx.localCheckpoint.dirty(ctx.localAuthority?.rooms.get(filePath))) {
             try {
               const unsaved = await ctx.localCheckpoint.safetyBackup(filePath, currentHtml);
-              await publishRecoveredCopy(baseDir, name, unsaved);
+              await writeRecoveredCopy(unsaved);
             } catch (error) {
               console.error(`Recovered copy of ${name} failed (non-fatal):`, error && error.message ? error.message : error);
             }
           }
         }
       }
-      await createBackup(baseDir, backupName, write.file);
+      return { pageToken, refusal: null };
+    } catch (error) {
+      if (pageToken) authority.rooms.releasePage(pageToken);
+      throw error;
+    }
+  }
+
+  // The replace lane's confirmation half, the moment the bytes are on disk.
+  async function settleReplace({ name, content, pageToken = null, target = null, token = null }) {
+    const authority = ctx.localAuthority;
+    if (authority && target && token) {
+      // The bytes are on disk: the reservation commits into the one room and the
+      // authority stamps and publishes exactly what landed, once per registered
+      // alias of this canonical file. That is why the old single-root broadcast
+      // below is the no-authority path only.
+      if (pageToken) authority.rooms.commitPage(pageToken);
+      await authority.confirmKnownWrite(target, content, token, { sender: 'server-save' });
+    } else {
+      // Morph view-mode tabs with the persisted on-disk HTML.
+      live.broadcast(name, { html: roomsPackage().splitPage(content).file, sender: 'server-save' }, { lane: 'saved' });
+    }
+  }
+
+  // The one publish sequence for a write this app makes to a live document — the
+  // data-loss guard's writeBack and F1's restore both call it, so the two cannot
+  // drift. Format as the save path does, version the new bytes, write atomically,
+  // mark the write as ours so the watcher does not re-run the guard on it, morph
+  // view-mode tabs, then refresh everything derived from the bytes. Non-fatal on
+  // the derived artifacts, for the same reason the save route is: the document is
+  // already written, backed up and broadcast by that point.
+  // Returns the composed document, which is what the stamp describes.
+  async function commitReplace({ name, filePath: requestedPath, bytes, edit = false, safety = false, context = {} }) {
+    const { target = null, token = null } = context;
+    let filePath = requestedPath;
+    const backupName = name.replace(/\.(html|htmlclay)$/, '');
+    const { content, fileContent } = await prepareReplace({ name, bytes });
+    // An already owned helper: a caller arrives inside runDocumentWrite's boundary,
+    // so this claims nothing and locks nothing of its own. With an authority it
+    // proves that boundary and writes the path that boundary admitted.
+    const authority = ctx.localAuthority;
+    const authorityWrite = Boolean(authority && target && token);
+    if (authorityWrite) {
+      assertWriteContext(token, target.canonicalPath);
+      filePath = target.canonicalPath;
+    }
+    let pageToken = null;
+    let stored;
+    try {
+      const admitted = await admitReplace({ name, filePath, content, edit, safety, target, token });
+      if (admitted.refusal) return refused(admitted.refusal);
+      pageToken = admitted.pageToken;
+      await createBackup(baseDir, backupName, fileContent);
       stored = await placeBytes({ name, filePath, logical: content });
-      if (authorityWrite) {
-        // The bytes are on disk: the reservation commits into the one room and the
-        // authority stamps and publishes exactly what landed, once per registered
-        // alias of this canonical file. That is why the old single-root broadcast
-        // below is the no-authority path only.
-        if (pageToken) authority.rooms.commitPage(pageToken);
-        await authority.confirmKnownWrite(target, content, token, { sender: 'server-save' });
-      } else {
-        // Morph view-mode tabs with the persisted on-disk HTML.
-        live.broadcast(name, { html: roomsPackage().splitPage(content).file, sender: 'server-save' }, { lane: 'saved' });
-      }
+      await settleReplace({ name, content, pageToken, target, token });
     } finally {
       if (pageToken) authority.rooms.releasePage(pageToken);
     }
@@ -659,6 +701,12 @@ function createDocumentHost(deps) {
     }
   }
 
+  // The create lane's confirmation: a new document's bytes stamped into the room
+  // registry, which clears a retirement an explicit create admitted.
+  async function settleCreate({ bytes, target, token }) {
+    await ctx.localAuthority.confirmKnownWrite(target, bytes, token);
+  }
+
   async function commitCreate({ name, filePath: requestedPath, bytes, context = {} }) {
     const { target = null, token = null } = context;
     const filePath = target ? target.canonicalPath : requestedPath;
@@ -666,19 +714,31 @@ function createDocumentHost(deps) {
     const stored = await storePageState(baseDir, name, bytes);
     dataGuard.markPending(baseDir, name, stored);
     await atomicWriteFile(filePath, stored, null);
-    if (target) await ctx.localAuthority.confirmKnownWrite(target, bytes, token);
+    if (target) await settleCreate({ bytes, target, token });
     return { outcome: 'committed', reason: null, etag: documentEtag(bytes), checksum: null, stored, content: bytes };
+  }
+
+  // The external rebase lane's admission: the open room's unsaved edits kept as a
+  // recovered copy before an outside edit is rebased over them.
+  async function admitRebase({ target, token }) {
+    await ctx.localAuthority.recoverUnsavedEdits(target, token);
+  }
+
+  // Its confirmation: the authority learns the bytes the watcher will see, without
+  // publishing them.
+  async function settleRebase({ bytes, target, token }) {
+    await ctx.localAuthority.confirmKnownWrite(target, Buffer.from(bytes, 'utf8'), token, { sender: 'file-watcher', publish: false });
   }
 
   async function commitRebase({ name, filePath: requestedPath, bytes, context = {} }) {
     const { target, token } = context;
     assertWriteContext(token, target.canonicalPath);
-    await ctx.localAuthority.recoverUnsavedEdits(target, token);
+    await admitRebase({ target, token });
     await createBackup(baseDir, name.replace(DOCUMENT_NAME, ''), roomsPackage().splitPage(bytes).file);
     const stored = await storePageState(baseDir, name, bytes);
     dataGuard.markPending(baseDir, name, stored);
     await atomicWriteFile(target.canonicalPath, stored);
-    await ctx.localAuthority.confirmKnownWrite(target, Buffer.from(bytes, 'utf8'), token, { sender: 'file-watcher', publish: false });
+    await settleRebase({ bytes, target, token });
     return { outcome: 'committed', reason: null, etag: documentEtag(bytes), checksum: null, stored, content: bytes };
   }
 
@@ -870,7 +930,11 @@ function createDocumentHost(deps) {
 
   return {
     commit, read, restructure, checkpoint, events, pageState,
-    lanes: { prepareSave, admitSave, settleSave, recordSaveProvenance },
+    lanes: {
+      prepareSave, admitSave, settleSave, recordSaveProvenance,
+      prepareReplace, admitReplace, settleReplace,
+      admitRebase, settleRebase, settleCreate, settleExact: confirmExact,
+    },
   };
 }
 
