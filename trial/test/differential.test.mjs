@@ -351,3 +351,60 @@ test('mutation: disabling body comparison hides the body byte', async () => {
 
   assert.equal(sha(fs.readFileSync(sourcePath)), before);
 });
+
+test('the full stage counts the meta line the native stage allows', async () => {
+  const withPresence = DEFAULT_META.concat(['presence']);
+  await withServers({ metaExtensions: withPresence }, {}, async ({ root, a, b }) => {
+    const fullOut = tempDir('hcl-diff-out-');
+    const full = await runCli(['--a', a.url, '--b', b.url, '--root', root, '--out', fullOut, '--stage', 'full']);
+    assert.equal(full.status, 1, `${full.stdout}\n${full.stderr}`);
+    const fullDoc = readJson(path.join(fullOut, 'differences.json'));
+    assert.equal(fullDoc.stage, 'full');
+    assert.equal(fullDoc.allowances.AD1, 0);
+    const metaDiffs = fullDoc.differences.filter((entry) => entry.family === 'meta');
+    assert.ok(metaDiffs.length >= 1, 'the meta line was not counted');
+    assert.deepEqual([...new Set(fullDoc.differences.map((entry) => entry.family))], ['meta']);
+    assert.ok(metaDiffs.every((entry) => entry.path === '/_/meta'));
+  });
+
+  await withServers({ metaExtensions: withPresence }, {}, async ({ root, a, b }) => {
+    const nativeOut = tempDir('hcl-diff-out-');
+    const native = await runCli(['--a', a.url, '--b', b.url, '--root', root, '--out', nativeOut, '--stage', 'native']);
+    assert.equal(native.status, 0, `${native.stdout}\n${native.stderr}`);
+    const nativeDoc = readJson(path.join(nativeOut, 'differences.json'));
+    assert.equal(nativeDoc.stage, 'native');
+    assert.equal(nativeDoc.differences.length, 0);
+    assert.ok(nativeDoc.allowances.AD1 > 0, 'AD1 never applied');
+  });
+});
+
+test('the full stage counts a page-revision header on A only', async () => {
+  await withServers({ pageRevision: true }, {}, async ({ root, a, b }) => {
+    const out = tempDir('hcl-diff-out-');
+    const result = await runCli(['--a', a.url, '--b', b.url, '--root', root, '--out', out, '--stage', 'full']);
+    assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
+    const doc = readJson(path.join(out, 'differences.json'));
+    assert.equal(doc.allowances.AD3, 0);
+    assert.ok(differencesOn(doc, '/index.html', 'page-revision').length >= 1);
+  });
+});
+
+test('the full stage still allows a savetoken', async () => {
+  await withServers({}, { savetokenRoot: true }, async ({ root, a, b }) => {
+    const out = tempDir('hcl-diff-out-');
+    const result = await runCli(['--a', a.url, '--b', b.url, '--root', root, '--out', out, '--stage', 'full']);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    const doc = readJson(path.join(out, 'differences.json'));
+    assert.equal(doc.differences.length, 0);
+    assert.ok(doc.allowances.AD4 > 0, 'AD4 never applied');
+  });
+});
+
+test('a stage that is neither native nor full is an error', async () => {
+  const root = makeRoot();
+  const out = tempDir('hcl-diff-out-');
+  const result = await runCli([
+    '--a', 'http://127.0.0.1:1', '--b', 'http://127.0.0.1:1', '--root', root, '--out', out, '--stage', 'other',
+  ]);
+  assert.equal(result.status, 2, `${result.stdout}\n${result.stderr}`);
+});

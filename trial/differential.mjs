@@ -259,15 +259,15 @@ function followBodyEtag(response, original) {
   }
 }
 
-function applyNormalization(request, responseA, responseB, sideA, sideB, allowances) {
+function applyNormalization(request, responseA, responseB, sideA, sideB, allowances, stage) {
   const originalA = responseA.ok ? responseA.body : null;
   const originalB = responseB.ok ? responseB.body : null;
-  normalizeBodies(request, responseA, responseB, sideA, sideB, allowances);
+  normalizeBodies(request, responseA, responseB, sideA, sideB, allowances, stage);
   followBodyEtag(responseA, originalA);
   followBodyEtag(responseB, originalB);
 }
 
-function normalizeBodies(request, responseA, responseB, sideA, sideB, allowances) {
+function normalizeBodies(request, responseA, responseB, sideA, sideB, allowances, stage) {
   for (const [response, side] of [[responseA, sideA], [responseB, sideB]]) {
     if (!response.ok) continue;
     let changed = false;
@@ -294,17 +294,19 @@ function normalizeBodies(request, responseA, responseB, sideA, sideB, allowances
     }
   }
 
-  if (request.family === 'meta') {
-    const stripped = responseA.ok ? stripMetaExtensions(responseA.body) : null;
-    if (stripped !== null) {
-      responseA.body = stripped;
-      allowances.AD1 += 1;
+  if (stage === 'native') {
+    if (request.family === 'meta') {
+      const stripped = responseA.ok ? stripMetaExtensions(responseA.body) : null;
+      if (stripped !== null) {
+        responseA.body = stripped;
+        allowances.AD1 += 1;
+      }
     }
-  }
 
-  if (responseA.ok && Object.prototype.hasOwnProperty.call(responseA.headers, 'page-revision')) {
-    delete responseA.headers['page-revision'];
-    allowances.AD3 += 1;
+    if (responseA.ok && Object.prototype.hasOwnProperty.call(responseA.headers, 'page-revision')) {
+      delete responseA.headers['page-revision'];
+      allowances.AD3 += 1;
+    }
   }
 }
 
@@ -318,7 +320,7 @@ function addDifference(list, request, field, a, b) {
   });
 }
 
-function compareOne(request, responseA, responseB, sideA, sideB, allowances, differences) {
+function compareOne(request, responseA, responseB, sideA, sideB, allowances, differences, stage) {
   if (!responseA.ok || !responseB.ok) {
     addDifference(
       differences,
@@ -329,7 +331,7 @@ function compareOne(request, responseA, responseB, sideA, sideB, allowances, dif
     );
     return;
   }
-  applyNormalization(request, responseA, responseB, sideA, sideB, allowances);
+  applyNormalization(request, responseA, responseB, sideA, sideB, allowances, stage);
   if (responseA.status !== responseB.status) {
     addDifference(differences, request, 'status', responseA.status, responseB.status);
   }
@@ -344,7 +346,7 @@ function compareOne(request, responseA, responseB, sideA, sideB, allowances, dif
   }
 }
 
-export async function compare({ a, b, requests }) {
+export async function compare({ a, b, requests, stage = 'native' }) {
   const sideA = sideOf(a);
   const sideB = sideOf(b);
   const allowances = { origin: 0, AD1: 0, AD3: 0, AD4: 0 };
@@ -400,7 +402,7 @@ export async function compare({ a, b, requests }) {
     const bucket = request.judged ? judged : extended;
     if (request.judged) judged.families[request.family] += 1;
     else extended.families[request.family] += 1;
-    compareOne(request, responseA, responseB, sideA, sideB, allowances, bucket.differences);
+    compareOne(request, responseA, responseB, sideA, sideB, allowances, bucket.differences, stage);
   });
 
   return {
@@ -415,7 +417,7 @@ function parseArgs(argv) {
   const args = {};
   for (let i = 0; i < argv.length; i += 1) {
     const token = argv[i];
-    if (token === '--a' || token === '--b' || token === '--root' || token === '--out') {
+    if (token === '--a' || token === '--b' || token === '--root' || token === '--out' || token === '--stage') {
       args[token.slice(2)] = argv[i + 1];
       i += 1;
     } else {
@@ -424,6 +426,10 @@ function parseArgs(argv) {
   }
   for (const name of ['a', 'b', 'root', 'out']) {
     if (!args[name]) return { error: `missing --${name}` };
+  }
+  args.stage = args.stage ?? 'native';
+  if (args.stage !== 'native' && args.stage !== 'full') {
+    return { error: `--stage must be native or full, not ${args.stage}` };
   }
   let baseA;
   let baseB;
@@ -452,18 +458,20 @@ async function main() {
     console.error(parsed.error);
     process.exit(2);
   }
-  const { a, b, root, out } = parsed.args;
+  const { a, b, root, out, stage } = parsed.args;
   const requests = buildRequests(root);
   let result;
   try {
-    result = await compare({ a, b, requests });
+    result = await compare({ a, b, requests, stage });
   } catch (error) {
     console.error(error.message || String(error));
     process.exit(error.exitCode || 2);
   }
 
   fs.mkdirSync(out, { recursive: true });
-  const base = { a, b, root, requestListSha256: result.requestListSha256 };
+  const base = {
+    a, b, root, stage, requestListSha256: result.requestListSha256,
+  };
   const judgedDoc = {
     ...base,
     compared: result.judged.compared,
