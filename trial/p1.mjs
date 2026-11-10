@@ -258,16 +258,20 @@ export function startGo({
     }
   });
   child.stdin.on('error', () => {});
+  const secret = randomBytes(32).toString('hex');
   const channel = child.stdio[3];
   if (channel) {
     channel.on('error', () => {});
-    channel.write(`${randomBytes(32).toString('hex')}\n`);
+    channel.write(`${secret}\n`);
     channel.end();
   }
   const stop = () => stopGo({ child, exitPromise, graceMs });
   return waitForReady({ child, exitPromise, logPath, timeoutMs }).then((ready) => {
     const target = assertReady(ready, roots[0]);
-    return { ...target, readyRoots: ready.roots, child, logPath, stop };
+    if (typeof ready.control !== 'string' || !ready.control) {
+      throw new Infrastructure('the go host names no control URL');
+    }
+    return { ...target, secret, control: ready.control, readyRoots: ready.roots, child, logPath, stop };
   }).catch(async (error) => {
     await stop();
     throw error instanceof Infrastructure ? error : new Infrastructure(error?.message || String(error));

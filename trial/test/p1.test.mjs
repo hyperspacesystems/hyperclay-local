@@ -71,7 +71,7 @@ test('a local run passes', () => {
   }
 });
 
-test('the go scaffold, which serves no documents yet, does not pass', (t) => {
+test('P1 against the Go host at htmlclay HEAD reports the verdict the package answer earns', (t) => {
   if (!hasGo()) {
     t.skip('go is not on PATH: cannot build cmd/managed-trial in htmlclay');
     return;
@@ -90,10 +90,16 @@ test('the go scaffold, which serves no documents yet, does not pass', (t) => {
       ['--target', 'go', '--go-bin', bin, '--skip-local-gate', '--report', reportPath],
       tmp,
     );
-    assert.equal(result.status, 3, result.stderr);
+    // The host is ported route by route, so the package's answer moves from
+    // fail to pass as steps land. What must hold at every step: the host answers
+    // (the package ran, so its exit is 0 or 1, never 3), and P1's verdict and
+    // exit are exactly what judge() gives for that answer.
     const written = report(reportPath);
-    assert.equal(written.verdict, 'could-not-demonstrate');
-    assert.equal(written.packageExit, 3);
+    assert.ok([0, 1].includes(written.packageExit), `package exit ${written.packageExit}: ${result.stderr}`);
+    const expected = judge({ packageExit: written.packageExit, waivers: written.waivers });
+    assert.equal(written.verdict, expected.verdict);
+    assert.equal(result.status, expected.code, result.stderr);
+    assert.ok(fs.existsSync(written.packageReport), written.packageReport);
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
