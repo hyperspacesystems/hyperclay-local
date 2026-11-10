@@ -3,7 +3,6 @@ const path = require('upath');
 const { getConsentRegistry, resolveReadPath, resolveWritePath, validateSegments } = require('../utils/path-resolver');
 const { createRootDocumentHost } = require('../document-host');
 const { withDocumentWrite, withStructureChange } = require('../utils/write-queue');
-const { movePageState, movePageStateDir, dropPageState, dropPageStateDir } = require('../page-state-store');
 const templateManifest = require('../document-templates/manifest.json');
 
 function refusal(reason, message, status = 400) {
@@ -186,11 +185,11 @@ async function executeCommand({ root, authority, engine, request, tree, moved, c
     if (result.outcome !== 'committed') throw result.error;
     if (result.completed === 1) {
       if (request.command === 'rename' || request.command === 'move') {
-        if (fromStat.isDirectory()) await movePageStateDir(root.path, fromRel, toRel);
-        else await movePageState(root.path, fromRel, toRel);
+        if (fromStat.isDirectory()) await documentHost.pageState({ op: 'moveDir', name: fromRel, to: toRel });
+        else await documentHost.pageState({ op: 'move', name: fromRel, to: toRel });
       } else if (request.command === 'trash') {
-        if (fromStat.isDirectory()) await dropPageStateDir(root.path, fromRel);
-        else await dropPageState(root.path, fromRel);
+        if (fromStat.isDirectory()) await documentHost.pageState({ op: 'dropDir', name: fromRel });
+        else await documentHost.pageState({ op: 'drop', name: fromRel });
       }
     }
     if (request.command === 'duplicate') {

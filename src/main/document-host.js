@@ -816,7 +816,17 @@ function createDocumentHost(deps) {
     });
   }
 
-  return { commit, read, restructure, checkpoint, events };
+  async function pageState({ op, name, to = null, record = null }) {
+    const store = require('./page-state-store.js');
+    if (op === 'write') return writePageState(baseDir, name, record);
+    if (op === 'move') return store.movePageState(baseDir, name, to);
+    if (op === 'moveDir') return store.movePageStateDir(baseDir, name, to);
+    if (op === 'drop') return store.dropPageState(baseDir, name);
+    if (op === 'dropDir') return store.dropPageStateDir(baseDir, name);
+    throw new TypeError(`Unknown page-state operation: ${op}`);
+  }
+
+  return { commit, read, restructure, checkpoint, events, pageState };
 }
 
 function createRootDocumentHost({ ctx, live = require('./utils/root-live.js').createRootLive(ctx.root), emit = () => {}, logger = null, loadCheckpoint, getObserver = () => null }) {

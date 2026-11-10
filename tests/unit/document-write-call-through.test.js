@@ -89,7 +89,7 @@ const { withDocumentWrite } = require('../../src/main/utils/write-queue');
 const { createRootLive } = require('../../src/main/utils/root-live');
 const { executeCommand } = require('../../src/main/workspace/commands');
 const { createAutoNamer } = require('../../src/main/workspace/auto-name');
-const { storePageState, pageStatePath } = require('../../src/main/page-state-store');
+const { storePageState, pageStatePath, writePageState, readPageState } = require('../../src/main/page-state-store');
 const { createBackup } = require('../../src/main/utils/backup');
 const { splitPage } = require('@panphora/clayjs/server/rooms');
 const { calculateChecksum } = require('../../src/sync-engine/utils');
@@ -494,6 +494,8 @@ describe('every commit kind reaches the document host', () => {
   });
 });
 
+const PAGE_STATE = { v: 1, rev: 'rev-page', tag: '<p>merge</p>' };
+
 describe('every restructure kind reaches the document host', () => {
   const workspace = (dir) => ({
     root: { id: 'root-a', kind: 'personal', path: dir, port: 0 },
@@ -503,6 +505,7 @@ describe('every restructure kind reaches the document host', () => {
   it('a workspace rename moves the document through restructure', async () => {
     const dir = await makeRoot();
     await fs.writeFile(path.join(dir, 'page.html'), DOC);
+    await writePageState(dir, 'page.html', PAGE_STATE);
     const { root, ...report } = workspace(dir);
 
     recorder.begin(dir);
@@ -511,6 +514,10 @@ describe('every restructure kind reaches the document host', () => {
     expect(result.path).toBe('renamed.html');
     const [call] = expectHostCall('restructure', (c) => c.request.kind === 'move');
     expect(recorder.requestedPaths(call)).toEqual([path.join(dir, 'page.html'), path.join(dir, 'renamed.html')]);
+    const [state] = expectHostCall('pageState', (c) => c.request.op === 'move');
+    expect(state.request).toEqual({ op: 'move', name: 'page.html', to: 'renamed.html' });
+    expect(await readPageState(dir, 'page.html')).toBeNull();
+    expect(await readPageState(dir, 'renamed.html')).toMatchObject(PAGE_STATE);
     expect(await fs.readFile(path.join(dir, 'renamed.html'), 'utf8')).toBe(DOC);
     expectOnlyHostWrites();
   });
@@ -519,6 +526,7 @@ describe('every restructure kind reaches the document host', () => {
     const dir = await makeRoot();
     await fs.writeFile(path.join(dir, 'page.html'), DOC);
     await fs.mkdir(path.join(dir, 'Notes'));
+    await writePageState(dir, 'page.html', PAGE_STATE);
     const { root, ...report } = workspace(dir);
 
     recorder.begin(dir);
@@ -527,6 +535,9 @@ describe('every restructure kind reaches the document host', () => {
     expect(result.path).toBe('Notes/page.html');
     const [call] = expectHostCall('restructure', (c) => c.request.kind === 'move');
     expect(recorder.requestedPaths(call)).toEqual([path.join(dir, 'page.html'), path.join(dir, 'Notes', 'page.html')]);
+    const [state] = expectHostCall('pageState', (c) => c.request.op === 'move');
+    expect(state.request).toEqual({ op: 'move', name: 'page.html', to: 'Notes/page.html' });
+    expect(await readPageState(dir, 'Notes/page.html')).toMatchObject(PAGE_STATE);
     expectOnlyHostWrites();
   });
 
@@ -534,6 +545,7 @@ describe('every restructure kind reaches the document host', () => {
     const dir = await makeRoot();
     await fs.mkdir(path.join(dir, 'Notes'));
     await fs.writeFile(path.join(dir, 'Notes', 'page.html'), DOC);
+    await writePageState(dir, 'Notes/page.html', PAGE_STATE);
     const { root, ...report } = workspace(dir);
 
     recorder.begin(dir);
@@ -542,6 +554,10 @@ describe('every restructure kind reaches the document host', () => {
     expect(result.path).toBe('Archive');
     const [call] = expectHostCall('restructure', (c) => c.request.kind === 'move');
     expect(recorder.requestedPaths(call)).toEqual([path.join(dir, 'Notes', 'page.html'), path.join(dir, 'Archive', 'page.html')]);
+    const [state] = expectHostCall('pageState', (c) => c.request.op === 'moveDir');
+    expect(state.request).toEqual({ op: 'moveDir', name: 'Notes', to: 'Archive' });
+    expect(await readPageState(dir, 'Notes/page.html')).toBeNull();
+    expect(await readPageState(dir, 'Archive/page.html')).toMatchObject(PAGE_STATE);
     expect(await fs.readFile(path.join(dir, 'Archive', 'page.html'), 'utf8')).toBe(DOC);
     expectOnlyHostWrites();
   });
@@ -549,6 +565,7 @@ describe('every restructure kind reaches the document host', () => {
   it('a workspace trash moves the document into Trash through restructure', async () => {
     const dir = await makeRoot();
     await fs.writeFile(path.join(dir, 'page.html'), DOC);
+    await writePageState(dir, 'page.html', PAGE_STATE);
     const { root, ...report } = workspace(dir);
 
     recorder.begin(dir);
@@ -556,6 +573,9 @@ describe('every restructure kind reaches the document host', () => {
 
     expect(result.path).toBe('.trash/page.html');
     expectHostCall('restructure', (c) => c.request.kind === 'trash');
+    const [state] = expectHostCall('pageState', (c) => c.request.op === 'drop');
+    expect(state.request).toEqual({ op: 'drop', name: 'page.html' });
+    expect(await readPageState(dir, 'page.html')).toBeNull();
     expect(await fs.readFile(path.join(dir, '.trash', 'page.html'), 'utf8')).toBe(DOC);
     expectOnlyHostWrites();
   });
