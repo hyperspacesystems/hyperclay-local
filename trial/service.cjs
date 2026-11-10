@@ -28,7 +28,9 @@ const { writeContexts } = require(path.join(SRC, 'write-contexts.js'));
 const { documentEtag } = require(path.join(SRC, 'spec-wire.js'));
 const { logicalBytes } = require(path.join(SRC, 'page-state-store.js'));
 const { newestVersionFiles } = require(path.join(SRC, 'page-rebase.js'));
+const { loadCheckpoint } = require(path.join(SRC, 'utils', 'page-api.js'));
 const { setConnection, getConnection } = require('./go-process.cjs');
+const { createGoDocumentHost, checkpointContext, configureService } = require('./go-document-host.cjs');
 
 const roomsPackage = () => require('@panphora/clayjs/server/rooms');
 
@@ -60,19 +62,33 @@ function missing(file) {
   return Object.assign(new Error(`ENOENT: no such file or directory, open '${file}'`), { code: 'ENOENT' });
 }
 
+// A stat answered from the identity Go reported: its fields as BigInts for a
+// `{ bigint: true }` stat, as numbers otherwise.
+function identityStat(identity, big) {
+  const field = (value) => (big ? BigInt(value) : Number(value));
+  const { dev, ino, size, mtimeNs } = identity;
+  return {
+    dev: field(dev), ino: field(ino), size: field(size), mtimeNs: field(mtimeNs),
+    isFile: () => true, isDirectory: () => false, isSymbolicLink: () => false,
+  };
+}
+
 // The reader a handler runs under while Go holds the document's lock (S5): the
 // document, its page-state sidecar and the version files Go sent come from the
-// call's snapshot, and the version list is exactly the names Go sent. Any other
-// path (a legacy sidecar probe, a sibling's stat) is read from the disk,
-// read-only. Once Go has written the document (`settled`), the document and its
-// sidecar are read from the disk Go just wrote under the lock it still holds,
-// and the document's stat answers with the identity Go reported, so the stamp a
-// confirmation records is the written file's.
+// call's snapshot, and the version list is exactly the names Go sent. A call
+// that carries no `versions` (observe) lists and reads the document's history
+// from the disk, read-only: Go is its only writer and holds the document's lock.
+// Any other path (a legacy sidecar probe, a sibling's stat) is read from the
+// disk, read-only. Once Go has written the document (`settled`), the document
+// and its sidecar are read from the disk Go just wrote under the lock it still
+// holds, and the document's stat answers with the identity Go reported, so the
+// stamp a confirmation records is the written file's.
 function snapshotReader(root, body) {
   const current = body.current ?? null;
   const document = path.resolve(body.canonicalPath);
   const sidecar = path.resolve(root.path, '.hyperclay', 'page-state', `${body.name}.json`);
   const versionsDir = path.resolve(root.path, '.hyperclay', 'versions', body.name.replace(/\.(html|htmlclay)$/i, ''));
+  const sentVersions = Array.isArray(body.versions);
   const versions = new Map((body.versions ?? []).map((version) => [version.name, raw(version.bytes)]));
   // `done` once the handler that made this reader has finished: work Local
   // scheduled inside it (a checkpoint wake, a timer) inherits the reader's
@@ -101,15 +117,9 @@ function snapshotReader(root, body) {
     async stat(file, options) {
       if (state.done || path.resolve(file) !== document) return disk.stat(file, options);
       if (!state.identity) throw missing(file);
-      const big = Boolean(options && options.bigint);
-      const field = (value) => (big ? BigInt(value) : Number(value));
-      const { dev, ino, size, mtimeNs } = state.identity;
-      return {
-        dev: field(dev), ino: field(ino), size: field(size), mtimeNs: field(mtimeNs),
-        isFile: () => true, isDirectory: () => false, isSymbolicLink: () => false,
-      };
+      return identityStat(state.identity, Boolean(options && options.bigint));
     },
-    versionFiles: async (dir, baseDir) => (state.done ? newestVersionFiles(dir, baseDir) : [...versions.keys()]),
+    versionFiles: async (dir, baseDir) => (state.done || !sentVersions ? newestVersionFiles(dir, baseDir) : [...versions.keys()]),
   };
 }
 
@@ -286,6 +296,10 @@ function createTrialService({
   const authority = createLocalAuthority({ withDocument: withDocumentWrite, publishRecovered });
   const checkpoint = createLocalCheckpoint({ authority });
   authority.setCheckpointService(checkpoint);
+  // The adapter records the admission claim of each checkpoint it sends, which
+  // the render-checkpoint handler validates inside its boundary, as Local's
+  // in-process checkpoint validates its pre-lock claim.
+  configureService({ checkpointClaim: (target) => authority.captureAdmission(target) });
 
   function rootFor(id) {
     const root = roots.get(id);
@@ -381,7 +395,7 @@ function createTrialService({
 
   function touch(body) {
     prune(touched);
-    if (!touched.has(body.consultId)) {
+    if (body.name && !touched.has(body.consultId)) {
       touched.set(body.consultId, { root: body.root, name: body.name, canonicalPath: body.canonicalPath, at: Date.now() });
     }
   }
@@ -562,6 +576,177 @@ function createTrialService({
     await goCall('POST', '/v1/reconciled', { root: rootId, name });
   }
 
+  // POST /v1/render-checkpoint: Local's renderCheckpoint for a checkpoint the
+  // service started through Go (the adapter's POST /v1/checkpoint). The room,
+  // its target and the admission claim are what the adapter recorded under the
+  // opHandle. The handler leaves its boundary before answering: on `render`, Go
+  // runs its save lane, which consults `admit` and `settle` like any save.
+  async function runRenderCheckpoint(consultation, body) {
+    const root = rootFor(body.root);
+    const pending = body.opHandle ? checkpointContext(body.opHandle) : null;
+    if (!pending) {
+      consultation.answer({ kind: 'refused', reason: 'invalid-identity', artifacts: [] });
+      return;
+    }
+    let core;
+    try {
+      core = await loadCheckpoint();
+    } catch (error) {
+      consultation.answer({ kind: 'refused', reason: 'checkpoint-unavailable', artifacts: [] });
+      return;
+    }
+    const reader = snapshotReader(root, body);
+    const rendered = await withReader(reader, () => withDocumentWrite(async () => ({ canonicalPath: body.canonicalPath }), async (_locked, token) => {
+      if (consultation.aborted) return null;
+      return root.lanes.renderCheckpoint({
+        core, key: body.canonicalPath, roomIdentity: body.roomIdentity, generation: body.generation ?? null,
+        target: pending.target, room: pending.room, claim: pending.claim, token,
+        readCurrent: async () => {
+          if (!body.current || !body.current.exists) throw missing(body.canonicalPath);
+          return { html: text(body.current.bytes), readIdentity: identityStat(body.current.identity, true) };
+        },
+      });
+    })).finally(() => {
+      reader.state.done = true;
+    });
+    if (!rendered) return;
+    if (rendered.kind === 'render') {
+      consultation.answer({ kind: 'render', logical: encode(rendered.html), revision: rendered.revision ?? null, captureId: null, artifacts: [] });
+      return;
+    }
+    consultation.answer({ kind: rendered.kind, reason: rendered.reason ?? '', artifacts: [] });
+  }
+
+  // POST /v1/observe: Local's observer judging an outside add, change or
+  // removal of a page document that Go's watcher saw (root-observer.js
+  // `_observeHtml`, `_observeUnlink`). Go's own writes reach it too and are
+  // judged `self`. A rebase is answered for Go to write through its external
+  // rebase lane, whose settle tells the room (`settleLane`); an outside edit is
+  // observed here and the tabs told.
+  async function runObserve(consultation, body) {
+    const root = rootFor(body.root);
+    const { name, canonicalPath, event } = body;
+    const reader = snapshotReader(root, body);
+    let answer = { action: 'none', logical: null, artifacts: [] };
+    let removal = null;
+    let removed = false;
+    await withReader(reader, () => withDocumentWrite(async () => ({ canonicalPath }), async (_locked, token) => {
+      if (consultation.aborted) return;
+      const current = body.current;
+      if (!current || !current.exists) {
+        if (event !== 'unlink') return;
+        removal = await authority.observeExternal({ rootId: root.id, logicalPath: name, canonicalPath, live: root.live }, null, token, { removed: true });
+        removed = true;
+        return;
+      }
+      // A file that is back on disk: the unlink was a delayed event for a replacement.
+      if (event === 'unlink') return;
+      const bytes = raw(current.bytes);
+      if (bytes.length === 0) return;
+      const target = authority.bindTarget({ rootId: root.id, logicalPath: name, canonicalPath, origin: null, live: root.live });
+      const judged = await root.observer._judgeHtml(canonicalPath, name, target, bytes, identityStat(current.identity, true));
+      if (judged.kind === 'self') return;
+      if (judged.kind === 'rebase') {
+        answer = { action: 'rebase', logical: encode(judged.observed.toString('utf8')), artifacts: [] };
+        return;
+      }
+      await root.observer._applyExternal(name, target, token, judged.observed);
+    })).finally(() => {
+      reader.state.done = true;
+    });
+    if (removed) root.observer._notifyRemoved(name, removal);
+    consultation.answer(answer);
+  }
+
+  // POST /v1/structure/prepare: Local's structure plan for a move, trash or
+  // copy Go is about to make inside its structure gate, held in the service's
+  // own structure boundary until Go's `/v1/structure/settle` (or abort).
+  async function runStructure(consultation, body) {
+    const root = rootFor(body.root);
+    const steps = body.steps ?? [];
+    const kind = body.origin || steps[0]?.kind;
+    const copy = kind === 'duplicate';
+    const entries = steps.map((step) => ({
+      from: step.from ? {
+        location: step.from.location, canonical: step.from.canonicalPath,
+        isDir: Boolean(step.from.isDir), isSymlink: Boolean(step.from.isSymlink),
+      } : null,
+      to: step.to ? { location: step.to.location, canonical: step.to.canonicalPath } : null,
+    }));
+    const localSteps = steps.map((step) => ({ from: step.from?.name ?? null, to: step.to?.name ?? null }));
+    await withStructureChange(async (token) => {
+      if (consultation.aborted) return;
+      let plan = null;
+      try {
+        plan = root.lanes.prepareRestructure({ kind, rootId: root.id, steps: localSteps, entries, token });
+      } catch (error) {
+        const code = error && error.code ? error.code : 'failed';
+        consultation.answer({ decision: 'refuse', status: code === 'checkpointing' ? 503 : 409, code });
+        return;
+      }
+      try {
+        if (consultation.aborted) return;
+        const next = consultation.next();
+        consultation.answer({ decision: 'proceed', holdId: consultation.id });
+        const step = await next;
+        if (!step.settle) return;
+        try {
+          const { completed = 0, copiedSteps = [] } = step.settle;
+          if (copy) {
+            for (const index of copiedSteps) {
+              root.lanes.admitCopy({ rootId: root.id, step: localSteps[index], entry: entries[index], token });
+            }
+          } else {
+            const held = plan;
+            plan = null;
+            root.lanes.settleRestructure({ plan: held, completed, copiedSteps, token });
+          }
+          consultation.answer({ ok: true });
+        } catch (error) {
+          logError('structure settle failed:', error);
+          consultation.answer({ ok: false, error: error && error.message ? error.message : String(error) });
+        }
+      } finally {
+        if (plan) authority.releaseStructure(plan, token);
+      }
+    });
+  }
+
+  // Opens one consultation Go starts, unless an abort for it already arrived.
+  function begin(body, reply, runner, fallback) {
+    prune(tombstones);
+    if (tombstones.has(body.consultId)) {
+      reply({ error: 'aborted' }, 409);
+      return;
+    }
+    touch(body);
+    const consultation = open(body.consultId, reply);
+    run(consultation, () => runner(consultation, body), fallback);
+  }
+
+  // A handler that throws answers a kind Go does not accept, so Go treats the
+  // call as failed: a checkpoint whose render threw is retried by Local's
+  // scheduler as a transient failure, as it is in process.
+  const failedWith = (error) => (error && error.message ? error.message : String(error));
+
+  handlers.set('/v1/render-checkpoint', (body, reply) => begin(body, reply, runRenderCheckpoint,
+    (error) => ({ kind: 'failed', error: failedWith(error), artifacts: [] })));
+
+  handlers.set('/v1/observe', (body, reply) => begin(body, reply, runObserve,
+    (error) => ({ action: 'failed', error: failedWith(error), artifacts: [] })));
+
+  handlers.set('/v1/structure/prepare', (body, reply) => begin(body, reply, runStructure,
+    (error) => ({ decision: 'refuse', status: 500, code: 'failed', error: failedWith(error) })));
+
+  handlers.set('/v1/structure/settle', (body, reply) => {
+    const consultation = consultations.get(body.consultId);
+    if (!consultation) {
+      reply({ ok: false, error: 'unknown consultation' });
+      return;
+    }
+    consultation.continueWith({ settle: body }, reply);
+  });
+
   handlers.set('/v1/admit', (body, reply) => {
     prune(tombstones);
     if (tombstones.has(body.consultId)) {
@@ -709,12 +894,21 @@ function createTrialService({
       setConnection({ url, secret: goSecret, epoch, peerEpoch: goEpoch, roots: byPath });
       for (const entry of served) {
         const canonical = realpathSync(entry.path);
-        const root = { id: entry.id, path: canonical };
+        // `port` is Go's public port for this root: Local's own-origin checks
+        // compare a tab's Origin with it (server.js `isOwnOrigin`).
+        const root = { id: entry.id, path: canonical, port: Number(new URL(entry.url).port) };
         const live = createRootLive(root);
         const ctx = { root, live, localAuthority: authority, localCheckpoint: checkpoint };
         ctx.observer = new RootObserver(root, { live, localAuthority: authority });
         await withStructureChange(() => authority.registerRoot({ id: root.id, path: canonical, canonicalPath: canonical }));
-        const record = { id: root.id, path: canonical, origin: entry.url, live, ctx, observer: ctx.observer, lanes: inProcessLanes(ctx) };
+        // Local's checkpoint scheduler writes a dirty room through this root's
+        // host; here that is the Go adapter (POST /v1/checkpoint), as it is for
+        // the app Local mounts on the forwarded routes (server.js registerHost).
+        const goHost = createGoDocumentHost({ ctx });
+        checkpoint.registerHost(root.id, goHost);
+        const record = {
+          id: root.id, path: canonical, origin: entry.url, live, ctx, observer: ctx.observer, goHost, lanes: inProcessLanes(ctx),
+        };
         roots.set(root.id, record);
         rootsByPath.set(canonical, record);
       }
