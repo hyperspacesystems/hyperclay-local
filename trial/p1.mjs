@@ -11,12 +11,13 @@ import {
   PAGE, PROBE, PROBE_HTML, READY_TIMEOUT_MS, REQUIRED_EXTENSIONS, STOP_GRACE_MS,
   assertManifest, fixtureArgs, packageArgs, packageDir, seed, stopFixture, waitForManifest,
 } from '../scripts/conformance.mjs';
+import { startManaged } from './supervisor.mjs';
 import { DROPBOX_ROOT, GITHUB_ROOT, LOCAL_APPS, isInside, realOrNearest } from './setup.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const TARBALL = path.join(REPO, 'vendor', 'host-conformance.tgz');
 const WAIVERS_DEFAULT = path.join(REPO, 'trial', 'trial-waivers.json');
-const TARGETS = ['local', 'go'];
+const TARGETS = ['local', 'go', 'managed'];
 
 // AD1: the Go trial host may leave out these extensions while it is being built. The
 // list is subtracted from Local's own, so the trial can never ask for less than Local
@@ -55,7 +56,7 @@ export function parseArgs(argv) {
       continue;
     }
     if (name !== '--target' && name !== '--go-bin' && name !== '--report' && name !== '--waivers') {
-      throw new Error(`unknown argument ${flag} (this trial takes --target local|go, --go-bin, --report, --waivers, --skip-local-gate)`);
+      throw new Error(`unknown argument ${flag} (this trial takes --target local|go|managed, --go-bin, --report, --waivers, --skip-local-gate)`);
     }
     const value = inline ?? argv[(i += 1)];
     if (typeof value !== 'string' || !value) throw new Error(`${name} needs a value`);
@@ -66,7 +67,7 @@ export function parseArgs(argv) {
   }
   if (!TARGETS.includes(options.target)) throw new Error(`--target must be one of ${TARGETS.join(', ')}`);
   if (!options.report) throw new Error('--report is required');
-  if (options.target === 'go' && !options.goBin) throw new Error('--target go needs --go-bin');
+  if ((options.target === 'go' || options.target === 'managed') && !options.goBin) throw new Error(`--target ${options.target} needs --go-bin`);
   return options;
 }
 
@@ -376,9 +377,14 @@ export async function main({
           [PROBE, Buffer.from(PROBE_HTML, 'utf8')],
         ],
       });
-    } else {
+    } else if (options.target === 'go') {
       placeDocuments({ dir, root: roots[0] });
       session = await startGo({
+        bin: options.goBin, cwd, env, scratch, roots, localSource: cwd,
+      });
+    } else {
+      placeDocuments({ dir, root: roots[0] });
+      session = await startManaged({
         bin: options.goBin, cwd, env, scratch, roots, localSource: cwd,
       });
     }
