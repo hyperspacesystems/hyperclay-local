@@ -13,6 +13,7 @@ const os = require('os');
 const path = require('path');
 const fsp = require('fs').promises;
 const guard = require('../../src/main/data-loss-guard');
+const core = require('../../src/main/data-loss-core.cjs');
 
 const NAME = 'app.html';
 
@@ -178,6 +179,75 @@ test('pin-once: subsequent external destruction never overwrites the first recov
   assert.strictEqual(JSON.stringify(after.event.recoverableData), pinned);
   assert.deepStrictEqual(after.event.recoverableData.api.items, ['a', 'b', 'c']);
 });
+
+// The notice's droppedAdditions tells the editor how many of its CURRENT items
+// Restore will remove or overwrite. It used to be a net count (current length -
+// recoverable length), which read 0 when a list was wiped and the editor then
+// added new items - so Restore silently deleted them.
+
+test('droppedAdditions counts the 2 items added after a 5-item wipe (the old net count said 0)', async () => {
+  const baseDir = await freshBaseDir();
+  const event = await seedThenWrite(baseDir, page({ items: ['a', 'b', 'c', 'd', 'e'] }), page({ items: [] }), 'external');
+  assert.ok(event, 'the wipe must raise an event');
+  assert.strictEqual(event.droppedAdditions, 0); // nothing left to drop at the wipe
+
+  // The editor, still looking at the wiped page, adds two brand-new items.
+  const current = page({ items: ['x', 'y'] });
+  const after = await guard.runDataLossGuard({ baseDir, name: NAME, newHtml: current, prevContent: page({ items: [] }), prov: 'ui-gestured' });
+  assert.strictEqual(after, null); // the pinned event only bumps lastWriteAt
+
+  const clientEvent = await guard.getGuardEvent(baseDir, NAME, current);
+  assert.ok(clientEvent, 'the warning must survive the additions');
+  assert.strictEqual(clientEvent.droppedAdditions, 2);
+});
+
+test('droppedAdditions counts the 3 items added beside the 2 survivors of a 5-item list', async () => {
+  const baseDir = await freshBaseDir();
+  const event = await seedThenWrite(
+    baseDir, page({ items: ['a', 'b', 'c', 'd', 'e'] }), page({ items: ['a', 'b'] }), 'external',
+  );
+  assert.ok(event, 'losing 3 of 5 items must raise an event');
+
+  const current = page({ items: ['a', 'b', 'x', 'y', 'z'] });
+  const after = await guard.runDataLossGuard({
+    baseDir, name: NAME, newHtml: current, prevContent: page({ items: ['a', 'b'] }), prov: 'ui-gestured',
+  });
+  assert.strictEqual(after, null);
+
+  const clientEvent = await guard.getGuardEvent(baseDir, NAME, current);
+  assert.ok(clientEvent, 'the warning must survive the additions');
+  assert.strictEqual(clientEvent.droppedAdditions, 3);
+});
+
+const item = (t) => ({ title: t });
+
+test('droppedItems counts current items with no identical recoverable item left', () => {
+  const a = item('a');
+  const b = item('b');
+  const c = item('c');
+  const d = item('d');
+  const e = item('e');
+
+  // A 5-item list wiped, then 2 new items added. Net length: 2 - 5 -> old 0.
+  assert.strictEqual(core.droppedItems({ items: [a, b, c, d, e] }, { items: [item('x'), item('y')] }), 2);
+  // 3 of 5 lost, 3 new added to the 2 survivors. Net length: 5 - 5 -> old 0.
+  assert.strictEqual(
+    core.droppedItems({ items: [a, b, c, d, e] }, { items: [a, b, item('x'), item('y'), item('z')] }),
+    3,
+  );
+  // A multiset: the extra duplicate has no identical item left to pair with.
+  assert.strictEqual(core.droppedItems([a, a], [a, a, a]), 1);
+  // An unchanged list drops nothing.
+  assert.strictEqual(core.droppedItems({ items: [a, b, c] }, { items: [a, b, c] }), 0);
+  // An edited item is overwritten by RESTORE, so it counts as dropped.
+  const bEdited = { title: 'b', n: 2 };
+  assert.strictEqual(core.droppedItems({ items: [a, { title: 'b', n: 1 }, c] }, { items: [a, bEdited] }), 1);
+  // Key order inside an item does not matter (stableDigest sorts keys).
+  assert.strictEqual(core.droppedItems({ items: [{ t: 'a', n: 1 }] }, { items: [{ n: 1, t: 'a' }] }), 0);
+  // Only list values can drop items; a scalar key contributes 0.
+  assert.strictEqual(core.droppedItems({ title: 'a', items: [a] }, { title: 'changed', items: [a] }), 0);
+});
+
 
 test('cross-environment auto-clear: an incoming write that restores the pinned data clears the event', async () => {
   const baseDir = await freshBaseDir();

@@ -12,7 +12,7 @@ import { HOST, PACKAGE } from './conformance.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PLATFORM = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-const STATUSES = ['pass', 'fail', 'waived'];
+const STATUSES = ['pass', 'fail', 'skip', 'na', 'waived', 'waiver-unused'];
 
 export function parseCandidateArgs(argv) {
   let platform = '';
@@ -139,10 +139,15 @@ export function validateReport(reportPath) {
     throw new Error('the conformance report needs nonempty unique row ids');
   }
   for (const check of report.checks) {
-    if (!STATUSES.includes(check?.status)) throw new Error(`the conformance report leaves row ${check?.id} unanswered`);
+    if (!STATUSES.includes(check?.status)) {
+      throw new Error(`the conformance report gives row ${check?.id} the unknown status ${JSON.stringify(check?.status ?? null)}`);
+    }
+    if (check.status === 'na' && check.blocking === true) throw new Error(`the conformance report leaves row ${check.id} unanswered`);
   }
   return report;
 }
+
+export const evidencePathFor = (platform) => path.join('.conformance', `conformance-${platform}.json`);
 
 export function verdictExit(report, code) {
   const failed = report.checks.filter((check) => check.status === 'fail').length;
@@ -189,9 +194,7 @@ export async function main({
   const reportPath = path.resolve(
     cwd, env.CONFORMANCE_REPORT || path.join('.conformance', `${parsed.platform}-report.json`),
   );
-  const evidencePath = path.resolve(
-    cwd, env.CONFORMANCE_EVIDENCE || path.join('.conformance', `${parsed.platform}.json`),
-  );
+  const evidencePath = path.resolve(cwd, env.CONFORMANCE_EVIDENCE || evidencePathFor(parsed.platform));
   try {
     mkdirSync(path.dirname(reportPath), { recursive: true });
     rmSync(reportPath, { force: true });

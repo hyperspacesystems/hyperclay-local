@@ -444,7 +444,7 @@ async function toClientEvent(event, currentHtml) {
     lossSummary: event.lossSummary,
     fieldCount: preview.rows.length,
     preview: preview.rows,
-    droppedAdditions: preview.droppedAdditions,
+    droppedAdditions: core.droppedItems(recoverable[RULES_NAME], currentIsland ? currentIsland[RULES_NAME] : null),
     restorable: !dry.failed,
     canRevert: event.recoverableHtmlBackup != null,
     status: event.status || 'pending',
@@ -453,7 +453,6 @@ async function toClientEvent(event, currentHtml) {
 
 function buildPreview(recoverableData, currentData) {
   const rows = [];
-  let droppedAdditions = 0;
   const rd = recoverableData && typeof recoverableData === 'object' ? recoverableData : {};
   const cd = currentData && typeof currentData === 'object' ? currentData : {};
 
@@ -463,8 +462,7 @@ function buildPreview(recoverableData, currentData) {
     if (yoursN !== nowN) {
       rows.push({ key: 'items', now: nowN ? `${nowN} items` : '— empty —', yours: yoursN ? `${yoursN} items` : '— empty —' });
     }
-    if (nowN > yoursN) droppedAdditions += nowN - yoursN;
-    return { rows, droppedAdditions };
+    return { rows };
   }
 
   const keys = new Set([...Object.keys(rd), ...Object.keys(cd)]);
@@ -472,11 +470,8 @@ function buildPreview(recoverableData, currentData) {
     const yours = formatValue(rd[key]);
     const now = formatValue(cd[key]);
     if (yours !== now) rows.push({ key, now, yours });
-    if (Array.isArray(rd[key]) && Array.isArray(cd[key]) && cd[key].length > rd[key].length) {
-      droppedAdditions += cd[key].length - rd[key].length;
-    }
   }
-  return { rows, droppedAdditions };
+  return { rows };
 }
 
 function formatValue(v) {

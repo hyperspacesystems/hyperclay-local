@@ -167,9 +167,11 @@ describeShell('Linux check deadlines and cleanup', () => {
       'curl() { case "$*" in *"-H"*) printf 403;; *"-w"*) printf 200;; *) return 1;; esac; }',
       'ss() { :; }',
       'pkill() { :; }',
-      'node() { "$CI_REAL_NODE" "$CI_FIXTURE/driver.js"; }',
+      'node() { case "$1" in -p) printf \'%s\\n\' "$CI_FIXTURE/package";; *) "$CI_REAL_NODE" "$CI_FIXTURE/driver.js";; esac; }',
       '',
     ].join('\n'));
+    fs.mkdirSync(path.join(fixtureDir, 'package', 'page'), { recursive: true });
+    fs.writeFileSync(path.join(fixtureDir, 'package', 'page', 'host-test.html'), '<!doctype html><title>host test</title>\n');
     const tools = path.join(fixtureDir, 'ownership-tools.sh');
     fs.writeFileSync(tools, 'mktemp() { printf \'%s/lab\\n\' "$CI_FIXTURE"; }\nid() { echo 1000; }\n');
     const result = spawnSync(process.execPath, [wrapper, '2000', '500', 'bash', path.join(fixtureDir, 'server-save.sh')], {
