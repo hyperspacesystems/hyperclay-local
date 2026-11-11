@@ -148,12 +148,14 @@ async function settle(engine) {
 
 /**
  * A local edit through the watcher's `change` path. The per-type handler it
- * hands the path to is fire-and-forget, so wait for the queue to take it rather
- * than for a tick count.
+ * hands the path to is fire-and-forget and reads the file from disk, so wait
+ * for the queue to take it against a real-time deadline: a tick count runs out
+ * before the disk read on a loaded machine. `process.hrtime` is not faked.
  */
 async function localChange(engine, rel) {
   engine._dispatchRaw('change', rel);
-  for (let i = 0; i < 50 && engine.syncQueue.isEmpty(); i += 1) await tick();
+  const deadline = process.hrtime.bigint() + 5_000_000_000n;
+  while (engine.syncQueue.isEmpty() && process.hrtime.bigint() < deadline) await tick();
   if (engine.syncQueue.isEmpty()) throw new Error(`the watcher never queued ${rel}`);
 }
 
