@@ -4,7 +4,7 @@
 // It sits beside sync-worker.js, which is a byte-for-byte copy of HTML Clay's
 // worker and stays untouched: this file is Local's own, speaks only the v2 wire
 // (`v: 2`, plus `presence`), and its algorithm -- the snapshot content cache, the
-// replay baseline, hidden deferral of snapshot frames, a debounced rebuild,
+// replay baseline, snapshot frames sent to hidden pages too, a debounced rebuild,
 // exponential backoff and the port sweep -- is derived from that copy. An edit
 // tab can hold one of the browser's six connections to localhost, so six open
 // documents would otherwise starve the seventh; here every page shares this
@@ -286,7 +286,7 @@ function drop(port) {
 }
 
 function deliverLatest(port, meta) {
-  if (meta.subKey === null || !meta.visible || !meta.open) return;
+  if (meta.subKey === null || !meta.open) return;
   const sub = subs.get(meta.subKey);
   if (!sub || sub.latest === null || sub.latest.id === meta.seen) return;
   const frames = [...sub.content.values(), sub.latest].sort((a, b) => a.id - b.id);
@@ -441,9 +441,12 @@ function onFrame(sub, e) {
       sub.content.set("peer", sub.latest);
     }
   } catch (_) {}
+  // Hidden pages get every frame at once. A hidden edit tab that waited to be
+  // shown kept the stamp of the version before a peer's save, and its next save
+  // was refused as a conflict. Visibility only sets how long a silent port lives.
   for (const port of sub.ports) {
     const meta = ports.get(port);
-    if (!meta || !meta.visible || !meta.open) continue;
+    if (!meta || !meta.open) continue;
     meta.seen = sub.latest.id;
     send(port, { type: "frame", data: e.data });
   }

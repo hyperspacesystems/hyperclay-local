@@ -513,7 +513,7 @@ describe('the shared data worker', () => {
     expect(bare.headers['x-content-type-options']).not.toBe('nosniff');
   });
 
-  test('a hidden pinging port outlives portTTL, still receives events, and holds snapshot frames', async () => {
+  test('a hidden pinging port outlives portTTL and receives events and snapshot frames at once', async () => {
     worker.stop();
     worker = startWorker(fixture.origin, { portTTL: 200, hiddenPortTTL: 1000, sweep: 50 });
     const one = documentUrl('index.html');
@@ -545,14 +545,15 @@ describe('the shared data worker', () => {
       await waitFor(() => eventsOf(a, 'presence').length > presenceBefore, 'a fresh roster at a hidden port');
       expect(a.closed).toBe(false);
 
-      // A snapshot frame is held while the port is hidden, and flushed whole when
-      // it says it is visible again.
-      broadcastSnapshot('index.html', '<p>held</p>');
-      await settle();
-      expect(framesOf(a).length).toBe(0);
+      // A snapshot frame reaches the hidden port at once, so a hidden edit tab
+      // takes in a peer's save (and its stamp) before it saves anything itself.
+      broadcastSnapshot('index.html', '<p>while hidden</p>');
+      await waitFor(() => framesOf(a).length === 1, 'the snapshot frame at a hidden port');
+      expect(framesOf(a)[0].data).toContain('while hidden');
+      // Showing the page again sends nothing it already has.
       a.push({ v: 2, type: 'visible' });
-      await waitFor(() => framesOf(a).length === 1, 'the held snapshot frame');
-      expect(framesOf(a)[0].data).toContain('held');
+      await settle();
+      expect(framesOf(a).length).toBe(1);
       expect(a.closed).toBe(false);
     } finally {
       clearInterval(pinging);
