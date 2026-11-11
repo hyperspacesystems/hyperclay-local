@@ -441,7 +441,7 @@ test('the package arguments are the fixed list this host gate runs', () => {
     REQUIRED_EXTENSIONS,
     ['conditional', 'data-guard-v1', 'data-read', 'data-write', 'format', 'live-data', 'live-provenance', 'page',
       'page-awareness-v1', 'page-format-v1', 'page-recovery-v1', 'people', 'presence', 'receipts',
-      'record-awareness-v1', 'scoped-stylesheet', 'sync', 'sync-worker', 'upload', 'wire'],
+      'record-awareness-v1', 'scoped-stylesheet', 'sync', 'sync-worker', 'sync-worker-data', 'upload', 'wire'],
   );
 });
 

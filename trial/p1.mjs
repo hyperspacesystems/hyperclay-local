@@ -11,6 +11,7 @@ import {
   PAGE, PROBE, PROBE_HTML, READY_TIMEOUT_MS, REQUIRED_EXTENSIONS, STOP_GRACE_MS,
   assertManifest, fixtureArgs, packageArgs, packageDir, seed, stopFixture, waitForManifest,
 } from '../scripts/conformance.mjs';
+import { ad1Allows } from './differential.mjs';
 import { startManaged } from './supervisor.mjs';
 import { DROPBOX_ROOT, GITHUB_ROOT, LOCAL_APPS, isInside, realOrNearest } from './setup.mjs';
 
@@ -19,14 +20,7 @@ const TARBALL = path.join(REPO, 'vendor', 'host-conformance.tgz');
 const WAIVERS_DEFAULT = path.join(REPO, 'trial', 'trial-waivers.json');
 const TARGETS = ['local', 'go', 'managed'];
 
-// AD1: the Go trial host may leave out these extensions while it is being built. The
-// list is subtracted from Local's own, so the trial can never ask for less than Local
-// does anywhere else.
-export const ALLOWED_DIFFERENCE = ['format', 'scoped-stylesheet', 'presence'];
-
-export const GO_EXTENSIONS = REQUIRED_EXTENSIONS.filter(
-  (name) => !ALLOWED_DIFFERENCE.includes(name) && !name.startsWith('live-'),
-);
+export const GO_EXTENSIONS = REQUIRED_EXTENSIONS.filter((name) => !ad1Allows(name));
 
 class Infrastructure extends Error {}
 

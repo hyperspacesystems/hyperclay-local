@@ -250,7 +250,7 @@ test('savetoken on the root element is allowed, on a div it is not', async () =>
 });
 
 test('meta extensions on A only are an allowance, on B only a difference', async () => {
-  const localMeta = DEFAULT_META.concat(['presence', 'live-data']);
+  const localMeta = DEFAULT_META.concat(['presence', 'live-data', 'sync-worker-data']);
   await withServers({ metaExtensions: localMeta }, {}, async ({ root, a, b }) => {
     const out = tempDir('hcl-diff-out-');
     const result = await runCli(['--a', a.url, '--b', b.url, '--root', root, '--out', out]);

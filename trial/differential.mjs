@@ -33,7 +33,15 @@ const COMPARED_HEADERS = [
 ];
 
 const SKIP_NAMES = new Set(['.hyperclay', '.trash', '.git']);
-const AD1_DROP = new Set(['format', 'scoped-stylesheet', 'presence']);
+// AD1: the extensions the native Go trial host may leave out. It has no rooms, so it
+// announces nothing that needs one: no `live-*` name, and no `sync-worker-data`, whose
+// worker carries each editing tab's room events and roster. The list is subtracted from
+// Local's own, so the trial can never ask for less than Local does anywhere else.
+const AD1_DROP = new Set(['format', 'scoped-stylesheet', 'presence', 'sync-worker-data']);
+
+export function ad1Allows(name) {
+  return AD1_DROP.has(name) || (typeof name === 'string' && name.startsWith('live-'));
+}
 
 export { JUDGED_FAMILIES, EXTENDED_FAMILIES };
 
@@ -232,7 +240,7 @@ function stripMetaExtensions(body) {
   if (!parsed || !Array.isArray(parsed.extensions)) return null;
   const before = parsed.extensions.length;
   parsed.extensions = parsed.extensions.filter(
-    (name) => !AD1_DROP.has(name) && !(typeof name === 'string' && name.startsWith('live-')),
+    (name) => !ad1Allows(name),
   );
   if (parsed.extensions.length === before) return null;
   return JSON.stringify(parsed);
