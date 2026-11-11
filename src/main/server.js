@@ -613,6 +613,10 @@ const SSE_KEEPALIVE_MS = 25 * 1000;
 // that announces `sync-worker` serves this file.
 const SYNC_WORKER_JS = require('fs').readFileSync(path.join(__dirname, 'assets', 'sync-worker.js'));
 
+// Local's own data worker, read once the same way: the v2 shared stream's script,
+// distinct from the byte-for-byte HTML Clay copy above.
+const SYNC_DATA_WORKER_JS = require('fs').readFileSync(path.join(__dirname, 'assets', 'sync-data-worker.js'));
+
 // One `s` value: lane:since:document-url. Split on the first two colons only, so
 // a document URL carrying a colon (a port, most often) survives.
 function parseSharedEntry(raw) {
@@ -904,6 +908,7 @@ async function handleSharedSyncStreamV2(ctx, req, res, { resolveTarget, s, m, v 
   let keepAlive = null;
   const disposers = [];
   const memberRefs = [];
+  const presences = [];
   const writer = boundedWriter(res, () => teardown());
 
   // One teardown for the whole connection: every snapshot, every member, the
@@ -914,6 +919,7 @@ async function handleSharedSyncStreamV2(ctx, req, res, { resolveTarget, s, m, v 
     torn = true;
     writer.stop();
     if (keepAlive) clearInterval(keepAlive);
+    for (const presence of presences) presence.close();
     for (const member of memberRefs) member.close();
     for (const dispose of disposers) dispose();
     for (const plan of plans) if (plan) ctx.live.unsubscribe(plan.file, plan.sink);
@@ -984,6 +990,29 @@ async function handleSharedSyncStreamV2(ctx, req, res, { resolveTarget, s, m, v 
       plan.sink.write(message);
     }
   }
+
+  // The roster rides this stream too, one session per admitted editor in that
+  // editor's own envelope, so a roster and its private session reach that page
+  // only. It connects last: the worker opens a page once it has both of its
+  // cursors, and the page starts a fresh session when it opens, so a roster
+  // written before the cursors would lose its token. A saved entry never had a
+  // session here, and a reader keeps its own direct stream for the roster.
+  const relay = ctx.localAuthority.presence;
+  if (!relay) return;
+  members.forEach((member, j) => {
+    const target = admittedMembers[j];
+    if (!target || writer.dropped || torn) return;
+    const presence = relay.connect({
+      canonicalPath: target.canonicalPath,
+      lane: 'live',
+      clientId: member.clientId,
+      send: (name, payload) => writer.write(`event: m${j}\ndata: ${JSON.stringify({ event: name, data: payload })}\n\n`),
+    });
+    // The roster this connect sent can be the write that ends the stream, and the
+    // teardown has then run without this session in its list.
+    if (torn) presence.close();
+    else presences.push(presence);
+  });
 }
 
 // One physical SSE response gets one write budget, shared by every sink that
@@ -1676,6 +1705,16 @@ function createApp(ctxOrDir, devHooks = null, isKnownPath = null) {
       res.setHeader('X-Content-Type-Options', 'nosniff');
       res.setHeader('Cache-Control', 'no-cache');
       res.end(SYNC_WORKER_JS);
+    });
+
+    // The shared data worker: one stream per origin for every edit tab, carrying
+    // each editor's room events and roster. Marker-gated like the worker above.
+    app.get('/sync/data-worker.js', (req, res, next) => {
+      if (!req.originalUrl.startsWith('/_/sync/data-worker.js')) return next();
+      res.setHeader('Content-Type', 'text/javascript; charset=utf-8');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.end(SYNC_DATA_WORKER_JS);
     });
 
     // Live-sync SSE stream endpoint. Spec §10 puts both halves on `/_/sync`; the
@@ -2479,7 +2518,10 @@ function createApp(ctxOrDir, devHooks = null, isKnownPath = null) {
       const body = { spec: 1, extensions: ['conditional', 'data-guard-v1', 'data-read', 'data-write', 'format', 'receipts', 'scoped-stylesheet', 'sync', 'sync-worker', 'upload', 'wire'] };
       // `page-recovery-v1`: the document block's `pageState.href` answers the page state
       // stored for these exact bytes, so a client may retire journaled page work against it.
-      if (ctx.localAuthority) body.extensions.push('live-data', 'live-provenance', 'page', 'page-recovery-v1');
+      // `sync-worker-data`: `/_/sync/data-worker.js` carries every edit tab's room
+      // events and roster over one connection, so six open documents no longer use up
+      // the browser's six connections to localhost (plans/shared/local-six-tab-fix.md).
+      if (ctx.localAuthority) body.extensions.push('live-data', 'live-provenance', 'page', 'page-recovery-v1', 'sync-worker-data');
       // Presence is announced only by the host that actually runs the relay. `presence`
       // is the legacy editing marker; the two versioned names are what a client needs
       // before it publishes a record or a page target, so they are never advertised

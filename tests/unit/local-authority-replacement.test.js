@@ -351,9 +351,11 @@ describe('external replacement of a dirty room', () => {
     const backed = await request(createApp({ root, localAuthority: authority })).get('/_/meta');
     const legacy = await request(createApp(dir)).get('/_/meta');
 
-    expect(backed.body.extensions).toEqual(expect.arrayContaining(['live-data', 'live-provenance']));
+    expect(backed.body.extensions).toEqual(expect.arrayContaining(['live-data', 'live-provenance', 'sync-worker-data']));
     expect(legacy.body.extensions).not.toContain('live-data');
     expect(legacy.body.extensions).not.toContain('live-provenance');
+    // The data worker carries room events, so a root with no room never offers it.
+    expect(legacy.body.extensions).not.toContain('sync-worker-data');
   });
 });
 

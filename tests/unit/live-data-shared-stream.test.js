@@ -72,6 +72,38 @@ const named = (stream, name) => stream.events.filter((ev) => ev.name === name);
 const memberEvents = (stream, index, event) => stream.events
   .filter((ev) => ev.name === `m${index}` && ev.payload && ev.payload.event === event);
 
+const isPresence = (ev) => Boolean(ev.payload) && ev.payload.event === 'presence';
+
+// The roster rides the stream now, so a test counting something else counts the
+// frames that are not presence: on a parsed stream and on the raw writer alike.
+const withoutPresence = (stream) => stream.events.filter((ev) => !isPresence(ev));
+const withoutPresenceFrames = (frames) => frames.filter((frame) => !frame.includes('"event":"presence"'));
+
+// The direct stream names the roster itself; the shared one wraps it per member,
+// so the same roster is read out of either shape.
+const directRosters = (stream) => stream.events
+  .filter((ev) => ev.name === 'presence' && ev.payload)
+  .map((ev) => ev.payload);
+const directRoster = (stream) => directRosters(stream).at(-1) ?? null;
+const directSessions = (stream) => directRoster(stream)?.people?.[0]?.sessions ?? [];
+
+const memberRoster = (stream, index) => memberEvents(stream, index, 'presence').at(-1)?.payload.data ?? null;
+const memberToken = (stream, index) => memberRoster(stream, index)?.selfSession?.token ?? null;
+const memberSessions = (stream, index) => memberRoster(stream, index)?.people?.[0]?.sessions ?? [];
+const memberFrames = (stream, index) => stream.events.filter((ev) => ev.name === `m${index}`).map((ev) => ev.data);
+
+const PAGE_TARGET = {
+  kind: 'page',
+  v: 1,
+  epoch: 'epoch-1',
+  generation: 0,
+  selection: {
+    kind: 'text',
+    anchor: { block: 'p1', rel: 'AAAAAA==' },
+    head: { block: 'p1', rel: 'AAAAAA==' },
+  },
+};
+
 const parseCursor = (ev) => {
   expect(ev.name).toBe('cursor');
   return ev.payload;
@@ -179,6 +211,25 @@ const postFrame = (fixture, clientId, conn, { n = 1, ops = [ADD] } = {}) => requ
     ...SAME_ORIGIN,
   },
   body: JSON.stringify({ name: 'store', n, ops, conn }),
+});
+
+// A direct live tab on the same document: the shape local-presence.test.js opens,
+// which is the connection a browser has today and the one presence started on.
+const directTab = (fixture, clientId, lane = 'live') => {
+  const params = [`document-url=${enc(documentUrl(fixture))}`, `lane=${lane}`, `client-id=${enc(clientId)}`];
+  return open(fixture, `/_/sync?${params.join('&')}`);
+};
+
+const postPresence = (fixture, clientId, body) => request(fixture.origin, {
+  method: 'POST',
+  target: `/_/presence?client-id=${enc(clientId)}`,
+  headers: {
+    Origin: fixture.origin,
+    'Content-Type': 'application/json',
+    'Document-URL': documentUrl(fixture),
+    ...SAME_ORIGIN,
+  },
+  body: JSON.stringify(body),
 });
 
 // Deterministic epochs and a clock the test moves by hand; readSaved reads the
@@ -321,7 +372,7 @@ describe('the shared v2 stream', () => {
     expect(liveCursor).toEqual({ v: 2, sub: 0, seq: expect.any(Number) });
     expect(liveCursor.seq).toBeGreaterThan(0);
     expect(parseCursor(stream.events[3])).toEqual({ v: 2, sub: 1, seq: liveCursor.seq });
-    expect(stream.events.length).toBe(4);
+    expect(withoutPresence(stream).length).toBe(4);
     expect(stream.raw).not.toContain('conn');
 
     await waitFor(() => h.authority.connectedIds(canonical).length === 2, 'both members to register');
@@ -429,7 +480,7 @@ describe('the shared v2 stream', () => {
     expect(parseCursor(stream.events[2])).toEqual({ v: 2, sub: 0, seq: expect.any(Number) });
     expect(parseCursor(stream.events[3])).toEqual({ v: 2, sub: 1, error: 'not-found' });
     expect(parseCursor(stream.events[4])).toEqual({ v: 2, sub: 2, error: 'not-found' });
-    expect(stream.events.length).toBe(5);
+    expect(withoutPresence(stream).length).toBe(5);
 
     // One member, one snapshot subscription: the missing entries registered
     // nothing, and the resolved one still carries the room.
@@ -720,7 +771,7 @@ describe('the shared v2 writer', () => {
     expect(res.frames[2]).toBe('event: cursor\ndata: {"v":2,"sub":0,"error":"not-found"}\n\n');
     expect(res.frames[3]).toContain('"sub":1');
     expect(res.frames[3]).not.toContain('not-found');
-    expect(res.writes).toBe(4);
+    expect(withoutPresenceFrames(res.frames).length).toBe(4);
 
     expect(h.authority.connectedIds(canonical)).toEqual([]);
     expect(h.authority.hasUnjoinedEditors(canonical)).toBe(false);
@@ -729,7 +780,7 @@ describe('the shared v2 writer', () => {
     expect(h.authority.connectedIds(secondPath)).toEqual(['cB']);
     expect([...liveSync.subscribers(secondKey)].length).toBe(1);
     expect(h.authority.publish(secondPath, 'data', { seq: 7 })).toBe(1);
-    expect(res.frames[4]).toBe('event: m1\ndata: {"event":"data","data":{"seq":7}}\n\n');
+    expect(withoutPresenceFrames(res.frames)[4]).toBe('event: m1\ndata: {"event":"data","data":{"seq":7}}\n\n');
     expect(res.frames.some((frame) => frame.startsWith('event: m0'))).toBe(false);
 
     req.emit('close');
@@ -798,7 +849,7 @@ describe('the shared v2 writer', () => {
 
     // Two member cursors, one cursor and one replay for the live entry, one
     // cursor for the saved entry.
-    expect(res.writes).toBe(5);
+    expect(withoutPresenceFrames(res.frames).length).toBe(5);
     expect(res.destroys).toBe(0);
     expect(h.authority.connectedIds(canonical)).toEqual(['cA', 'cB']);
     expect([...liveSync.subscribers(key)].length).toBe(2);
@@ -829,17 +880,18 @@ describe('the shared v2 writer', () => {
       s: [`live:0:${doc}`, `saved:0:${doc}`],
       m: [`cA:${doc}`, `cB:${doc}`],
     });
-    expect(res.writes).toBe(4);
+    const written = () => withoutPresenceFrames(res.frames).length;
+    expect(written()).toBe(4);
 
-    while (res.writes < 20) h.authority.publish(canonical, 'data', { seq: res.writes });
-    expect(res.writes).toBe(20);
+    while (written() < 20) h.authority.publish(canonical, 'data', { seq: res.writes });
+    expect(written()).toBe(20);
     res.drain();
-    while (res.writes < 52) h.authority.publish(canonical, 'data', { seq: res.writes });
-    expect(res.writes).toBe(52);
+    while (written() < 52) h.authority.publish(canonical, 'data', { seq: res.writes });
+    expect(written()).toBe(52);
     expect(res.destroys).toBe(0);
 
     for (let i = 0; res.destroys === 0 && i < 100; i += 1) h.authority.publish(canonical, 'data', { seq: res.writes });
-    expect(res.writes).toBe(53);
+    expect(written()).toBe(53);
     expect(res.destroys).toBe(1);
     expect(h.authority.connectedIds(canonical)).toEqual([]);
   });
@@ -866,5 +918,117 @@ describe('the shared v2 writer', () => {
     expect(h.authority.hasUnjoinedEditors(canonical)).toBe(false);
     expect([...liveSync.subscribers(key)].length).toBe(0);
     expect(h.authority.publish(canonical, 'data', { seq: 1 })).toBe(0);
+  });
+});
+
+describe('presence on the shared v2 stream', () => {
+  test('each editor gets its own session, after its cursors', async () => {
+    const h = harness();
+    const fixture = await fixtureFor(h, { rootId: 'presence-two' });
+    const doc = documentUrl(fixture);
+    const stream = await open(fixture, sharedV2(fixture, {
+      s: [`live:0:${doc}`],
+      m: [`cA:${doc}`, `cB:${doc}`],
+    }));
+    expect(stream.status).toBe(200);
+
+    await waitFor(() => memberRoster(stream, 0) && memberRoster(stream, 1), 'both rosters');
+
+    // The worker opens a page once it holds both cursors, and the page starts a
+    // fresh session when it opens, so a roster written before them loses its token.
+    const cursors = stream.events
+      .map((ev, index) => (ev.name === 'cursor' ? index : -1))
+      .filter((index) => index >= 0);
+    expect(cursors.length).toBe(3);
+    const firstPresence = stream.events.findIndex((ev) => ev.name === 'm0' && isPresence(ev));
+    expect(firstPresence).toBeGreaterThan(-1);
+    for (const index of cursors) expect(firstPresence).toBeGreaterThan(index);
+
+    const tokenA = memberToken(stream, 0);
+    const tokenB = memberToken(stream, 1);
+    expect(typeof tokenA).toBe('string');
+    expect(typeof tokenB).toBe('string');
+    expect(tokenA).not.toBe(tokenB);
+
+    // One document, one person, one session per editor: each page is told which
+    // session on the roster is its own.
+    expect(memberSessions(stream, 0)).toHaveLength(2);
+    expect(memberSessions(stream, 0).map((session) => session.you)).toEqual([true, false]);
+    expect(memberSessions(stream, 1).map((session) => session.you)).toEqual([false, true]);
+
+    // A token is private to the envelope it was minted for.
+    expect(memberFrames(stream, 0).join('\n')).not.toContain(tokenB);
+    expect(memberFrames(stream, 1).join('\n')).not.toContain(tokenA);
+  });
+
+  test('a direct tab and a shared editor see each other, and the shared token is accepted', async () => {
+    const h = harness();
+    const fixture = await fixtureFor(h, { rootId: 'presence-direct' });
+    const doc = documentUrl(fixture);
+    const shared = await open(fixture, sharedV2(fixture, { s: [`live:0:${doc}`], m: [`cA:${doc}`] }));
+    const tab = await directTab(fixture, 'tab-d');
+
+    await waitFor(() => directSessions(tab).length === 2 && memberToken(shared, 0), 'both sessions on the direct tab');
+    const token = memberToken(shared, 0);
+
+    const accepted = await postPresence(fixture, 'cA', { v: 1, session: token, n: 1, editing: PAGE_TARGET });
+    expect(accepted.status).toBe(204);
+
+    const hasCaret = () => directSessions(tab)
+      .some((session) => JSON.stringify(session.editing) === JSON.stringify(PAGE_TARGET));
+    await waitFor(hasCaret, 'the shared editor caret on the direct tab');
+  });
+
+  test('closing the shared connection ends its sessions', async () => {
+    const h = harness();
+    const fixture = await fixtureFor(h, { rootId: 'presence-close' });
+    const doc = documentUrl(fixture);
+    const shared = await open(fixture, sharedV2(fixture, { s: [`live:0:${doc}`], m: [`cA:${doc}`] }));
+    const tab = await directTab(fixture, 'tab-d');
+
+    await waitFor(() => directSessions(tab).length === 2 && memberToken(shared, 0), 'both sessions on the direct tab');
+    const token = memberToken(shared, 0);
+
+    shared.close();
+    await waitFor(() => directSessions(tab).length === 1, 'the departed session to leave the roster');
+
+    // The token named the closed stream, so it matches nothing.
+    const late = await postPresence(fixture, 'cA', { v: 1, session: token, n: 2, editing: PAGE_TARGET });
+    expect(late.status).not.toBe(204);
+  });
+
+  test('a saved entry gets no session', async () => {
+    const h = harness();
+    const fixture = await fixtureFor(h, { rootId: 'presence-saved' });
+    const doc = documentUrl(fixture);
+    const stream = await open(fixture, sharedV2(fixture, { s: [`saved:0:${doc}`] }));
+    await waitFor(() => stream.events.length >= 1, 'the saved cursor');
+    await settle();
+    expect(stream.events.some(isPresence)).toBe(false);
+
+    const tab = await directTab(fixture, 'tab-d');
+    await waitFor(() => directSessions(tab).length === 1, 'one session on the direct tab');
+    expect(stream.events.some(isPresence)).toBe(false);
+  });
+});
+
+describe('a stream that ends inside its roster burst', () => {
+  test('leaves no roster session behind', async () => {
+    const h = harness();
+    const fixture = await fixtureFor(h, { rootId: 'shared-burst' });
+    const doc = documentUrl(fixture);
+    // Every write is refused, so the stream ends while the rosters connect: each
+    // connect sends every session of the document a roster.
+    const res = syntheticResponse();
+    const members = Array.from({ length: 14 }, (_, i) => `c${i}:${doc}`);
+    const req = syntheticRequest(fixture);
+    const ctx = { root: fixture.root, live: createRootLive(fixture.root), localAuthority: h.authority };
+    await handleSharedSyncStreamV2(ctx, req, res, { resolveTarget: bindTargets(h, fixture, dir), s: [`live:0:${doc}`], m: members, v: '2' });
+    expect(res.destroys).toBe(1);
+    expect(h.authority.presence.documents()).toEqual([]);
+
+    const tab = await directTab(fixture, 'tab-d');
+    await waitFor(() => directRoster(tab), 'the direct tab\'s roster');
+    expect(directRoster(tab).people[0].sessions.length).toBe(1);
   });
 });
