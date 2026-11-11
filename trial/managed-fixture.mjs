@@ -17,7 +17,7 @@ function realOrNearest(target) {
   const tail = [];
   for (;;) {
     try {
-      const real = fs.realpathSync(current);
+      const real = fs.realpathSync.native(current);
       return tail.length ? path.join(real, ...tail) : real;
     } catch (error) {
       if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') throw error;
@@ -291,6 +291,20 @@ async function main() {
             id: root.id, url: root.url, port: Number(new URL(root.url).port),
           })),
         });
+        return;
+      }
+
+      if (req.method === 'POST' && (url.pathname === '/kill' || url.pathname === '/restart-go' || url.pathname === '/restart-service')) {
+        const body = await readJsonBody(req);
+        try {
+          if (url.pathname === '/kill') await session.kill(body.which);
+          else if (url.pathname === '/restart-go') await session.restartGo();
+          else await session.restartService();
+        } catch (error) {
+          sendJson(res, 500, { ok: false, error: error && error.message ? error.message : String(error) });
+          return;
+        }
+        sendJson(res, 200, { ok: true });
         return;
       }
 

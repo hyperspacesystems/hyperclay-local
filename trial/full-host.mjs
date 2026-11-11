@@ -1,7 +1,8 @@
 #!/usr/bin/env node
-import { spawn } from 'node:child_process';
+import { fork, spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import http from 'node:http';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -14,6 +15,7 @@ import {
   DROPBOX_ROOT, GITHUB_ROOT, LOCAL_APPS, isInside, realOrNearest,
 } from './setup.mjs';
 import { startManaged } from './supervisor.mjs';
+import { REQUIRED_EXTENSIONS } from '../scripts/conformance.mjs';
 
 const require = createRequire(import.meta.url);
 const { createWorkspaceLifecycle } = require('../src/main/workspace/lifecycle.js');
@@ -21,14 +23,30 @@ const { compileTailwind } = require('tailwind-hyperclay');
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const FIXTURE = path.join(REPO, 'trial', 'managed-fixture.mjs');
+const HTTP_FIXTURE = path.join(REPO, 'tests', 'helpers', 'host-http-fixture.cjs');
 const HTTP_RUN = path.join(REPO, 'tests', 'http', 'run.mjs');
-const CONDITIONS = ['p9', 'p10', 'p11', 'p13'];
+const CONDITIONS = ['p9', 'p10', 'p11', 'p12', 'p13'];
+const MEASURES = ['deadline'];
 const PROFILE = 'local-full';
 const DOC = 'p9.html';
 const TW_DOC = 'tw.html';
 const TW_STYLESHEET = 'tw';
 const GUARD_DOC = 'guard.html';
 const MANIFEST_DEADLINE_MS = 90000;
+
+// The deadline the managed trial's Go host waits for each answer from the JS
+// service (hyperclay/internal/managedtrial/service.go), and the shape of the
+// measurement taken against it.
+const CONSULT_DEADLINE_MS = 10000;
+const DEADLINE_DOC = 'big.html';
+const DEADLINE_HOSTS = ['managed', 'in-process'];
+const DEADLINE_OPS = ['save', 'api-write', 'checkpoint', 'observe', 'meta-visible', 'read'];
+const DEADLINE_SAMPLES = 10;
+const DEADLINE_PAGE_MIN = 300000;
+const DEADLINE_PAGE_MAX = 310000;
+const DEADLINE_SEED_MS = 300;
+const DEADLINE_CHECKPOINT_MS = 10000;
+const DEADLINE_OBSERVE_MS = 10000;
 
 const P10_CASES = [
   'page.api-requires-both-preconditions',
@@ -46,22 +64,33 @@ function couldNotDemonstrate(message) {
 }
 
 function parseArgs(argv) {
-  const args = { condition: null, goBin: null, out: null };
+  const args = {
+    condition: null, measure: null, goBin: null, out: null,
+  };
   for (let i = 0; i < argv.length; i += 1) {
     const flag = argv[i];
-    if (flag !== '--condition' && flag !== '--go-bin' && flag !== '--out') {
+    if (flag !== '--condition' && flag !== '--measure' && flag !== '--go-bin' && flag !== '--out') {
       throw new Error(`unknown argument: ${flag}`);
     }
     const value = argv[i + 1];
     if (value === undefined || value.startsWith('--')) throw new Error(`${flag} needs a value`);
     i += 1;
     if (flag === '--condition') args.condition = value;
+    else if (flag === '--measure') args.measure = value;
     else if (flag === '--go-bin') args.goBin = value;
     else args.out = value;
   }
-  if (!args.condition) throw new Error('--condition is required (p9, p10, p11 or p13)');
-  if (!CONDITIONS.includes(args.condition)) {
-    throw new Error(`unknown --condition: ${args.condition} (p9, p10, p11 or p13)`);
+  if (args.condition && args.measure) {
+    throw new Error('pass --condition or --measure, not both');
+  }
+  if (!args.condition && !args.measure) {
+    throw new Error('--condition or --measure is required (p9, p10, p11, p12, p13 or deadline)');
+  }
+  if (args.condition && !CONDITIONS.includes(args.condition)) {
+    throw new Error(`unknown --condition: ${args.condition} (p9, p10, p11, p12 or p13)`);
+  }
+  if (args.measure && !MEASURES.includes(args.measure)) {
+    throw new Error(`unknown --measure: ${args.measure} (deadline)`);
   }
   if (!args.goBin) throw new Error('--go-bin is required');
   if (!args.out) throw new Error('--out is required');
@@ -629,14 +658,20 @@ export async function runP11({ goBin, out } = {}) {
     }
 
     const armedStale = await fault({ point: 'tailwind-hold', rel: TW_STYLESHEET, count: 1 });
+    const finishedBefore = (await fault({ point: 'finished', rel: TW_STYLESHEET })).body?.finished;
     const oldSave = await saveDocument(urlA, TW_DOC, twDocument('underline'));
     const oldHeld = await waitUntil(async () => (await heldCount()) === 1, 5000);
     const newSave = await saveDocument(urlA, TW_DOC, twDocument('italic'));
     const italicExpected = await expectedCss();
     const italicInstalled = await waitUntil(() => readCss() === italicExpected, 15000);
     const releasedStale = await fault({ point: 'release', rel: TW_STYLESHEET });
-    await wait(1500);
+    const olderFinished = typeof finishedBefore === 'number' && await waitUntil(async () => {
+      const answer = await fault({ point: 'finished', rel: TW_STYLESHEET });
+      return answer.body && answer.body.finished === finishedBefore + 1;
+    }, 15000);
     const afterStaleRelease = readCss();
+    const staleRan = oldHeld === true && italicInstalled === true &&
+      Boolean(releasedStale.body) && releasedStale.body.released === 1 && olderFinished === true;
     detail.steps.stale = {
       armed: armedStale.body,
       oldSave: oldSave.status,
@@ -644,9 +679,11 @@ export async function runP11({ goBin, out } = {}) {
       newSave: newSave.status,
       installed: italicInstalled === true,
       released: releasedStale.body,
+      olderFinished: olderFinished === true,
+      ran: staleRan,
       stillNewer: afterStaleRelease === italicExpected,
     };
-    staleInstalls = afterStaleRelease === italicExpected ? 0 : 1;
+    staleInstalls = staleRan && afterStaleRelease === italicExpected ? 0 : 1;
 
     const verdict = judgeP11({ outputMatches, saveBeforeCompile, staleInstalls });
     const report = {
@@ -691,6 +728,7 @@ export async function runP13({ goBin, out } = {}) {
 
     const seeded = await saveDocument(urlA, GUARD_DOC, guardDocument(GUARD_ITEMS));
     detail.seed = { status: seeded.status, body: seeded.body };
+    detail.seedObserved = await waitForWatcherFrame(session, GUARD_DOC);
 
     streams.push(await openLiveStream({
       origin: urlA, docPath: GUARD_DOC, lane: 'live', clientId: 'tab-live', signal: abort.signal,
@@ -712,15 +750,15 @@ export async function runP13({ goBin, out } = {}) {
       const noticesBefore = raisedNotices();
       const mutation = await mutate();
 
+      const notified = await waitUntil(() => raisedNotices() > noticesBefore, 10000);
+      if (notified) notices += 1;
+
       const event = await waitUntil(async () => {
         const answer = await fetchText(`${urlA}/_/data-loss?file=${encodeURIComponent(GUARD_DOC)}`);
         const body = answer.body;
         return body && body.event && typeof body.event.id === 'string' ? body.event : null;
       }, 10000);
       if (event) raised += 1;
-
-      const notified = await waitUntil(() => raisedNotices() > noticesBefore, 10000);
-      if (notified) notices += 1;
 
       let restore = { status: null, body: null };
       if (event) {
@@ -1056,33 +1094,1287 @@ export async function runP9({ goBin, out } = {}) {
   return { report, exitCode: verdict.pass ? 0 : 1 };
 }
 
+// ---------------------------------------------------------------------------
+// P12: crash and loss. Five parts, each on its own fresh roots and session, each
+// counting that it ran to its end (`completed`) and that none of its safety
+// checks failed (`unsafe`).
+// ---------------------------------------------------------------------------
+
+const P12_DOC = 'p12.html';
+const P12_OTHER_DOC = 'p12-other.html';
+const P12_PARTS = ['a', 'b', 'c', 'd', 'e'];
+export const P12_CHECKS = {
+  a: [
+    'Go died at the fault, and the save failed with it',
+    'the old file is complete',
+    'the document is not refused afterwards',
+  ],
+  b: [
+    'Go died at the fault, and the save failed with it',
+    'the new file is complete',
+    'no falsely confirmed room',
+  ],
+  c: [
+    'Go dropped the reply',
+    'the write answers 200',
+    'written once',
+  ],
+  d: [
+    'the save is refused recoverably',
+    'the page API write is refused recoverably',
+    'nothing is written',
+    'no capability is downgraded',
+    'it recovers',
+  ],
+  e: [
+    'the restart gives a cursor gap',
+    'the gap reconcile uploads free.html and leaves held.html held',
+  ],
+};
+const P12_SEED_MS = 300;
+const P12_DRIVER = path.join(REPO, 'trial', 'sync-driver.cjs');
+const P12_CONNECTION_PROBE = path.join(REPO, 'trial', 'p12-connection-probe.cjs');
+
+export function judgeP12({ parts } = {}) {
+  const reasons = [];
+  let completed = 0;
+  let unsafe = 0;
+  for (const letter of P12_PARTS) {
+    const part = parts && parts[letter];
+    if (!part) {
+      reasons.push(`part ${letter.toUpperCase()}: did not run`);
+      unsafe += 1;
+      continue;
+    }
+    if (part.completed) completed += 1;
+    else reasons.push(`part ${letter.toUpperCase()}: ${part.error ?? 'did not run to its end'}`);
+    if (part.unsafe) {
+      unsafe += 1;
+      for (const reason of part.reasons ?? []) reasons.push(`part ${letter.toUpperCase()}: ${reason}`);
+    }
+    const checked = part.checks ?? {};
+    const missing = (P12_CHECKS[letter] ?? [])
+      .filter((label) => !Object.prototype.hasOwnProperty.call(checked, label));
+    if (missing.length > 0) {
+      if (!part.unsafe) unsafe += 1;
+      for (const label of missing) reasons.push(`part ${letter.toUpperCase()}: did not check "${label}"`);
+    }
+  }
+  return {
+    pass: completed === P12_PARTS.length && unsafe === 0,
+    completed,
+    unsafe,
+    reasons,
+  };
+}
+
+function p12Summary(verdict) {
+  const head = `P12 ${verdict.pass ? 'PASS' : 'FAIL'} completed=${verdict.completed} unsafe=${verdict.unsafe}`;
+  return verdict.pass ? head : [head, ...verdict.reasons].join('\n');
+}
+
+function p12Part() {
+  return {
+    completed: false, unsafe: true, reasons: [], checks: {}, detail: {},
+  };
+}
+
+// One check of a part: recorded whether it held, and counted against the part
+// when it did not.
+function p12Check(part, label, ok, detail = undefined) {
+  part.checks[label] = ok === true;
+  if (detail !== undefined) part.detail[label] = detail;
+  if (ok !== true) part.reasons.push(label);
+  return ok === true;
+}
+
+async function p12MarkedDocument(doc, marker) {
+  const store = JSON.stringify({ score: 0 });
+  if (!doc.html.includes(store)) throw new Error(`the page fixture carries no ${store} store to mark`);
+  return doc.html.replace(store, JSON.stringify({ score: 0, mark: marker }));
+}
+
+async function p12Meta(rootUrl, name) {
+  const answer = await fetchText(`${rootUrl}/_/meta`, {
+    headers: { 'document-url': `${rootUrl}/${name}` },
+  });
+  const document_ = answer.body && typeof answer.body === 'object' ? answer.body.document : null;
+  return {
+    status: answer.status,
+    etag: document_ && typeof document_.etag === 'string' ? document_.etag : null,
+    extensions: answer.body && Array.isArray(answer.body.extensions) ? answer.body.extensions : null,
+  };
+}
+
+async function p12Save(rootUrl, name, html, etag) {
+  try {
+    return await saveDocument(rootUrl, name, html, etag ? { 'if-match': etag } : {});
+  } catch (error) {
+    return { status: null, body: null, text: '', headers: null, error: error?.message || String(error) };
+  }
+}
+
+function p12Refused(answer) {
+  const failedTransport = Boolean(answer.error) || answer.status === null || answer.status >= 500;
+  return {
+    failedTransport,
+    status: answer.status ?? null,
+    retryAfter: answer.headers ? answer.headers.get('retry-after') : null,
+    body: answer.body,
+  };
+}
+
+async function p12DataRead(rootUrl, name) {
+  const answer = await fetchText(`${rootUrl}/_/api/${encodeURIComponent(name)}`);
+  return {
+    status: answer.status,
+    etag: answer.headers ? answer.headers.get('etag') : null,
+    revision: answer.headers ? answer.headers.get('page-revision') : null,
+    body: answer.body,
+  };
+}
+
+async function p12DataWrite(rootUrl, name, data, { etag, revision } = {}) {
+  return fetchText(`${rootUrl}/_/api/${encodeURIComponent(name)}`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      ...(etag ? { 'if-match': etag } : {}),
+      ...(revision ? { 'page-if-match': revision } : {}),
+    },
+    body: JSON.stringify(data),
+  });
+}
+
+function p12Versions(rootDir, stem) {
+  return listNames(path.join(rootDir, '.hyperclay', 'versions', stem));
+}
+
+async function p12ServiceCall(session, pathname, body) {
+  const response = await fetch(`${session.service.url}${pathname}`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${session.service.secret}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+  const text = await response.text();
+  let parsed = null;
+  try { parsed = text ? JSON.parse(text) : null; } catch { parsed = text; }
+  return { status: response.status, body: parsed };
+}
+
+// A part's own roots, its own session, and its own scratch folder.
+async function p12WithSession({ bin, name }, run) {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), `full-host-p12-${name}-`));
+  const rootA = path.join(tmp, 'root-a');
+  const rootB = path.join(tmp, 'root-b');
+  const scratch = path.join(tmp, 'scratch');
+  for (const dir of [rootA, rootB, scratch]) fs.mkdirSync(dir, { recursive: true });
+  const abort = new AbortController();
+  let session = null;
+  try {
+    session = await startTrialSession({ bin, scratch, roots: [rootA, rootB] });
+    const ctx = {
+      rootUrl: (rootId) => {
+        const index = rootId === 'root-a' ? 0 : rootId === 'root-b' ? 1 : -1;
+        if (index < 0) throw new Error(`the part names no ${rootId}`);
+        return rootUrlAt(session, index);
+      },
+      signal: abort.signal,
+    };
+    return await run({
+      session, ctx, rootA, rootB, scratch, tmp,
+      get goRoot() { return (session.readyRoots?.[0] ?? {}).id; },
+    });
+  } finally {
+    abort.abort();
+    if (session) {
+      try { await session.stop(); } catch { }
+    }
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+// A: Go killed before the replace, then a save that is not refused.
+async function p12PartA({ bin, part }) {
+  await p12WithSession({ bin, name: 'a' }, async ({ session, rootA }) => {
+    let urlA = rootUrlAt(session, 0);
+    const doc = await pageDocument({ store: { name: 'game', value: { score: 0 } } });
+    const docPath = path.join(rootA, P12_DOC);
+    fs.writeFileSync(docPath, doc.html);
+    await wait(P12_SEED_MS);
+
+    const etag = (await p12Meta(urlA, P12_DOC)).etag;
+    const before = sha256File(docPath);
+    const armed = await controlFaultFor(session)({ point: 'kill-before-rename', rel: P12_DOC, count: 1 });
+    part.detail.armed = armed;
+    part.detail.etag = etag;
+
+    const killed = await p12Save(urlA, P12_DOC, await p12MarkedDocument(doc, 'p12-a'), etag);
+    part.detail.save = p12Refused(killed);
+    part.detail.saveFailedAtTransport =
+      Boolean(killed.error) || killed.status === null || killed.status >= 500;
+    await waitUntil(() => session.child.signalCode !== null || session.child.exitCode !== null, 5000);
+    part.detail.child = { exitCode: session.child.exitCode, signalCode: session.child.signalCode };
+    p12Check(part, 'Go died at the fault, and the save failed with it',
+      part.detail.child.signalCode === 'SIGKILL' && part.detail.saveFailedAtTransport === true,
+      { child: part.detail.child, saveFailedAtTransport: part.detail.saveFailedAtTransport });
+
+    const oldComplete = sha256File(docPath) === before;
+    p12Check(part, 'the old file is complete', oldComplete,
+      { before, after: sha256File(docPath) });
+
+    await session.restartGo();
+    urlA = rootUrlAt(session, 0);
+    const after = await p12Save(urlA, P12_DOC, await p12MarkedDocument(doc, 'p12-a2'), etag);
+    part.detail.afterRestart = { status: after.status, body: after.body };
+    const text = fs.existsSync(docPath) ? fs.readFileSync(docPath, 'utf8') : '';
+    p12Check(part, 'the document is not refused afterwards',
+      after.status === 200 && text.includes('p12-a2'),
+      { status: after.status, body: after.body, marker: text.includes('p12-a2') });
+  });
+}
+
+// B: Go killed after the replace, with a live room open.
+async function p12PartB({ bin, part }) {
+  await p12WithSession({ bin, name: 'b' }, async ({ session, ctx, rootA }) => {
+    let urlA = rootUrlAt(session, 0);
+    const doc = await pageDocument({ store: { name: 'game', value: { score: 0 } } });
+    const docPath = path.join(rootA, P12_DOC);
+    fs.writeFileSync(docPath, doc.html);
+    await wait(P12_SEED_MS);
+
+    const first = await joinLiveClient(ctx, { rootId: 'root-a', docPath: P12_DOC, clientId: 'p12-b-1' });
+    try {
+      const joined = await first.ready();
+      part.detail.firstJoin = { stores: Object.keys(joined.stores ?? {}), conn: typeof joined.conn };
+
+      const etag = (await p12Meta(urlA, P12_DOC)).etag;
+      const armed = await controlFaultFor(session)({ point: 'kill-after-rename', rel: P12_DOC, count: 1 });
+      part.detail.armed = armed;
+      const killed = await p12Save(urlA, P12_DOC, await p12MarkedDocument(doc, 'p12-b'), etag);
+      part.detail.save = p12Refused(killed);
+      part.detail.saveFailedAtTransport =
+        Boolean(killed.error) || killed.status === null || killed.status >= 500;
+      await waitUntil(() => session.child.signalCode !== null || session.child.exitCode !== null, 5000);
+      part.detail.child = { exitCode: session.child.exitCode, signalCode: session.child.signalCode };
+      p12Check(part, 'Go died at the fault, and the save failed with it',
+        part.detail.child.signalCode === 'SIGKILL' && part.detail.saveFailedAtTransport === true,
+        { child: part.detail.child, saveFailedAtTransport: part.detail.saveFailedAtTransport });
+
+      const killedText = fs.existsSync(docPath) ? fs.readFileSync(docPath, 'utf8') : '';
+      p12Check(part, 'the new file is complete',
+        killedText.includes('p12-b') && /<\/html>\s*$/.test(killedText),
+        { marker: killedText.includes('p12-b'), closes: /<\/html>\s*$/.test(killedText) });
+
+      await session.restartGo();
+      urlA = rootUrlAt(session, 0);
+      const second = await joinLiveClient(ctx, { rootId: 'root-a', docPath: P12_DOC, clientId: 'p12-b-2' });
+      try {
+        const joined = await second.ready();
+        part.detail.secondJoin = {
+          stores: Object.keys(joined.stores ?? {}),
+          game: joined.stores && joined.stores.game ? joined.stores.game.value : null,
+        };
+        const edit = await second.edit('page', [{ op: 'set', path: ['y', 'p12-b-edit'], value: doc.update }]);
+        part.detail.edit = { status: edit.status, body: edit.body };
+      } finally {
+        await second.close();
+      }
+    } finally {
+      await first.close();
+    }
+
+    const checkpoint = await p12ServiceCall(session, '/v1/checkpoint-wait', {
+      root: (session.readyRoots?.[0] ?? {}).id, name: P12_DOC, timeoutMs: 10000,
+    });
+    part.detail.checkpoint = checkpoint;
+    const text = fs.existsSync(docPath) ? fs.readFileSync(docPath, 'utf8') : '';
+    const sidecar = sidecarText(rootA, P12_DOC);
+    p12Check(part, 'no falsely confirmed room',
+      checkpoint.status === 200 && text.includes('p12-b') && sidecar.includes('p12-b-edit'),
+      {
+        checkpoint: checkpoint.status,
+        file: text.includes('p12-b'),
+        sidecar: sidecar.includes('p12-b-edit'),
+      });
+  });
+}
+
+// C: a commit whose reply Go dropped, reconciled through /v1/op.
+async function p12PartC({ bin, part }) {
+  await p12WithSession({ bin, name: 'c' }, async ({ session, rootA }) => {
+    const urlA = rootUrlAt(session, 0);
+    const doc = await pageDocument({ store: { name: 'game', value: { score: 0 } } });
+    const other = await pageDocument({ store: { name: 'game', value: { score: 0 } } });
+    const docPath = path.join(rootA, P12_DOC);
+    const otherPath = path.join(rootA, P12_OTHER_DOC);
+    fs.writeFileSync(docPath, doc.html);
+    fs.writeFileSync(otherPath, other.html);
+    await wait(P12_SEED_MS);
+
+    // The count one page API write adds, measured on a document with no fault.
+    const otherRead = await p12DataRead(urlA, P12_OTHER_DOC);
+    const otherBefore = p12Versions(rootA, 'p12-other').length;
+    const otherWrite = await p12DataWrite(urlA, P12_OTHER_DOC, { second: 'p12-c' },
+      { etag: otherRead.etag, revision: otherRead.revision });
+    const otherAfter = p12Versions(rootA, 'p12-other').length;
+    const grown = otherAfter - otherBefore;
+    part.detail.measured = {
+      read: otherRead.status, write: otherWrite.status, before: otherBefore, after: otherAfter, grown,
+    };
+
+    const armed = await controlFaultFor(session)({ point: 'drop-reply', rel: P12_DOC, count: 1 });
+    part.detail.armed = armed;
+    const read = await p12DataRead(urlA, P12_DOC);
+    const before = p12Versions(rootA, 'p12').length;
+    const write = await p12DataWrite(urlA, P12_DOC, { second: 'p12-c' },
+      { etag: read.etag, revision: read.revision });
+    part.detail.write = { status: write.status, body: write.body };
+    const remaining = await controlFaultFor(session)({ point: 'remaining', rel: P12_DOC });
+    part.detail.remaining = remaining.body;
+    p12Check(part, 'Go dropped the reply', remaining.status === 200 && remaining.body && remaining.body.remaining === 0,
+      { status: remaining.status, body: remaining.body });
+    await wait(500);
+    const after = p12Versions(rootA, 'p12').length;
+    part.detail.versions = { before, after, grown: after - before };
+    p12Check(part, 'the write answers 200', write.status === 200,
+      { status: write.status, body: write.body });
+
+    const text = fs.existsSync(docPath) ? fs.readFileSync(docPath, 'utf8') : '';
+    const sidecar = sidecarText(rootA, P12_DOC);
+    p12Check(part, 'written once',
+      (text.includes('p12-c') || sidecar.includes('p12-c')) && grown > 0 && after - before === grown,
+      { file: text.includes('p12-c'), sidecar: sidecar.includes('p12-c'), grown, wrote: after - before });
+  });
+}
+
+// D: the JS service down: a recoverable refusal, nothing written, no capability
+// downgraded, and recovery once the service is back.
+async function p12PartD({ bin, part }) {
+  await p12WithSession({ bin, name: 'd' }, async ({ session, ctx, rootA }) => {
+    let urlA = rootUrlAt(session, 0);
+    const doc = await pageDocument({ store: { name: 'game', value: { score: 0 } } });
+    const docPath = path.join(rootA, P12_DOC);
+    fs.writeFileSync(docPath, doc.html);
+    await wait(P12_SEED_MS);
+
+    const client = await joinLiveClient(ctx, { rootId: 'root-a', docPath: P12_DOC, clientId: 'p12-d-1' });
+    await client.ready();
+    await client.close();
+    const clean = await p12ServiceCall(session, '/v1/checkpoint-wait', {
+      root: (session.readyRoots?.[0] ?? {}).id, name: P12_DOC, timeoutMs: 10000,
+    });
+    part.detail.clean = clean;
+
+    await session.kill('service');
+    await waitUntil(() => session.service.child.exitCode !== null || session.service.child.signalCode !== null, 5000);
+    part.detail.serviceExit = {
+      exitCode: session.service.child.exitCode, signalCode: session.service.child.signalCode,
+    };
+    const before = sha256File(docPath);
+
+    const refused = p12Refused(await p12Save(urlA, P12_DOC, await p12MarkedDocument(doc, 'p12-d')));
+    part.detail.save = refused;
+    const retryable = refused.body && typeof refused.body === 'object' && refused.body.retryable === true;
+    p12Check(part, 'the save is refused recoverably',
+      refused.status === 503 && Boolean(refused.retryAfter) && retryable,
+      { status: refused.status, retryAfter: refused.retryAfter, body: refused.body });
+
+    const api = p12Refused(await p12DataWrite(urlA, P12_DOC, { second: 'p12-d' }));
+    part.detail.api = api;
+    const apiRetryable = api.body && typeof api.body === 'object' && api.body.retryable === true;
+    p12Check(part, 'the page API write is refused recoverably',
+      api.status === 503 && Boolean(api.retryAfter) && apiRetryable,
+      { status: api.status, retryAfter: api.retryAfter, body: api.body });
+
+    p12Check(part, 'nothing is written', sha256File(docPath) === before,
+      { before, after: sha256File(docPath) });
+
+    const meta = await p12Meta(urlA, P12_DOC);
+    const required = [...REQUIRED_EXTENSIONS].sort();
+    const announced = Array.isArray(meta.extensions) ? [...meta.extensions] : null;
+    p12Check(part, 'no capability is downgraded',
+      meta.status === 200 && announced !== null && JSON.stringify(announced) === JSON.stringify(required),
+      { status: meta.status, extensions: meta.extensions });
+
+    await session.restartService();
+    urlA = rootUrlAt(session, 0);
+    const after = await p12Save(urlA, P12_DOC, await p12MarkedDocument(doc, 'p12-d'));
+    part.detail.afterRestart = { status: after.status, body: after.body };
+    p12Check(part, 'it recovers', after.status === 200, { status: after.status, body: after.body });
+  });
+}
+
+// The platform's sync routes, in memory: discovery with every feature on, one
+// personal account, the whole inventory, content reads and writes, page state
+// and the session stream. Every upload it takes is recorded by path.
+function p12FakeSyncServer() {
+  const nodes = new Map();
+  const calls = [];
+  const streams = new Set();
+  let nextId = 1;
+  const checksumOf = (content) => crypto.createHash('sha256').update(content).digest('hex').slice(0, 16);
+  const pathOf = (node) => (node.parentId && nodes.get(node.parentId)
+    ? `${pathOf(nodes.get(node.parentId))}/${node.name}` : node.name);
+  const valueOf = (node) => ({
+    id: node.id,
+    type: node.type,
+    name: node.name,
+    parentId: node.parentId,
+    path: null,
+    size: node.content === null ? undefined : Buffer.byteLength(node.content),
+    modifiedAt: node.modifiedAt,
+    checksum: node.content === null ? null : checksumOf(node.content),
+    etag: node.content === null ? null : checksumOf(node.content),
+    structureVersion: String(node.id),
+  });
+  const announce = (body) => {
+    for (const stream of streams) {
+      try { stream.write(`data: ${JSON.stringify(body)}\n\n`); } catch { }
+    }
+  };
+
+  const server = http.createServer((request, response) => {
+    const chunks = [];
+    request.on('data', (chunk) => chunks.push(chunk));
+    request.on('end', () => {
+      const raw = Buffer.concat(chunks).toString('utf8');
+      let body = null;
+      try { body = raw ? JSON.parse(raw) : null; } catch { body = null; }
+      const url = new URL(request.url, 'http://127.0.0.1');
+      const route = url.pathname;
+      calls.push({ method: request.method, path: route });
+      const answer = (status, value) => {
+        const payload = Buffer.from(JSON.stringify(value));
+        response.writeHead(status, {
+          'content-type': 'application/json',
+          'content-length': String(payload.length),
+        });
+        response.end(payload);
+      };
+
+      if (route === '/_/sync/accounts') {
+        answer(200, {
+          success: true,
+          protocol: 2,
+          features: {
+            accountScopes: true,
+            accountEvents: true,
+            conditionalContent: true,
+            conditionalStructure: true,
+            completeInventory: true,
+          },
+          accounts: [{
+            id: 'p12-account',
+            kind: 'personal',
+            sync: { enabled: true },
+            limits: { uploadBytes: 10 * 1024 * 1024 },
+          }],
+        });
+        return;
+      }
+      if (route === '/_/sync/status') {
+        answer(200, { serverTime: new Date().toISOString(), protocol: 2 });
+        return;
+      }
+      if (route === '/_/sync/stream') {
+        response.writeHead(200, {
+          'content-type': 'text/event-stream',
+          'cache-control': 'no-store',
+          connection: 'keep-alive',
+        });
+        response.write(': open\n\n');
+        response.write(`data: ${JSON.stringify({ type: 'sync-ready', sync: { enabled: true, reason: null } })}\n\n`);
+        streams.add(response);
+        request.on('close', () => streams.delete(response));
+        return;
+      }
+      if (route === '/_/sync/control') {
+        answer(200, { delivered: true });
+        return;
+      }
+      if (route === '/_/sync/nodes' && request.method === 'GET') {
+        answer(200, {
+          nodes: [...nodes.values()].map(valueOf),
+          complete: true,
+          structureVersion: String(nodes.size),
+        });
+        return;
+      }
+      if (route === '/_/sync/nodes' && request.method === 'POST') {
+        const node = {
+          id: nextId,
+          type: body.type,
+          name: body.name,
+          parentId: body.parentId === 'root' ? 0 : Number(body.parentId) || 0,
+          content: body.content === undefined ? null : body.content,
+          modifiedAt: body.modifiedAt || new Date().toISOString(),
+        };
+        nextId += 1;
+        nodes.set(node.id, node);
+        const value = valueOf(node);
+        answer(200, {
+          node: { id: node.id, type: node.type, name: node.name, parentId: node.parentId },
+          etag: value.etag,
+          checksum: value.checksum,
+          structureVersion: value.structureVersion,
+        });
+        announce({ type: 'node-created', nodeId: node.id, nodeType: node.type });
+        return;
+      }
+      const content = /^\/_\/sync\/nodes\/(\d+)\/content$/.exec(route);
+      if (content) {
+        const node = nodes.get(Number(content[1]));
+        if (!node) {
+          answer(404, { error: 'not found' });
+          return;
+        }
+        if (request.method === 'GET') {
+          answer(200, { ...valueOf(node), nodeType: node.type, content: node.content });
+          return;
+        }
+        if (request.method === 'PUT') {
+          const name = pathOf(node);
+          node.content = body.content;
+          node.modifiedAt = body.modifiedAt || new Date().toISOString();
+          calls.push({ method: 'UPLOAD', path: name, name });
+          const value = valueOf(node);
+          answer(200, {
+            nodeId: node.id,
+            checksum: value.checksum,
+            etag: value.etag,
+            structureVersion: value.structureVersion,
+          });
+          return;
+        }
+      }
+      if (/^\/_\/sync\/nodes\/\d+\/page-state$/.test(route)) {
+        if (request.method === 'GET') {
+          answer(404, { error: 'no page state' });
+          return;
+        }
+        answer(200, { ok: true });
+        return;
+      }
+      answer(404, { error: 'not found' });
+    });
+  });
+
+  return new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', () => resolve({
+      port: server.address().port,
+      calls,
+      uploads: () => calls.filter((call) => call.method === 'UPLOAD').map((call) => call.name),
+      close: () => new Promise((done) => {
+        for (const stream of streams) {
+          try { stream.end(); } catch { }
+        }
+        server.close(() => done());
+      }),
+    }));
+  });
+}
+
+// The connection the driver's Go watcher resumes from: `GET /v1/events` from the
+// epoch's first sequence answers the current cursor first, and every frame
+// replayed after it carries its own.
+async function p12ReadCursor(connection, waitMs = 2000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), waitMs);
+  const cursors = [];
+  let status = null;
+  try {
+    const response = await fetch(`${connection.url}/v1/events?since=0`, {
+      headers: { authorization: `Bearer ${connection.secret}`, accept: 'application/x-ndjson' },
+      signal: controller.signal,
+    });
+    status = response.status;
+    if (response.status === 200) {
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let at;
+        while ((at = buffer.indexOf('\n')) >= 0) {
+          const line = buffer.slice(0, at);
+          buffer = buffer.slice(at + 1);
+          if (!line.trim()) continue;
+          let frame = null;
+          try { frame = JSON.parse(line); } catch { frame = null; }
+          if (frame && typeof frame.cursor === 'string') {
+            cursors.push({ cursor: frame.cursor, type: frame.type ?? null, rel: frame.rel ?? null });
+          }
+        }
+      }
+    }
+  } catch {
+    // A stream that ends by deadline holds every frame it was going to send.
+  } finally {
+    clearTimeout(timer);
+  }
+  const sequence = (cursor) => {
+    const raw = String(cursor).split(':')[1];
+    const value = Number(raw);
+    return Number.isFinite(value) ? value : -1;
+  };
+  cursors.sort((left, right) => sequence(left.cursor) - sequence(right.cursor));
+  return {
+    status,
+    frames: cursors,
+    cursor: cursors.length ? cursors[cursors.length - 1].cursor : null,
+  };
+}
+
+// Waits until Go's watcher has published `rel`. Both hosts report a document
+// they have not seen yet as added and run the outside-edit guard on a change
+// only, so a document must have been seen before an outside program rewrites it.
+async function waitForWatcherFrame(session, rel, ms = 10000) {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    const read = await p12ReadCursor({ url: session.control, secret: session.secret }, 500);
+    if (read.frames.some((frame) => frame.type === 'change' && frame.rel === rel)) return true;
+    await wait(200);
+  }
+  return false;
+}
+
+// The first frame a `since` cursor is answered with.
+async function p12FirstFrame(connection, since) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 3000);
+  try {
+    const response = await fetch(`${connection.url}/v1/events?since=${encodeURIComponent(since)}`, {
+      headers: { authorization: `Bearer ${connection.secret}`, accept: 'application/x-ndjson' },
+      signal: controller.signal,
+    });
+    if (response.status !== 200) return { status: response.status, frame: null };
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let at;
+      while ((at = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, at);
+        buffer = buffer.slice(at + 1);
+        if (!line.trim()) continue;
+        let frame = null;
+        try { frame = JSON.parse(line); } catch { frame = null; }
+        reader.cancel().catch(() => { });
+        return { status: response.status, frame };
+      }
+    }
+    return { status: response.status, frame: null };
+  } catch {
+    return { status: null, frame: null };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// E: a restart gives a cursor gap and a full inventory that respects a hold.
+async function p12PartE({ bin, out, part }) {
+  const driverLog = path.join(out ?? os.tmpdir(), 'p12-e-driver.log');
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'full-host-p12-e-')));
+  const runDir = path.join(tmp, 'run');
+  const rootA = path.join(tmp, 'root-a');
+  const userData = path.join(runDir, 'userData');
+  const connectionFile = path.join(tmp, 'connection.json');
+  const sessionId = 'p12-sync';
+  const settingsRootId = 'p12-root-a';
+  let driver = null;
+  let fake = null;
+  let stderr = '';
+  let callId = 0;
+  const nextMessage = (timeoutMs = 60000) => new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      driver.off('message', onMessage);
+      reject(new Error(`the sync driver sent nothing in ${timeoutMs}ms: ${stderr.slice(-2000)}`));
+    }, timeoutMs);
+    const onMessage = (message) => {
+      clearTimeout(timer);
+      resolve(message);
+    };
+    driver.once('message', onMessage);
+  });
+  const callDriver = async (cmd, args = {}) => {
+    callId += 1;
+    const id = callId;
+    const reply = nextMessage();
+    driver.send({ id, cmd, args });
+    const message = await reply;
+    if (message.id !== id) throw new Error(`the sync driver answered ${JSON.stringify(message)}`);
+    if (!message.ok) throw new Error(`${cmd} failed: ${message.error && message.error.message}`);
+    return message.result;
+  };
+  const readConnection = () => {
+    try {
+      const text = fs.readFileSync(connectionFile, 'utf8');
+      const parsed = JSON.parse(text);
+      return parsed && typeof parsed.url === 'string' && typeof parsed.secret === 'string' ? parsed : null;
+    } catch {
+      return null;
+    }
+  };
+
+  try {
+    fs.mkdirSync(rootA, { recursive: true });
+    fs.mkdirSync(runDir, { recursive: true });
+    for (const name of ['free.html', 'held.html']) {
+      fs.writeFileSync(path.join(rootA, name),
+        `<!doctype html>\n<html><body><h1>${name}</h1></body></html>\n`);
+    }
+
+    fake = await p12FakeSyncServer();
+    driver = fork(P12_DRIVER, [], {
+      execArgv: ['--require', P12_CONNECTION_PROBE],
+      env: {
+        ...process.env,
+        APP_HOSTNAME: '127.0.0.1',
+        APP_PORT: String(fake.port),
+        LOCAL_DIR: REPO,
+        UNDICI_PATH: require.resolve('undici'),
+        MANAGED_TRIAL_GO_BIN: bin,
+        MANAGED_TRIAL_RUN: runDir,
+        P12_CONNECTION_OUT: connectionFile,
+      },
+      stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+    });
+    driver.stderr.setEncoding('utf8');
+    driver.stderr.on('data', (chunk) => { stderr += chunk; });
+    driver.stdout.setEncoding('utf8');
+    driver.stdout.on('data', (chunk) => { stderr += chunk; });
+    part.detail.driver = { pid: driver.pid, log: driverLog };
+
+    const ready = await nextMessage();
+    if (!ready || ready.ready !== true) throw new Error('the sync driver did not announce itself ready');
+
+    const snapshot = await callDriver('start', {
+      userData,
+      apiKey: 'p12-key',
+      roots: [{ id: settingsRootId, path: rootA, kind: 'personal', name: 'root-a' }],
+      sessions: [{ id: sessionId, rootId: settingsRootId, kind: 'personal', accountId: null, cached: { username: null } }],
+    });
+    part.detail.start = { sessions: snapshot && snapshot.sessions ? snapshot.sessions.map((entry) => entry.status) : null };
+
+    const metaDir = path.join(userData, 'sync-meta', 'v2', sessionId);
+    const nodeMapFile = path.join(metaDir, 'node-map.json');
+    const firstPass = await waitUntil(() => {
+      try {
+        const map = JSON.parse(fs.readFileSync(nodeMapFile, 'utf8'));
+        const entries = Object.values(map);
+        return entries.length === 2 && entries.every((entry) => entry.remoteEtag) ? map : null;
+      } catch {
+        return null;
+      }
+    }, 20000);
+    if (!firstPass) throw new Error(`the driver's first pass did not finish: ${stderr.slice(-2000)}`);
+    part.detail.firstPass = Object.fromEntries(Object.entries(firstPass).map(([id, entry]) => [
+      entry.path, { id, remoteEtag: entry.remoteEtag, localChecksum: entry.localChecksum },
+    ]));
+
+    const held = Object.entries(firstPass).find(([, entry]) => entry.path === 'held.html');
+    if (!held) throw new Error('the first pass tracked no held.html');
+    const [heldId, heldEntry] = held;
+    const conflictsFile = path.join(metaDir, 'conflicts.json');
+    fs.writeFileSync(conflictsFile, `${JSON.stringify({
+      [heldId]: {
+        kind: 'both-edited',
+        path: 'held.html',
+        localChecksum: heldEntry.localChecksum,
+        remoteEtag: heldEntry.remoteEtag,
+        remoteCopy: null,
+        detectedAt: Date.now(),
+      },
+    }, null, 2)}\n`);
+    part.detail.hold = { key: heldId, path: 'held.html' };
+
+    const old = await waitUntil(() => readConnection(), 10000);
+    if (!old) throw new Error('the driver never recorded the Go connection its watcher uses');
+    const before = await p12ReadCursor(old);
+    part.detail.cursorBefore = before;
+    if (!before.cursor) throw new Error('the old Go answered no event cursor');
+
+    const uploadsBefore = fake.uploads().length;
+    fs.writeFileSync(path.join(rootA, 'free.html'),
+      '<!doctype html>\n<html><body><h1>free</h1><p>changed</p></body></html>\n');
+    fs.writeFileSync(path.join(rootA, 'held.html'),
+      '<!doctype html>\n<html><body><h1>held</h1><p>changed</p></body></html>\n');
+
+    await callDriver('restartGoOnly');
+    const next = await waitUntil(() => {
+      const current = readConnection();
+      return current && current.url !== old.url ? current : null;
+    }, 15000);
+    part.detail.connection = { before: { url: old.url }, after: next ? { url: next.url } : null };
+    if (!next) throw new Error('the restarted Go never replaced the connection');
+
+    const gap = await p12FirstFrame(next, before.cursor);
+    part.detail.gap = gap;
+    p12Check(part, 'the restart gives a cursor gap',
+      gap.status === 200 && gap.frame !== null && gap.frame.type === 'gap',
+      { status: gap.status, frame: gap.frame });
+
+    const inventory = await waitUntil(() => {
+      const uploads = fake.uploads().slice(uploadsBefore);
+      return uploads.includes('free.html') ? uploads : null;
+    }, 20000);
+    const idle = await callDriver('idle', { timeoutMs: 20000 }).then(() => true, (error) => error.message);
+    const settled = fake.uploads().slice(uploadsBefore);
+    part.detail.uploads = { before: uploadsBefore, after: settled, idle };
+    part.detail.conflicts = await callDriver('conflicts', { root: settingsRootId });
+    p12Check(part, 'the gap reconcile uploads free.html and leaves held.html held',
+      inventory !== null && idle === true && settled.includes('free.html') && !settled.includes('held.html'),
+      { uploads: settled, idle });
+  } finally {
+    fs.writeFileSync(driverLog, stderr);
+    if (driver && driver.exitCode === null && driver.signalCode === null) {
+      const exited = new Promise((resolve) => driver.once('exit', resolve));
+      try { driver.kill(); } catch { }
+      await Promise.race([exited, wait(10000)]);
+    }
+    if (fake) {
+      try { await fake.close(); } catch { }
+    }
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+const P12_RUNNERS = {
+  a: p12PartA, b: p12PartB, c: p12PartC, d: p12PartD, e: p12PartE,
+};
+
+export async function runP12({ goBin, out } = {}) {
+  const bin = path.resolve(goBin);
+  const parts = {};
+  for (const letter of P12_PARTS) {
+    const part = p12Part();
+    try {
+      await P12_RUNNERS[letter]({ bin, out, letter, part });
+      part.completed = true;
+      part.unsafe = part.reasons.length > 0;
+    } catch (error) {
+      part.completed = false;
+      part.unsafe = true;
+      part.error = `${error?.message || String(error)}`;
+      if (part.reasons.length === 0) part.reasons.push(part.error);
+    }
+    parts[letter] = part;
+  }
+  const verdict = judgeP12({ parts });
+  const report = {
+    schema: 1,
+    condition: 'p12',
+    goBin: bin,
+    verdict: verdict.pass ? 'pass' : 'fail',
+    pass: verdict.pass,
+    completed: verdict.completed,
+    unsafe: verdict.unsafe,
+    reasons: verdict.reasons,
+    parts,
+    summary: p12Summary(verdict),
+  };
+  return { report, exitCode: verdict.pass ? 0 : 1 };
+}
+
+// The page the deadline is measured on: the fixture's own page grown with plain
+// paragraphs in a section of their own, before </body> and outside the article,
+// until the file is between 300,000 and 310,000 bytes.
+const PAD_MARKER = '<section id="pad"></section>';
+const PAD_LINE = `<p>pad 00000 ${'a'.repeat(24)}</p>`;
+
+function padSection(count) {
+  const lines = [];
+  for (let i = 0; i < count; i += 1) lines.push(`<p>pad ${String(i).padStart(5, '0')} ${'a'.repeat(24)}</p>`);
+  return `<section id="pad">\n${lines.join('\n')}\n</section>`;
+}
+
+async function deadlinePage() {
+  const doc = await pageDocument({ store: { name: 'game', value: { score: 0 } } });
+  if (!doc.html.includes('</body>')) throw new Error('the page fixture has no body to grow');
+  const base = doc.html.replace('</body>', `${PAD_MARKER}</body>`);
+  const perLine = Buffer.byteLength(PAD_LINE) + 1;
+  let count = Math.max(0, Math.ceil((DEADLINE_PAGE_MIN - Buffer.byteLength(base)) / perLine));
+  let html = base.replace(PAD_MARKER, padSection(count));
+  while (Buffer.byteLength(html) < DEADLINE_PAGE_MIN) {
+    count += 10;
+    html = base.replace(PAD_MARKER, padSection(count));
+  }
+  while (Buffer.byteLength(html) > DEADLINE_PAGE_MAX && count > 0) {
+    count -= 1;
+    html = base.replace(PAD_MARKER, padSection(count));
+  }
+  const bytes = Buffer.byteLength(html);
+  if (bytes < DEADLINE_PAGE_MIN || bytes > DEADLINE_PAGE_MAX) {
+    throw new Error(`the page is ${bytes} bytes, outside ${DEADLINE_PAGE_MIN}..${DEADLINE_PAGE_MAX}`);
+  }
+  return { html, bytes };
+}
+
+// One paragraph of the pad rewritten, so the document's bytes change and its
+// page tag does not.
+function changePad(html, stamp) {
+  const pattern = /(<section id="pad">\n<p>)pad [^<]*(<\/p>)/;
+  if (!pattern.test(html)) throw new Error('the page has no pad paragraph to change');
+  return html.replace(pattern, `$1pad ${stamp}$2`);
+}
+
+function formatMs(value) {
+  return typeof value === 'number' && Number.isFinite(value) ? value.toFixed(1) : 'n/a';
+}
+
+export function deadlineSummary({ bytes, hosts } = {}) {
+  const measured = hosts ?? {};
+  const lines = DEADLINE_HOSTS.map((name) => {
+    const host = measured[name] ?? {};
+    const terms = DEADLINE_OPS.map((op) => {
+      const entry = host[op] ?? {};
+      const failed = Array.isArray(entry.failures) ? entry.failures.length : 0;
+      return `${op}=${formatMs(entry.p50)}/${formatMs(entry.max)}${failed > 0 ? ` failed=${failed}` : ''}`;
+    });
+    return `DEADLINE ${name} bytes=${bytes} ${terms.join(' ')} deadlineMs=${CONSULT_DEADLINE_MS}`;
+  });
+  const managed = measured.managed ?? {};
+  const maxima = DEADLINE_OPS
+    .filter((op) => op !== 'meta-visible' && op !== 'read')
+    .map((op) => (managed[op] && typeof managed[op].max === 'number' ? managed[op].max : null))
+    .filter((value) => value !== null);
+  const headroom = maxima.length === 0
+    ? 'n/a'
+    : (CONSULT_DEADLINE_MS / Math.max(...maxima)).toFixed(2);
+  const failedSamples = DEADLINE_OPS.reduce((total, op) => {
+    const entry = managed[op] ?? {};
+    return total + (Array.isArray(entry.failures) ? entry.failures.length : 0);
+  }, 0);
+  lines.push(`DEADLINE headroom=${headroom} failedSamples=${failedSamples}`);
+  return lines.join('\n');
+}
+
+function percentile(samples, fraction) {
+  if (samples.length === 0) return null;
+  const sorted = [...samples].sort((a, b) => a - b);
+  return sorted[Math.floor((sorted.length - 1) * fraction)];
+}
+
+function postControl(control, pathname, body) {
+  return fetch(`${control.url}${pathname}`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${control.token}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  }).then(async (response) => {
+    const text = await response.text();
+    let parsed = null;
+    try { parsed = text ? JSON.parse(text) : null; } catch { parsed = text; }
+    return { status: response.status, answer: parsed };
+  });
+}
+
+// Local's in-process fixture, answering the same control API the managed
+// fixture answers, on a root folder this measurement seeds.
+async function startInProcessFixture({ dir, rootDir, logPath }) {
+  const manifestPath = path.join(dir, 'manifest.json');
+  const child = spawn(process.execPath, [
+    HTTP_FIXTURE, '--manifest', manifestPath, '--root', `root-a=${rootDir}`,
+  ], { cwd: REPO, stdio: ['ignore', 'pipe', 'pipe'] });
+  const log = fs.createWriteStream(logPath);
+  child.stdout.pipe(log);
+  child.stderr.pipe(log);
+  const exited = new Promise((resolve) => {
+    if (child.exitCode !== null || child.signalCode !== null) resolve();
+    else child.once('exit', resolve);
+  });
+  child.on('error', () => {});
+  const manifest = await waitForManifest(manifestPath, child);
+  if (!manifest) {
+    killChild(child);
+    await Promise.race([exited, wait(10000)]);
+    killChild(child, 'SIGKILL');
+    await Promise.race([exited, wait(5000)]);
+    log.end();
+    throw couldNotDemonstrate(`the in-process fixture wrote no manifest (log ${logPath})`);
+  }
+  return {
+    child, manifest, manifestPath, exited, log,
+  };
+}
+
+// The five consulted operations, each timed around the whole client call, ten
+// times over, against one host.
+async function measureDeadlineHost({
+  host, initialHtml, docPath, signal,
+}) {
+  const ctx = { rootUrl: () => host.url, signal };
+  const html = { current: initialHtml };
+  let example = null;
+  let stamp = 0;
+  const nextStamp = () => { stamp += 1; return `${host.name}-${stamp}`; };
+
+  const ops = {
+    async save() {
+      const before = await p12Meta(host.url, DEADLINE_DOC);
+      if (before.status !== 200 || !before.etag) {
+        return { status: before.status, answer: { error: 'the meta named no document etag' } };
+      }
+      html.current = changePad(html.current, nextStamp());
+      const answer = await saveDocument(host.url, DEADLINE_DOC, html.current, { 'if-match': before.etag });
+      return { status: answer.status, answer: answer.body ?? answer.text };
+    },
+    async 'api-write'() {
+      const read = await p12DataRead(host.url, DEADLINE_DOC);
+      const answer = await p12DataWrite(host.url, DEADLINE_DOC, { second: nextStamp() },
+        { etag: read.etag, revision: read.revision });
+      return { status: answer.status, answer: answer.body ?? answer.text };
+    },
+    async checkpoint() {
+      const fileBefore = fs.readFileSync(docPath);
+      const client = await joinLiveClient(ctx, {
+        rootId: host.rootId, docPath: DEADLINE_DOC, clientId: `checkpoint-${nextStamp()}`,
+      });
+      let edit;
+      try {
+        await client.ready();
+        edit = await client.edit('game', [{ op: 'add', path: ['score'], n: 1 }]);
+      } catch (error) {
+        await client.close();
+        throw error;
+      }
+      if (edit.status !== 200) {
+        await client.close();
+        return { status: edit.status, answer: edit.body };
+      }
+      const started = performance.now();
+      await client.close();
+      const answer = await host.checkpointWait(DEADLINE_CHECKPOINT_MS);
+      const measuredMs = performance.now() - started;
+      if (answer.status === 200 && fs.readFileSync(docPath).equals(fileBefore)) {
+        return { status: 'not-written', answer: { error: 'the checkpoint left the file unchanged', wait: answer.answer }, measuredMs };
+      }
+      return { status: answer.status, answer: answer.answer, measuredMs };
+    },
+    async observe() {
+      const before = observeClient.events.length;
+      html.current = changePad(html.current, nextStamp());
+      const started = performance.now();
+      fs.writeFileSync(docPath, html.current);
+      const seen = await waitUntil(() => {
+        const events = observeClient.events.slice(before);
+        return events.find((event) => event.data && event.data !== '') ?? null;
+      }, DEADLINE_OBSERVE_MS, 10);
+      if (!seen) {
+        return { status: null, answer: `no live event reached the watcher within ${DEADLINE_OBSERVE_MS} ms` };
+      }
+      const measuredMs = performance.now() - started;
+      if (example === null) {
+        example = { event: seen.event, data: String(seen.data).slice(0, 200) };
+      }
+      return { status: 200, answer: { event: seen.event }, measuredMs };
+    },
+    async 'meta-visible'() {
+      const before = await p12Meta(host.url, DEADLINE_DOC);
+      if (before.status !== 200 || !before.etag) {
+        return { status: before.status, answer: { error: 'the meta named no document etag' } };
+      }
+      html.current = changePad(html.current, nextStamp());
+      fs.writeFileSync(docPath, html.current);
+      const seen = await waitUntil(async () => {
+        const now = await p12Meta(host.url, DEADLINE_DOC);
+        return now.status === 200 && now.etag && now.etag !== before.etag ? now : null;
+      }, DEADLINE_OBSERVE_MS, 10);
+      if (!seen) {
+        return { status: null, answer: `the new bytes were not announced within ${DEADLINE_OBSERVE_MS} ms` };
+      }
+      return { status: 200, answer: { etag: seen.etag } };
+    },
+    async read() {
+      const answer = await fetchText(`${host.url}/${DEADLINE_DOC}`);
+      return { status: answer.status, answer: { bytes: Buffer.byteLength(answer.text) } };
+    },
+  };
+
+  let observeClient = null;
+  const measured = {};
+  try {
+    for (const op of DEADLINE_OPS) {
+      if (op === 'observe') {
+        observeClient = await joinLiveClient(ctx, {
+          rootId: host.rootId, docPath: DEADLINE_DOC, clientId: 'deadline-observe',
+        });
+        await observeClient.ready();
+      }
+      const samples = [];
+      const failures = [];
+      for (let i = 0; i < DEADLINE_SAMPLES; i += 1) {
+        const started = performance.now();
+        let answer;
+        try {
+          answer = await ops[op]();
+        } catch (error) {
+          answer = { status: null, answer: error?.message || String(error) };
+        }
+        const elapsed = typeof answer.measuredMs === 'number'
+          ? answer.measuredMs
+          : performance.now() - started;
+        if (answer.status === 200) samples.push(Number(elapsed.toFixed(3)));
+        else failures.push({ status: answer.status ?? null, answer: answer.answer ?? null });
+      }
+      measured[op] = {
+        samples,
+        p50: percentile(samples, 0.5),
+        max: samples.length > 0 ? Math.max(...samples) : null,
+        failures,
+      };
+      if (op === 'observe' && example !== null) measured[op].example = example;
+    }
+  } finally {
+    if (observeClient) await observeClient.close();
+  }
+  return measured;
+}
+
+async function measureManagedHost({ bin, page }) {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'full-host-deadline-managed-'));
+  const rootA = path.join(tmp, 'root-a');
+  const rootB = path.join(tmp, 'root-b');
+  const scratch = path.join(tmp, 'scratch');
+  for (const dir of [rootA, rootB, scratch]) fs.mkdirSync(dir, { recursive: true });
+  const docPath = path.join(rootA, DEADLINE_DOC);
+  const abort = new AbortController();
+  let session = null;
+  try {
+    session = await startTrialSession({ bin, scratch, roots: [rootA, rootB] });
+    const url = rootUrlAt(session, 0);
+    const goRoot = (session.readyRoots?.[0] ?? {}).id;
+    if (!goRoot) throw couldNotDemonstrate('the managed host names no root for the page');
+    fs.writeFileSync(docPath, page.html);
+    await wait(DEADLINE_SEED_MS);
+    return await measureDeadlineHost({
+      host: {
+        name: 'managed',
+        url,
+        rootId: 'root-a',
+        checkpointWait: async (timeoutMs) => {
+          const answer = await p12ServiceCall(session, '/v1/checkpoint-wait',
+            { root: goRoot, name: DEADLINE_DOC, timeoutMs });
+          return { status: answer.status, answer: answer.body };
+        },
+      },
+      initialHtml: page.html,
+      docPath,
+      signal: abort.signal,
+    });
+  } finally {
+    abort.abort();
+    if (session) {
+      try { await session.stop(); } catch { }
+    }
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+async function measureInProcessHost({ out, page }) {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'full-host-deadline-in-process-'));
+  const rootA = path.join(tmp, 'root-a');
+  fs.mkdirSync(rootA, { recursive: true });
+  const docPath = path.join(rootA, DEADLINE_DOC);
+  const abort = new AbortController();
+  let fixture = null;
+  try {
+    fixture = await startInProcessFixture({
+      dir: tmp, rootDir: rootA, logPath: path.join(out, 'deadline-in-process.log'),
+    });
+    const root = (fixture.manifest.roots ?? [])[0];
+    if (!root || !root.url) throw couldNotDemonstrate('the in-process fixture names no root');
+    const control = fixture.manifest.control;
+    fs.writeFileSync(docPath, page.html);
+    await wait(DEADLINE_SEED_MS);
+    return await measureDeadlineHost({
+      host: {
+        name: 'in-process',
+        url: root.url,
+        rootId: root.id,
+        checkpointWait: (timeoutMs) => postControl(control, '/checkpoint-wait',
+          { root: root.id, path: DEADLINE_DOC, timeoutMs }),
+      },
+      initialHtml: page.html,
+      docPath,
+      signal: abort.signal,
+    });
+  } finally {
+    abort.abort();
+    if (fixture) await stopFixture(fixture);
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+// The deadline measured on a 300 KB page: how long each consulted operation
+// takes through the managed host, beside the same operation run in process.
+// It records and passes nothing.
+export async function runDeadline({ goBin, out } = {}) {
+  const bin = path.resolve(goBin);
+  try {
+    fs.accessSync(bin, fs.constants.X_OK);
+  } catch {
+    throw couldNotDemonstrate(`--go-bin is not an executable file: ${bin}`);
+  }
+  const page = await deadlinePage();
+  const hosts = {};
+  hosts.managed = await measureManagedHost({ bin, page });
+  hosts['in-process'] = await measureInProcessHost({ out, page });
+  const report = {
+    schema: 1,
+    measure: 'deadline',
+    goBin: bin,
+    bytes: page.bytes,
+    deadlineMs: CONSULT_DEADLINE_MS,
+    samplesPerOperation: DEADLINE_SAMPLES,
+    hosts,
+    summary: deadlineSummary({ bytes: page.bytes, hosts }),
+    exitCode: 0,
+  };
+  return { report, exitCode: 0 };
+}
+
 export async function main(argv) {
   const args = parseArgs(argv);
   const out = resolveOut(args.out);
+  const label = args.measure ?? args.condition;
   let result;
   try {
-    if (args.condition === 'p11') result = await runP11({ goBin: args.goBin, out });
+    if (args.measure === 'deadline') result = await runDeadline({ goBin: args.goBin, out });
+    else if (args.condition === 'p11') result = await runP11({ goBin: args.goBin, out });
     else if (args.condition === 'p13') result = await runP13({ goBin: args.goBin, out });
     else if (args.condition === 'p10') result = await runP10({ goBin: args.goBin, out });
+    else if (args.condition === 'p12') result = await runP12({ goBin: args.goBin, out });
     else result = await runP9({ goBin: args.goBin, out });
   } catch (error) {
     if (error && error.code === 'could-not-demonstrate') {
       const report = {
         schema: 1,
-        condition: args.condition,
+        ...(args.measure ? { measure: args.measure } : { condition: args.condition }),
         goBin: path.resolve(args.goBin),
         verdict: 'could-not-demonstrate',
         pass: false,
         reasons: [error.message],
-        summary: `${args.condition.toUpperCase()} could-not-demonstrate ${error.message}`,
+        summary: `${label.toUpperCase()} could-not-demonstrate ${error.message}`,
       };
-      writeReport(out, args.condition, report);
+      writeReport(out, label, report);
       process.stdout.write(`${report.summary}\n`);
       return 3;
     }
     throw error;
   }
-  return finish(out, args.condition, result.report, result.report.summary);
+  return finish(out, label, result.report, result.report.summary);
 }
 
 const invoked = process.argv[1] !== undefined

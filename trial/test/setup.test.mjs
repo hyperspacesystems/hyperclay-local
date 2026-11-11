@@ -6,7 +6,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { setup, EXCLUDED, LOCAL_APPS } from '../setup.mjs';
+import { setup, realOrNearest, EXCLUDED, LOCAL_APPS } from '../setup.mjs';
 
 const SETUP = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'setup.mjs');
 const FIXED_TIME = new Date('2026-01-02T03:04:05Z');
@@ -260,4 +260,25 @@ test('mutation proof: dropping the .hyperclay/*/personal exclusion fails the cle
 
   const saved = path.join(os.tmpdir(), 'hcl-trial-mutation-output.json');
   fs.writeFileSync(saved, JSON.stringify({ message: error.message, proof }, null, 2) + '\n');
+});
+
+test('the root guard compares the real name of the folder, not the case it was spelt in', (t) => {
+  const tmp = tempDir('hcl-trial-case-');
+  try {
+    fs.mkdirSync(path.join(tmp, 'Live', 'LOCAL_APPS', 'app'), { recursive: true });
+    if (!fs.existsSync(path.join(tmp, 'live', 'local_apps'))) {
+      t.skip('this volume tells letter case apart');
+      return;
+    }
+    assert.equal(
+      realOrNearest(path.join(tmp, 'live', 'local_apps', 'app')),
+      realOrNearest(path.join(tmp, 'Live', 'LOCAL_APPS', 'app')),
+    );
+    assert.equal(
+      realOrNearest(path.join(tmp, 'live', 'local_apps', 'new-folder')),
+      realOrNearest(path.join(tmp, 'Live', 'LOCAL_APPS', 'new-folder')),
+    );
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
 });

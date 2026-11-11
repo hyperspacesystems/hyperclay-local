@@ -507,6 +507,23 @@ test('the Go document host adapter', { skip: SKIP }, async (t) => {
     assert.match(String(frames[0].since), /^[0-9a-f]{16}:\d+$/);
   });
 
+  await t.test('a feed that never got a cursor reports a gap when it reconnects to a restarted host', async () => {
+    const frames = [];
+    const unsubscribe = host.events(null, (frame) => frames.push(frame));
+    try {
+      await wait(500);
+      assert.deepEqual(frames, []);
+      await go.stop();
+      go = await start();
+      connect(go);
+      const arrived = await until(() => frames.some((frame) => frame.type === 'gap'), { timeout: 20000 });
+      assert.equal(arrived, true, `no gap after the restart: ${JSON.stringify(frames)}`);
+    } finally {
+      unsubscribe();
+    }
+    assert.equal(frames.filter((frame) => frame.type === 'gap').length, 1);
+  });
+
   await t.test('a stopped host is host-unreachable with an opId', async () => {
     await go.stop();
     await assert.rejects(host.commit({ kind: 'browser-save', name: 'gone.html', bytes: document('gone') }), (error) => {

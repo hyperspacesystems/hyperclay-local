@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 import {
-  judgeP9, judgeP10, judgeP11, judgeP13,
+  deadlineSummary, judgeP9, judgeP10, judgeP11, judgeP12, judgeP13, P12_CHECKS,
 } from '../full-host.mjs';
 import { GITHUB_ROOT } from '../setup.mjs';
 
@@ -57,10 +57,10 @@ test('an --out that is not empty is refused without starting a host', () => {
 test('an unknown --condition is refused without starting a host', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'full-host-test-out-'));
   try {
-    const run = refuse(['--condition', 'p12', '--go-bin', MISSING_BIN, '--out', dir]);
+    const run = refuse(['--condition', 'p14', '--go-bin', MISSING_BIN, '--out', dir]);
     assert.equal(run.signal, null);
     assert.equal(run.status, 2, run.stderr);
-    assert.match(run.stderr, /unknown --condition: p12/);
+    assert.match(run.stderr, /unknown --condition: p14/);
     assert.deepEqual(fs.readdirSync(dir), []);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -74,6 +74,45 @@ test('a missing --go-bin is refused without starting a host', () => {
     assert.equal(run.signal, null);
     assert.equal(run.status, 2, run.stderr);
     assert.match(run.stderr, /--go-bin is required/);
+    assert.deepEqual(fs.readdirSync(dir), []);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('--measure and --condition together are refused without starting a host', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'full-host-test-out-'));
+  try {
+    const run = refuse(['--measure', 'deadline', '--condition', 'p9', '--go-bin', MISSING_BIN, '--out', dir]);
+    assert.equal(run.signal, null);
+    assert.equal(run.status, 2, run.stderr);
+    assert.match(run.stderr, /pass --condition or --measure, not both/);
+    assert.deepEqual(fs.readdirSync(dir), []);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('neither --measure nor --condition is refused without starting a host', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'full-host-test-out-'));
+  try {
+    const run = refuse(['--go-bin', MISSING_BIN, '--out', dir]);
+    assert.equal(run.signal, null);
+    assert.equal(run.status, 2, run.stderr);
+    assert.match(run.stderr, /--condition or --measure is required/);
+    assert.deepEqual(fs.readdirSync(dir), []);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('an unknown --measure is refused without starting a host', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'full-host-test-out-'));
+  try {
+    const run = refuse(['--measure', 'duration', '--go-bin', MISSING_BIN, '--out', dir]);
+    assert.equal(run.signal, null);
+    assert.equal(run.status, 2, run.stderr);
+    assert.match(run.stderr, /unknown --measure: duration/);
     assert.deepEqual(fs.readdirSync(dir), []);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -221,3 +260,123 @@ for (const [label, change, pattern] of P13_FAILURES) {
     assert.match(verdict.reasons[0], pattern);
   });
 }
+
+const P12_LETTERS = ['a', 'b', 'c', 'd', 'e'];
+
+function p12Parts(change = () => {}) {
+  const parts = {};
+  for (const letter of P12_LETTERS) {
+    const checks = {};
+    for (const label of P12_CHECKS[letter]) checks[label] = true;
+    parts[letter] = {
+      completed: true, unsafe: false, reasons: [], checks, detail: {},
+    };
+  }
+  change(parts);
+  return parts;
+}
+
+test('P12 passes only when every part ran to its end and none was unsafe', () => {
+  const verdict = judgeP12({ parts: p12Parts() });
+  assert.equal(verdict.pass, true, verdict.reasons.join('; '));
+  assert.equal(verdict.completed, 5);
+  assert.equal(verdict.unsafe, 0);
+  assert.deepEqual(verdict.reasons, []);
+});
+
+const P12_FAILURES = [
+  ['a part did not run to its end', (parts) => {
+    parts.c = { ...parts.c, completed: false };
+  }, /part C/, (verdict) => {
+    assert.equal(verdict.completed, 4);
+    assert.equal(verdict.unsafe, 0);
+  }],
+  ['a part failed a safety check', (parts) => {
+    parts.a = { ...parts.a, unsafe: true, reasons: ['the old file is complete'] };
+  }, /part A: the old file is complete/, (verdict) => {
+    assert.equal(verdict.completed, 5);
+    assert.equal(verdict.unsafe, 1);
+  }],
+  ['a part did not run at all', (parts) => {
+    delete parts.e;
+  }, /part E: did not run/, (verdict) => {
+    assert.equal(verdict.completed, 4);
+    assert.equal(verdict.unsafe, 1);
+  }],
+];
+
+for (const [label, change, pattern, extra] of P12_FAILURES) {
+  test(`P12 fails when ${label}`, () => {
+    const verdict = judgeP12({ parts: p12Parts(change) });
+    assert.equal(verdict.pass, false);
+    assert.equal(verdict.reasons.length, 1, verdict.reasons.join('; '));
+    assert.match(verdict.reasons[0], pattern);
+    extra(verdict);
+  });
+}
+
+test('P12 fails when a completed part did not run one of the checks it names', () => {
+  const verdict = judgeP12({
+    parts: p12Parts((parts) => {
+      delete parts.c.checks['Go dropped the reply'];
+    }),
+  });
+  assert.equal(verdict.pass, false);
+  assert.equal(verdict.completed, 5);
+  assert.equal(verdict.unsafe, 1);
+  assert.deepEqual(verdict.reasons, ['part C: did not check "Go dropped the reply"']);
+});
+
+const DEADLINE_MEASURED = {
+  managed: {
+    save: { p50: 12.5, max: 40.5 },
+    'api-write': { p50: 8, max: 9.5 },
+    checkpoint: { p50: 100, max: 250 },
+    observe: { p50: 60, max: 120 },
+    'meta-visible': { p50: 25, max: 45 },
+    read: { p50: 15, max: 22 },
+  },
+  'in-process': {
+    save: { p50: 20, max: 30 },
+    'api-write': { p50: 10, max: 11 },
+    checkpoint: { p50: 90, max: 200 },
+    observe: { p50: 50, max: 70 },
+    'meta-visible': { p50: 20, max: 35 },
+    read: { p50: 12, max: 18 },
+  },
+};
+
+test('the deadline summary names every operation of both hosts and the headroom', () => {
+  assert.equal(deadlineSummary({ bytes: 301234, hosts: DEADLINE_MEASURED }), [
+    'DEADLINE managed bytes=301234 save=12.5/40.5 api-write=8.0/9.5 checkpoint=100.0/250.0 observe=60.0/120.0 meta-visible=25.0/45.0 read=15.0/22.0 deadlineMs=10000',
+    'DEADLINE in-process bytes=301234 save=20.0/30.0 api-write=10.0/11.0 checkpoint=90.0/200.0 observe=50.0/70.0 meta-visible=20.0/35.0 read=12.0/18.0 deadlineMs=10000',
+    'DEADLINE headroom=40.00 failedSamples=0',
+  ].join('\n'));
+  const smaller = deadlineSummary({
+    bytes: 300000,
+    hosts: { ...DEADLINE_MEASURED, managed: { ...DEADLINE_MEASURED.managed, checkpoint: { p50: 100, max: 2000 } } },
+  });
+  assert.match(smaller, /DEADLINE managed bytes=300000 save=.*checkpoint=100\.0\/2000\.0 /);
+  assert.match(smaller, /DEADLINE headroom=5\.00 failedSamples=0$/);
+  assert.match(deadlineSummary({ bytes: 300000, hosts: {} }), /\nDEADLINE headroom=n\/a failedSamples=0$/);
+});
+
+test('a failed sample is counted apart and does not count in the maximum', () => {
+  const summary = deadlineSummary({
+    bytes: 301234,
+    hosts: {
+      ...DEADLINE_MEASURED,
+      managed: {
+        ...DEADLINE_MEASURED.managed,
+        observe: {
+          samples: [60, 120],
+          p50: 60,
+          max: 120,
+          failures: [{ status: null, answer: 'no live event reached the watcher within 10000 ms' }],
+        },
+      },
+    },
+  });
+  assert.match(summary, /observe=60\.0\/120\.0 failed=1/);
+  assert.match(summary, /DEADLINE headroom=40\.00 failedSamples=1$/);
+});

@@ -392,9 +392,12 @@ function createGoDocumentHost({ ctx, checkpointClaim = serviceMode ? serviceMode
   }
 
   // One newline-delimited stream of the host's frames, resumed from the last
-  // cursor it delivered after a drop, a restart or a failed connection.
+  // cursor it delivered after a drop, a restart or a failed connection. A feed
+  // that reconnects before any frame gave it a cursor cannot tell what it
+  // missed, so it reports a gap.
   function events(since, listener) {
     let cursor = since ?? null;
+    let connected = false;
     let served = null;
     let closed = false;
     let timer = null;
@@ -454,6 +457,8 @@ function createGoDocumentHost({ ctx, checkpointClaim = serviceMode ? serviceMode
           schedule();
           return;
         }
+        if (connected && cursor === null) listener({ type: 'gap', since: null });
+        connected = true;
         let buffer = '';
         response.setEncoding('utf8');
         response.on('data', (chunk) => {

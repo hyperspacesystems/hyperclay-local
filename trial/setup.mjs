@@ -40,7 +40,7 @@ export function realOrNearest(target) {
   const tail = [];
   for (;;) {
     try {
-      const real = fs.realpathSync(current);
+      const real = fs.realpathSync.native(current);
       return tail.length ? path.join(real, ...tail) : real;
     } catch (error) {
       if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') throw error;

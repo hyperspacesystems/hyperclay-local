@@ -198,6 +198,15 @@ const handlers = {
     await manager.startEnabledSessions();
     return manager.snapshot();
   },
+  // The supervisor's restart: only Go comes back, with a new epoch, while the
+  // sync sessions keep running, so the engine learns of the gap only from its
+  // host event stream.
+  async restartGoOnly() {
+    await go.stop();
+    go = await startGoProcess();
+    connectGo(go);
+    return manager.snapshot();
+  },
   async stopAll() { await manager.stopAll(); return true; },
   async counts() { return adapterCounts(); },
   async checksums({ root }) {
