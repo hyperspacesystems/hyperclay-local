@@ -300,7 +300,7 @@ test('a complete report shaped like the real gate is a passed verdict', () => {
     ['core.meta', 'pass'], ['core.save-roundtrip', 'pass'], ['core.document-block', 'pass'],
     ['core.non-html-refused', 'pass'], ['core.refusal-reason', 'pass'], ['core.traversal', 'na'],
     ['core.cross-origin', 'na'], ['core.unknown-host-path', 'pass'], ['format.opt-in', 'pass'],
-    ['sync.one-stream', 'pass'], ['conditional.stale-if-match', 'pass'],
+    ['sync.relay', 'pass'], ['sync-worker.one-stream', 'pass'], ['conditional.stale-if-match', 'pass'],
     ['receipts.save-id', 'pass'], ['upload.announced', 'pass'], ['upload.url-resolves', 'pass'],
     ['upload.no-listing', 'pass'], ['upload.same-name', 'pass'], ['upload.concurrent', 'pass'],
     ['upload.document-refused', 'pass'], ['upload.not-a-page', 'pass'],
