@@ -176,7 +176,7 @@ test('a non-page document writes no rendered backup, and a page document that ca
     loadCore: async () => core('invalid-document') });
   await expect(service.safetyBackup('/tmp/todo.html', html)).resolves.toBe(html);
 
-  const page = '<!doctype html><html><body><article data-page="1"></article></body></html>';
+  const page = '<!doctype html><html><body><article data-blockeditor="1"></article></body></html>';
   await expect(service.safetyBackup('/tmp/todo.html', page))
     .rejects.toThrow('Cannot back up live room: invalid-document');
   const refusing = createLocalCheckpoint({ authority,

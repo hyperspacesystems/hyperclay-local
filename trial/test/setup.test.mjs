@@ -36,7 +36,7 @@ function buildSource() {
   writeFile(root, '.hyperclay/versions/personal/journal/2026-01-01.html', 'secret-2');
   writeFile(root, '.hyperclay/guard/personal/journal.json', '{"guard":"secret-4"}');
   writeFile(root, '.hyperclay/conflicts/personal/journal.remote-ab12.htmlclay', 'secret-5');
-  writeFile(root, '.hyperclay/page-state/personal/journal.htmlclay.json', '{"state":"secret-6"}');
+  writeFile(root, '.hyperclay/blockeditor-state/personal/journal.htmlclay.json', '{"state":"secret-6"}');
   writeFile(root, '.hyperclay/versions/journal/old.html', 'secret-3');
   writeFile(root, '.hyperclay/guard/journal.json', '{"orphan":"secret-7"}');
   writeFile(root, '.git/HEAD', 'ref: refs/heads/main\n');

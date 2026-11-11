@@ -83,7 +83,7 @@ function identityStat(identity, big) {
 }
 
 // The reader a handler runs under while Go holds the document's lock (S5): the
-// document, its page-state sidecar and the version files Go sent come from the
+// document, its blockeditor-state sidecar and the version files Go sent come from the
 // call's snapshot, and the version list is exactly the names Go sent. A call
 // that carries no `versions` (observe) lists and reads the document's history
 // from the disk, read-only: Go is its only writer and holds the document's lock.
@@ -95,7 +95,7 @@ function identityStat(identity, big) {
 function snapshotReader(root, body) {
   const current = body.current ?? null;
   const document = path.resolve(body.canonicalPath);
-  const sidecar = path.resolve(root.path, '.hyperclay', 'page-state', `${body.name}.json`);
+  const sidecar = path.resolve(root.path, '.hyperclay', 'blockeditor-state', `${body.name}.json`);
   const versionsDir = path.resolve(root.path, '.hyperclay', 'versions', body.name.replace(/\.(html|htmlclay)$/i, ''));
   const sentVersions = Array.isArray(body.versions);
   const versions = new Map((body.versions ?? []).map((version) => [version.name, raw(version.bytes)]));
@@ -236,7 +236,7 @@ function refusalFor(lane, error, stamp = null) {
   if (failure) {
     const headers = {};
     if (failure.retryAfter !== undefined) headers['Retry-After'] = String(failure.retryAfter);
-    const etag = failure.code === 'page-lineage-stale' || failure.code === 'page-nothing-to-write' ? stamp : null;
+    const etag = failure.code === 'blockeditor-lineage-stale' || failure.code === 'blockeditor-nothing-to-write' ? stamp : null;
     if (etag) headers.ETag = etag;
     return {
       status: failure.statusCode,
@@ -441,14 +441,14 @@ function createTrialService({
     const incoming = text(body.incoming);
     const writers = artifactWriters(consultation, root, name);
     if (lane === 'save' || lane === 'api') {
-      const pageConversion = headers['page-conversion'] ?? null;
-      const prepared = await root.lanes.prepareSave({ name, bytes: incoming, pageConversion });
+      const blockeditorConversion = headers['blockeditor-conversion'] ?? null;
+      const prepared = await root.lanes.prepareSave({ name, bytes: incoming, blockeditorConversion });
       return root.lanes.admitSave({
         name, filePath, origin: saveOrigin(lane, body.origin),
         content: prepared.content, fileContent: prepared.fileContent,
         dataLossPrev: text(body.dataLossPrev) ?? text(body.current?.logical),
-        ifMatch: headers['if-match'] ?? null, pageConversion, pageWrite: headers['page-write'] ?? null,
-        pageFormat: headers['page-format'] ?? null, persistentToken: context?.persistentToken ?? null,
+        ifMatch: headers['if-match'] ?? null, blockeditorConversion, blockeditorWrite: headers['blockeditor-write'] ?? null,
+        pageFormat: headers['blockeditor-format'] ?? null, persistentToken: context?.persistentToken ?? null,
         target, token, writeSafetyVersion: writers.safetyVersion,
       });
     }

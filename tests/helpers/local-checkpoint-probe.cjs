@@ -37,9 +37,9 @@ async function run() {
   const frame = (clientId, member, name, n, ops) => request(server).post(`/_/sync/data?client-id=${clientId}`)
     .set('Origin', origin).set('Document-URL', `${origin}/doc.html`)
     .send({ conn: member.conn, name, n, epoch: room.epoch,
-      pageGeneration: room.pageTransition?.id ?? null, ops });
+      blockeditorGeneration: room.blockeditorTransition?.id ?? null, ops });
   try {
-    assert.equal((await frame('b', members[1], 'page', 1,
+    assert.equal((await frame('b', members[1], 'blockeditor', 1,
       [{ op: 'set', path: ['y', 'edit-b-1'], value: fixture.update }])).status, 200);
     assert.equal((await frame('a', members[0], 'game', 1,
       [{ op: 'add', path: ['score'], n: 1 }])).status, 200);
@@ -54,7 +54,7 @@ async function run() {
     assert.equal(authority.roomIsDirty(room), false);
     const written = await fs.readFile(file, 'utf8');
     assert.match(written, /<p data-id="p">ac<\/p>/);
-    assert.ok(!written.includes('merge="page"'), 'the page state stays out of the file');
+    assert.ok(!written.includes('merge="blockeditor"'), 'the page state stays out of the file');
     const restart = `
       import { readFileSync } from 'node:fs';
       import { liveTags, composePage } from '@panphora/clayjs/server/rooms';
@@ -62,12 +62,12 @@ async function run() {
       const html = composePage(readFileSync(process.argv[1], 'utf8'),
         JSON.parse(readFileSync(process.argv[2], 'utf8')));
       const tags = Object.fromEntries(liveTags(html).map(tag => [tag.name, JSON.parse(tag.text)]));
-      const page = await readYValue(tags.page);
+      const page = await readYValue(tags.blockeditor);
       console.log(JSON.stringify({ text: page.blocks.p.c, score: tags.game.score,
         article: html.match(/<article[^>]*>([\\s\\S]*?)<\\/article>/)[1] }));
     `;
     const decoded = JSON.parse(execFileSync(process.execPath,
-      ['--input-type=module', '-e', restart, file, path.join(dir, '.hyperclay', 'page-state', 'doc.html.json')],
+      ['--input-type=module', '-e', restart, file, path.join(dir, '.hyperclay', 'blockeditor-state', 'doc.html.json')],
       { cwd: process.cwd(), encoding: 'utf8' }));
     assert.deepEqual(decoded, { text: 'ac', score: 1, article: '<p data-id="p">ac</p>' });
     const versionDir = path.join(dir, '.hyperclay', 'versions', 'doc');
@@ -91,18 +91,18 @@ async function run() {
       () => ({ canonicalPath: incompletePath, identity: incompleteTarget.identity }));
     const midpoint = Math.ceil(fixture.update.length / 2);
     const firstPart = authority.rooms.apply(incompleteRoom, 'c', {
-      name: 'page', n: 1, epoch: incompleteRoom.epoch,
-      pageGeneration: incompleteRoom.pageTransition?.id ?? null,
+      name: 'blockeditor', n: 1, epoch: incompleteRoom.epoch,
+      blockeditorGeneration: incompleteRoom.blockeditorTransition?.id ?? null,
       ops: [{ op: 'set', path: ['y', 'later.0.2'], value: fixture.update.slice(0, midpoint) }],
     }, { connected: ['c'] });
     assert.ok(firstPart.seq > 0);
     const partial = await checkpoint.attempt(incompletePath);
-    assert.deepEqual({ kind: partial.kind, reason: partial.reason }, { kind: 'refused', reason: 'incomplete-page' });
+    assert.deepEqual({ kind: partial.kind, reason: partial.reason }, { kind: 'refused', reason: 'incomplete-blockeditor' });
     assert.equal(await fs.readFile(incompletePath, 'utf8'), fixture.html);
     assert.deepEqual(await fs.readdir(path.join(dir, '.hyperclay', 'versions', 'incomplete')).catch(() => []), []);
     const secondPart = authority.rooms.apply(incompleteRoom, 'c', {
-      name: 'page', n: 2, epoch: incompleteRoom.epoch,
-      pageGeneration: incompleteRoom.pageTransition?.id ?? null,
+      name: 'blockeditor', n: 2, epoch: incompleteRoom.epoch,
+      blockeditorGeneration: incompleteRoom.blockeditorTransition?.id ?? null,
       ops: [{ op: 'set', path: ['y', 'later.1.2'], value: fixture.update.slice(midpoint) }],
     }, { connected: ['c'] });
     assert.ok(secondPart.seq > firstPart.seq);
@@ -115,7 +115,7 @@ async function run() {
     const lateTarget = authority.bindTarget({ rootId: root.id, logicalPath: 'late.html', canonicalPath: latePath, origin });
     const lateRoom = await authority.roomFor(lateTarget, () => ({ canonicalPath: latePath, identity: lateTarget.identity }));
     const firstEdit = authority.rooms.apply(lateRoom, 'd', {
-      name: 'page', n: 1, epoch: lateRoom.epoch, pageGeneration: lateRoom.pageTransition?.id ?? null,
+      name: 'blockeditor', n: 1, epoch: lateRoom.epoch, blockeditorGeneration: lateRoom.blockeditorTransition?.id ?? null,
       ops: [{ op: 'set', path: ['y', 'edit-d-1'], value: fixture.update }],
     });
     assert.ok(firstEdit.seq > 0);
@@ -172,8 +172,8 @@ async function run() {
     const removedRoom = await authority.roomFor(removedTarget,
       () => ({ canonicalPath: removedAfterRead, identity: removedTarget.identity }));
     authority.rooms.apply(removedRoom, 'e', {
-      name: 'page', n: 1, epoch: removedRoom.epoch,
-      pageGeneration: removedRoom.pageTransition?.id ?? null,
+      name: 'blockeditor', n: 1, epoch: removedRoom.epoch,
+      blockeditorGeneration: removedRoom.blockeditorTransition?.id ?? null,
       ops: [{ op: 'set', path: ['y', 'edit-e-1'], value: fixture.update }],
     });
     const originalStat = fs.stat;
@@ -200,8 +200,8 @@ async function run() {
     const replacedRoom = await authority.roomFor(replacedTarget,
       () => ({ canonicalPath: replacedAfterRead, identity: replacedTarget.identity }));
     authority.rooms.apply(replacedRoom, 'f', {
-      name: 'page', n: 1, epoch: replacedRoom.epoch,
-      pageGeneration: replacedRoom.pageTransition?.id ?? null,
+      name: 'blockeditor', n: 1, epoch: replacedRoom.epoch,
+      blockeditorGeneration: replacedRoom.blockeditorTransition?.id ?? null,
       ops: [{ op: 'set', path: ['y', 'edit-f-1'], value: fixture.update }],
     });
     const replacement = path.join(dir, 'replacement.tmp');

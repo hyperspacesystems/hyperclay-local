@@ -77,7 +77,7 @@ function createLocalCheckpoint({
   async function perform(key, room) {
     const target = authority.checkpointTargets(key).find((item) => hosts.has(item.rootId));
     if (!target || !dirty(room)) return target ? { kind: 'clean' } : refusal(room, 'invalid-identity');
-    const generation = room.pageTransition?.id ?? null;
+    const generation = room.blockeditorTransition?.id ?? null;
     try {
       const result = await hosts.get(target.rootId).checkpoint(
         { name: target.logicalPath, filePath: key },
@@ -132,7 +132,7 @@ function createLocalCheckpoint({
     async safetyBackup(key, currentHtml) {
       const { splitPage } = require('@panphora/clayjs/server/rooms');
       const room = authority.rooms.get(key);
-      if (!dirty(room) || !/<article\b[^>]*\bdata-page(?:\s|=|>)/i.test(currentHtml)) return splitPage(currentHtml).file;
+      if (!dirty(room) || !/<article\b[^>]*\bdata-blockeditor(?:\s|=|>)/i.test(currentHtml)) return splitPage(currentHtml).file;
       const core = await loadCore();
       const capture = core.captureCheckpoint(room, { nodeId: room.nodeId, roomKey: key });
       const { JSDOM } = require('jsdom');

@@ -9,7 +9,7 @@ const { withDocumentWrite, atomicWriteFile } = require('../../src/main/utils/wri
 let dir;
 afterEach(async () => { if (dir) await fs.rm(dir, { recursive: true, force: true }); dir = null; });
 
-async function setup(html = '<article data-page><h1>First Heading</h1></article>') {
+async function setup(html = '<article data-blockeditor><h1>First Heading</h1></article>') {
   dir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-name-'));
   const root = { id: 'root-a', path: path.join(dir, 'root') };
   await fs.mkdir(root.path);
@@ -34,7 +34,7 @@ async function setup(html = '<article data-page><h1>First Heading</h1></article>
     return { path: name };
   });
   const namer = createAutoNamer({ appDataPath: dir, authority, checkpoint, rootFor: () => root, rename });
-  await namer.record(root, 'untitled.html', 'page');
+  await namer.record(root, 'untitled.html', 'blockeditor');
   return { namer, root, room, rename, authority, checkpoint, setDirty: value => { dirty = value; },
     setEditor: value => { editor = value; }, setPending: value => { pending = value; },
     setRel: value => { rel = value; } };
@@ -50,7 +50,7 @@ test('an Untitled page takes its first saved heading after departure and persist
     if (stored.entries.length === 0) break;
   }
   expect(await fs.readFile(path.join(root.path, 'first-heading.html'), 'utf8'))
-    .toBe('<article data-page><h1>First Heading</h1></article>');
+    .toBe('<article data-blockeditor><h1>First Heading</h1></article>');
   expect(namer.entries.size).toBe(0);
   expect(stored.entries).toEqual([]);
 });
@@ -63,7 +63,7 @@ test('a taken heading uses a suffix, while an empty heading leaves the record', 
     .toContain('First Heading');
   await fs.rm(dir, { recursive: true, force: true });
   dir = null;
-  const empty = await setup('<article data-page><h1> </h1></article>');
+  const empty = await setup('<article data-blockeditor><h1> </h1></article>');
   await empty.namer.settle(empty.room.key);
   expect(empty.namer.entries.size).toBe(1);
 });
@@ -116,7 +116,7 @@ test('an external rename to a personal name ends auto naming', async () => {
 test('a confirmed atomic save keeps auto naming eligible', async () => {
   const { namer, root, room } = await setup();
   const oldIdentity = [...namer.entries.values()][0].fileIdentity;
-  await fs.writeFile(path.join(root.path, 'replacement.html'), '<article data-page><h1>Updated</h1></article>');
+  await fs.writeFile(path.join(root.path, 'replacement.html'), '<article data-blockeditor><h1>Updated</h1></article>');
   await fs.rename(path.join(root.path, 'replacement.html'), path.join(root.path, 'untitled.html'));
   const stamp = await fs.stat(room.key, { bigint: true });
   await namer.confirmedWrite(room.key, { identity: room.nodeId, ...stamp });
@@ -131,8 +131,8 @@ test('the authority confirms its own atomic save to the auto namer', async () =>
   dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'auto-name-confirmed-')));
   const root = { id: 'root-a', path: dir };
   const file = path.join(dir, 'untitled.html');
-  const first = '<article data-page><h1>First</h1></article>';
-  const updated = '<article data-page><h1>Updated</h1></article>';
+  const first = '<article data-blockeditor><h1>First</h1></article>';
+  const updated = '<article data-blockeditor><h1>Updated</h1></article>';
   await fs.writeFile(file, first);
   const authority = createLocalAuthority({ withDocument: withDocumentWrite });
   const target = authority.bindTarget({ rootId: root.id, logicalPath: 'untitled.html',
@@ -143,7 +143,7 @@ test('the authority confirms its own atomic save to the auto namer', async () =>
   const namer = createAutoNamer({ appDataPath: path.join(dir, 'meta'), authority,
     checkpoint: { dirty: () => false, pending: () => null }, rootFor: () => root, rename });
   authority.setCheckpointService({ confirmedWrite: namer.confirmedWrite, wake: () => {} });
-  await namer.record(root, 'untitled.html', 'page');
+  await namer.record(root, 'untitled.html', 'blockeditor');
   await withDocumentWrite(() => target, async (_locked, token) => {
     await atomicWriteFile(file, updated);
     await authority.confirmKnownWrite(target, updated, token);
@@ -162,7 +162,7 @@ test('the authority confirms its own atomic save to the auto namer', async () =>
 
 test('a replacement while stopped cannot inherit auto naming after restart', async () => {
   const { root, room, rename, authority, checkpoint } = await setup();
-  await fs.writeFile(path.join(root.path, 'replacement.html'), '<article data-page><h1>Replacement</h1></article>');
+  await fs.writeFile(path.join(root.path, 'replacement.html'), '<article data-blockeditor><h1>Replacement</h1></article>');
   await fs.rename(path.join(root.path, 'replacement.html'), room.key);
   const restarted = createAutoNamer({ appDataPath: dir, authority, checkpoint, rootFor: () => root, rename });
   await restarted.settle(room.key);
@@ -173,7 +173,7 @@ test('a replacement while stopped cannot inherit auto naming after restart', asy
 
 test('an observed replacement drops auto naming before departure', async () => {
   const { namer, root, room, rename } = await setup();
-  await fs.writeFile(path.join(root.path, 'replacement.html'), '<article data-page><h1>Replacement</h1></article>');
+  await fs.writeFile(path.join(root.path, 'replacement.html'), '<article data-blockeditor><h1>Replacement</h1></article>');
   await fs.rename(path.join(root.path, 'replacement.html'), room.key);
   await namer.observe(root, 'change', 'untitled.html');
   await namer.settle(room.key);
@@ -205,7 +205,7 @@ test('the checkpoint exposes scheduled work until an editor arrival cancels it',
 test('a clean retry wakes the auto namer after the first checkpoint attempt failed', async () => {
   dir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-name-retry-'));
   const key = path.join(dir, 'untitled.html');
-  await fs.writeFile(key, '<article data-page><h1>Ready</h1></article>');
+  await fs.writeFile(key, '<article data-blockeditor><h1>Ready</h1></article>');
   const room = { key, nodeId: 'node-1', emptySince: Date.now() };
   let dirty = true;
   let attempts = 0;

@@ -185,11 +185,11 @@ async function executeCommand({ root, authority, engine, request, tree, moved, c
     if (result.outcome !== 'committed') throw result.error;
     if (result.completed === 1) {
       if (request.command === 'rename' || request.command === 'move') {
-        if (fromStat.isDirectory()) await documentHost.pageState({ op: 'moveDir', name: fromRel, to: toRel });
-        else await documentHost.pageState({ op: 'move', name: fromRel, to: toRel });
+        if (fromStat.isDirectory()) await documentHost.blockeditorState({ op: 'moveDir', name: fromRel, to: toRel });
+        else await documentHost.blockeditorState({ op: 'move', name: fromRel, to: toRel });
       } else if (request.command === 'trash') {
-        if (fromStat.isDirectory()) await documentHost.pageState({ op: 'dropDir', name: fromRel });
-        else await documentHost.pageState({ op: 'drop', name: fromRel });
+        if (fromStat.isDirectory()) await documentHost.blockeditorState({ op: 'dropDir', name: fromRel });
+        else await documentHost.blockeditorState({ op: 'drop', name: fromRel });
       }
     }
     if (request.command === 'duplicate') {

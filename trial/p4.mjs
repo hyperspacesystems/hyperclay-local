@@ -83,7 +83,7 @@ function rootAttributes(html) {
 // the format floor marker is canonical by construction (page-format.js's
 // withPageFormatFloor). Everything else is the version's own bytes.
 function restoreNormalized(html) {
-  return stripSavetoken(html).replace(/<meta\b[^>]*\bname\s*=\s*["']?clay-page-format["']?[^>]*>\s*/gi, '');
+  return stripSavetoken(html).replace(/<meta\b[^>]*\bname\s*=\s*["']?clay-blockeditor-format["']?[^>]*>\s*/gi, '');
 }
 
 function sideOf(rawUrl) {
@@ -143,7 +143,7 @@ function jsonOf(response) {
 
 // The differential's own normalization, applied to one answer: this side's
 // origins become <origin>, a savetoken on the root element is removed, and the
-// page-revision header is dropped (AD3/AD4).
+// blockeditor-revision header is dropped (AD3/AD4).
 function normalizedAnswer(response, side) {
   let body = textOf(response);
   for (const origin of side.origins) body = body.split(origin).join('<origin>');

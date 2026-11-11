@@ -33,7 +33,7 @@ async function run() {
     rootId: 'root-a', logicalPath: NAME, canonicalPath: file, identity: target.identity,
   }));
   const edited = authority.rooms.apply(room, 'client', {
-    name: 'page', n: 1, epoch: room.epoch, pageGeneration: room.pageTransition?.id ?? null,
+    name: 'blockeditor', n: 1, epoch: room.epoch, blockeditorGeneration: room.blockeditorTransition?.id ?? null,
     ops: [{ op: 'set', path: ['y', 'edit-1'], value: fixture.update }],
   }, { connected: ['client'] });
   console.log('edit', edited.error ?? 'ok');
@@ -56,10 +56,10 @@ async function run() {
     const versions = blocked ? [] : fs.readdirSync(versionsDir).sort()
       .map((name) => fs.readFileSync(path.join(versionsDir, name), 'utf8'));
     console.log('kept unsaved edit',
-      versions.some((text) => text.includes('<p data-id="p">ac</p>') && !text.includes('merge="page"')));
-    console.log('room page store', authority.rooms.get(file)?.stores.has('page'));
+      versions.some((text) => text.includes('<p data-id="p">ac</p>') && !text.includes('merge="blockeditor"')));
+    console.log('room page store', authority.rooms.get(file)?.stores.has('blockeditor'));
     const disk = fs.readFileSync(file, 'utf8');
-    console.log('disk has page tag', disk.includes('merge="page"'));
+    console.log('disk has page tag', disk.includes('merge="blockeditor"'));
     console.log('disk replaced', disk.includes('data-rev="replaced"'));
   } finally {
     await closeLoopback();

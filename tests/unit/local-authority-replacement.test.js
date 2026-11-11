@@ -102,7 +102,7 @@ describe('external replacement of a dirty room', () => {
       rootId: 'root-a', logicalPath: 'article.html', canonicalPath: pagePath, identity: pageTarget.identity,
     }));
     const edited = rooms.apply(pageRoom, 'client', {
-      name: 'page', n: 1, epoch: pageRoom.epoch, pageGeneration: pageRoom.pageTransition?.id ?? null,
+      name: 'blockeditor', n: 1, epoch: pageRoom.epoch, blockeditorGeneration: pageRoom.blockeditorTransition?.id ?? null,
       ops: [{ op: 'set', path: ['y', 'edit-1'], value: fixture.update }],
     }, { connected: ['client'] });
     expect(edited.error).toBeUndefined();
@@ -120,7 +120,7 @@ describe('external replacement of a dirty room', () => {
     const recovered = notifications[0][1].data.recovered;
     expect(recovered).toMatch(/^recovered-.*\.html$/);
     const stored = fs.readFileSync(path.join(dir, '.hyperclay', 'recovered', 'article', recovered.slice('recovered-'.length)), 'utf8');
-    expect(stored).not.toContain('merge="page"');
+    expect(stored).not.toContain('merge="blockeditor"');
     expect(stored).toContain('<p data-id="p">ac</p>');
     expect(stored).not.toContain('>abc<');
   });
@@ -383,7 +383,7 @@ describe('a stale page copy written over a dirty room', () => {
   let observed;
 
   beforeEach(async () => {
-    dir = path.resolve(fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'local-stale-page-'))));
+    dir = path.resolve(fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'local-stale-blockeditor-'))));
     file = path.join(dir, 'article.html');
     // Two versions of the page, block a changed between them.
     fs.writeFileSync(file, await storePageState(dir, 'article.html', older.html));
@@ -405,7 +405,7 @@ describe('a stale page copy written over a dirty room', () => {
       rootId: 'root-a', logicalPath: 'article.html', canonicalPath: file, identity: target.identity,
     }));
     const edited = rooms.apply(room, 'client', {
-      name: 'page', n: 1, epoch: room.epoch, pageGeneration: room.pageTransition?.id ?? null,
+      name: 'blockeditor', n: 1, epoch: room.epoch, blockeditorGeneration: room.blockeditorTransition?.id ?? null,
       ops: [{ op: 'set', path: ['y', 'edit-1'], value: stored.update }],
     }, { connected: ['client'] });
     expect(edited.error).toBeUndefined();
@@ -450,7 +450,7 @@ describe('a stale page copy written over a dirty room', () => {
     expect(recovered[0]).toContain('<p data-id="a">oe!</p>');
     expect(recovered[0]).not.toContain('>one!<');
     const html = notices[0][1].data.html;
-    expect(html).toContain('merge="page"');
+    expect(html).toContain('merge="blockeditor"');
     expect(html).toContain('<p data-id="a">one!</p>');
     expect(html).toContain('<p data-id="b">two!</p>');
   });
@@ -466,7 +466,7 @@ describe('a stale page copy written over a dirty room', () => {
     expect(disk).toContain('<p data-id="a">one!</p>');
     expect(disk).toContain('<p data-id="b">two!</p>');
     expect(disk).toContain(`data-rev="${splitPage(stored.html).state.rev}"`);
-    expect(disk).not.toContain('merge="page"');
+    expect(disk).not.toContain('merge="blockeditor"');
 
     await observeDisk();
 

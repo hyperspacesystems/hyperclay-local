@@ -44,9 +44,13 @@ const { createLocalLiveData } = require('./local-live-data.js');
 const { PRESENCE_VERSION } = require('./presence-target');
 const { hasPageStore, loadPageModules, authoritativePageHtml } = require('./utils/page-api');
 const { logicalBytes, readPageState, readPageRecord } = require('./page-state-store.js');
+const { catchUpPageRecord } = require('../sync-engine/page-state.js');
+
+// Save refusals the route answers as 409 with the error's own message and code.
+const SAVE_REFUSALS = new Set(['moved-or-deleted', 'unsaved-edits']);
 const roomsPackage = () => require('@panphora/clayjs/server/rooms');
 const cheerio = require('cheerio');
-const { createRootDocumentHost, canonicalForWrite } = require('./document-host.js');
+const { createRootDocumentHost, canonicalForWrite, refuseOldFormat } = require('./document-host.js');
 const { calculateChecksum } = require('../sync-engine/utils');
 const { writeContexts } = require('./write-contexts');
 
@@ -58,7 +62,7 @@ const eta = new Eta({
   cache: true
 });
 
-// Document 11 §6b: the `page-format-v1` extension is advertised only when both
+// Document 11 §6b: the `blockeditor-format-v1` extension is advertised only when both
 // halves exist — the shared rooms package can admit a page format, and the offline
 // runtime this app serves to documents carries the core that reads the marker.
 function pageFormatSupported({ rooms, runtimeDir } = {}) {
@@ -522,7 +526,7 @@ function stripSystemRouteMarker(url) {
 
 // Known `/_/` system routes on this host. Anything else under the marker is reserved
 // and 404s, so `/_/foo.html` can never reach the static catch-all and serve a document.
-const SYSTEM_ROUTES = new Set(['save', 'live-sync', 'sync', 'wire', 'data-loss', 'api', 'meta', 'upload', 'uploads', 'versions', 'version', 'restore', 'clayjs', 'presence', 'page-state', 'reveal', 'versions-folder', 'export', 'code-editor', 'duplicate']);
+const SYSTEM_ROUTES = new Set(['save', 'live-sync', 'sync', 'wire', 'data-loss', 'api', 'meta', 'upload', 'uploads', 'versions', 'version', 'restore', 'clayjs', 'presence', 'blockeditor-state', 'reveal', 'versions-folder', 'export', 'code-editor', 'duplicate']);
 
 // Spec §3's code registry, keyed by the status this host answers with, so a
 // status and its code can never drift apart. A status the registry does not name
@@ -1258,44 +1262,47 @@ async function handleAuthorityLiveStream(ctx, req, res, { file, lane, resolveTar
 // root's observer stays collectable.
 const replayResetHooked = new WeakSet();
 
-// Hosted parity for the page-write refusals (hyperclay's
+// Hosted parity for the blockeditor-write refusals (hyperclay's
 // server-lib/page-write-http.js is the source of this table): the shared rooms
 // package refuses an unauthorized page initialization or conversion by
 // throwing one of its two error classes, and both hosts answer with the same
 // status, code and Retry-After. The rooms package stays lazily required, so
 // this only pulls it in on the refusal path of a save.
 const PAGE_WRITE_REFUSALS = {
-  'file-changed': [428, 'page-condition-required'],
-  'invalid-header': [400, 'page-conversion-refused'],
-  'invalid-capture': [422, 'page-conversion-refused'],
-  'invalid-source': [409, 'page-conversion-refused'],
-  'ambiguous-source': [409, 'page-conversion-refused'],
-  'room-page-authority': [409, 'page-conversion-refused'],
-  'implicit-conversion': [409, 'page-conversion-required'],
-  'seed-lineage': [409, 'page-lineage-stale'],
-  'nothing-to-write': [409, 'page-nothing-to-write'],
-  'source-changed': [409, 'page-conversion-stale'],
-  'room-changed': [409, 'page-conversion-stale'],
-  'room-required': [409, 'page-conversion-stale'],
-  'page-converting': [503, 'page-converting', 1],
-  budget: [503, 'page-capacity', 60],
-  'receipt-capacity': [503, 'page-capacity', 60],
+  'file-changed': [428, 'blockeditor-condition-required'],
+  'invalid-header': [400, 'blockeditor-conversion-refused'],
+  'invalid-capture': [422, 'blockeditor-conversion-refused'],
+  'invalid-source': [409, 'blockeditor-conversion-refused'],
+  'ambiguous-source': [409, 'blockeditor-conversion-refused'],
+  'room-blockeditor-authority': [409, 'blockeditor-conversion-refused'],
+  'implicit-conversion': [409, 'blockeditor-conversion-required'],
+  'seed-lineage': [409, 'blockeditor-lineage-stale'],
+  'nothing-to-write': [409, 'blockeditor-nothing-to-write'],
+  'source-changed': [409, 'blockeditor-conversion-stale'],
+  'room-changed': [409, 'blockeditor-conversion-stale'],
+  'room-required': [409, 'blockeditor-conversion-stale'],
+  'blockeditor-converting': [503, 'blockeditor-converting', 1],
+  budget: [503, 'blockeditor-capacity', 60],
+  'receipt-capacity': [503, 'blockeditor-capacity', 60],
 };
 
 const pageWriteFailure = (error) => {
   if (!error) return null;
+  if (error.code === 'blockeditor-old-format') {
+    return { statusCode: error.statusCode, code: error.code, reason: error.code, message: error.message };
+  }
   const { PageConversionError, PageFormatError, PAGE_FORMAT_UPGRADE } = require('@panphora/clayjs/server/rooms');
   if (error && error.code === PAGE_FORMAT_UPGRADE) {
     return { statusCode: 409, code: PAGE_FORMAT_UPGRADE, reason: PAGE_FORMAT_UPGRADE, minimum: error.minimum, message: error.message };
   }
   if (error.code === 'invalid-update') {
-    return { statusCode: 422, code: 'page-conversion-refused', reason: 'invalid-capture', message: 'The page content could not be read.' };
+    return { statusCode: 422, code: 'blockeditor-conversion-refused', reason: 'invalid-capture', message: 'The page content could not be read.' };
   }
   if (error instanceof PageFormatError) {
-    return { statusCode: 409, code: 'page-format', message: error.message };
+    return { statusCode: 409, code: 'blockeditor-format', message: error.message };
   }
   if (!(error instanceof PageConversionError)) return null;
-  const [statusCode, code, retryAfter] = PAGE_WRITE_REFUSALS[error.reason] || [500, 'page-write-failed'];
+  const [statusCode, code, retryAfter] = PAGE_WRITE_REFUSALS[error.reason] || [500, 'blockeditor-write-failed'];
   return {
     statusCode,
     code,
@@ -1919,14 +1926,14 @@ function createApp(ctxOrDir, devHooks = null, isKnownPath = null) {
       // but a tab that cannot read a floor-raised document must not receive one.
       // The authority's confirmed bytes are the floor; a file no room has confirmed
       // falls back to the bytes on disk, and an unreadable file is floor 0.
-      const { formatCapability, pageFormatFloor, PAGE_FORMAT_UPGRADE } = roomsPackage();
+      const { formatCapability, blockeditorFormatFloor, PAGE_FORMAT_UPGRADE } = roomsPackage();
       const confirmed = ctx.localAuthority ? ctx.localAuthority.confirmedDocument(validated.resolvedPath) : null;
       let relayFloor = 0;
-      if (typeof confirmed === 'string') relayFloor = pageFormatFloor(confirmed);
+      if (typeof confirmed === 'string') relayFloor = blockeditorFormatFloor(confirmed);
       else {
-        try { relayFloor = pageFormatFloor(await fs.readFile(validated.resolvedPath, 'utf8')); } catch { relayFloor = 0; }
+        try { relayFloor = blockeditorFormatFloor(await fs.readFile(validated.resolvedPath, 'utf8')); } catch { relayFloor = 0; }
       }
-      if (relayFloor > formatCapability(req.get('X-Clay-Page-Format'))) {
+      if (relayFloor > formatCapability(req.get('X-Clay-Blockeditor-Format'))) {
         return res.status(409).json({
           code: PAGE_FORMAT_UPGRADE,
           msg: 'This document uses a newer page format; update the editor to keep writing.',
@@ -2234,6 +2241,14 @@ function createApp(ctxOrDir, devHooks = null, isKnownPath = null) {
         });
       }
 
+      // Before the conditional check and every other one: an old tab's stamp no longer
+      // matches, and a 412 would send it into a merge instead of telling the person.
+      const oldFormat = refuseOldFormat(content);
+      if (oldFormat) {
+        console.log(`Refused a save of ${name}: ${oldFormat.code}`);
+        return res.status(oldFormat.statusCode).json({ msg: oldFormat.message, msgType: 'error', code: oldFormat.code, reason: oldFormat.code });
+      }
+
       // Set by the conditional check below to carry the refusal out of the lock, so
       // the response is written after the lock is released like every other answer
       // this route gives.
@@ -2350,8 +2365,8 @@ function createApp(ctxOrDir, devHooks = null, isKnownPath = null) {
 
         content = await commitDocument({
           name, filePath: canonicalPath, content, dataLossPrev, userDriven, saveId,
-          target, token, ifMatch, pageConversion: req.headers['page-conversion'], answer,
-          pageWrite: req.headers['page-write'], pageFormat: req.get('X-Clay-Page-Format'),
+          target, token, ifMatch, blockeditorConversion: req.headers['blockeditor-conversion'], answer,
+          blockeditorWrite: req.headers['blockeditor-write'], pageFormat: req.get('X-Clay-Blockeditor-Format'),
         });
         });
 
@@ -2407,7 +2422,7 @@ function createApp(ctxOrDir, devHooks = null, isKnownPath = null) {
         const failure = pageWriteFailure(error);
         if (failure) {
           if (failure.retryAfter !== undefined) res.set('Retry-After', String(failure.retryAfter));
-          const stamp = failure.code === 'page-lineage-stale' || failure.code === 'page-nothing-to-write'
+          const stamp = failure.code === 'blockeditor-lineage-stale' || failure.code === 'blockeditor-nothing-to-write'
             ? refusedStamp
             : null;
           if (stamp) res.set('ETag', stamp);
@@ -2421,13 +2436,11 @@ function createApp(ctxOrDir, devHooks = null, isKnownPath = null) {
             ...(stamp ? { etag: stamp } : {}),
           });
         }
-        if (error && error.code === 'moved-or-deleted') {
+        if (error && SAVE_REFUSALS.has(error.code)) {
           console.log(`Refused a save of ${name}: ${error.code}`);
-          return res.status(409).json({ msg: error.message, msgType: 'error', code: 'moved-or-deleted' });
-        }
-        if (error && error.code === 'unsaved-edits') {
-          console.log(`Refused a save of ${name}: ${error.code}`);
-          return res.status(409).json({ msg: error.message, msgType: 'error', code: 'unsaved-edits' });
+          return res.status(409).json({
+            msg: error.message, msgType: 'error', code: error.code,
+          });
         }
         console.error(`Error saving file ${name}:`, error);
         errorLogger.error('Server', `Save error: ${name}`, error);
@@ -2516,18 +2529,18 @@ function createApp(ctxOrDir, devHooks = null, isKnownPath = null) {
       // `wire` because this host serves §11's two routes, so `clay.wire` pages and
       // the `htmlclay wire` CLI can drive a local process from a document here.
       const body = { spec: 1, extensions: ['conditional', 'data-guard-v1', 'data-read', 'data-write', 'format', 'receipts', 'scoped-stylesheet', 'sync', 'sync-worker', 'upload', 'wire'] };
-      // `page-recovery-v1`: the document block's `pageState.href` answers the page state
+      // `blockeditor-recovery-v1`: the document block's `blockeditorState.href` answers the page state
       // stored for these exact bytes, so a client may retire journaled page work against it.
       // `sync-worker-data`: `/_/sync/data-worker.js` carries every edit tab's room
       // events and roster over one connection, so six open documents no longer use up
       // the browser's six connections to localhost (plans/shared/local-six-tab-fix.md).
-      if (ctx.localAuthority) body.extensions.push('live-data', 'live-provenance', 'page', 'page-recovery-v1', 'sync-worker-data');
+      if (ctx.localAuthority) body.extensions.push('live-data', 'live-provenance', 'blockeditor', 'blockeditor-recovery-v1', 'sync-worker-data');
       // Presence is announced only by the host that actually runs the relay. `presence`
       // is the legacy editing marker; the two versioned names are what a client needs
       // before it publishes a record or a page target, so they are never advertised
       // beside an implementation that would not accept one.
       if (ctx.localAuthority && ctx.localAuthority.presence) {
-        body.extensions.push('presence', 'page-awareness-v1', 'record-awareness-v1');
+        body.extensions.push('presence', 'blockeditor-awareness-v1', 'record-awareness-v1');
       }
       // `people` (§9) when the app supplies a person: one app-wide profile, so the
       // answer is the same in every root. Never `members`: a profile is not a directory.
@@ -2579,7 +2592,7 @@ function createApp(ctxOrDir, devHooks = null, isKnownPath = null) {
               etag: documentEtag(stored),
               // The conditional read of the page state stored for these exact bytes, so a
               // crash recovery can prove a checkpoint covers its journaled edits.
-              pageState: { href: '/_/page-state' },
+              blockeditorState: { href: '/_/blockeditor-state' },
               ...(/\.(?:html|htmlclay)$/i.test(name) ? { dataGuard: { href: '/_/data-loss' } } : {})
             };
             // §6: the id of the save that produced exactly these bytes, when this
@@ -2605,14 +2618,14 @@ function createApp(ctxOrDir, devHooks = null, isKnownPath = null) {
       return res.json(body);
     });
 
-    // GET /_/page-state — the page state this host stored for the exact document bytes a
+    // GET /_/blockeditor-state — the page state this host stored for the exact document bytes a
     // client accepted, and the page lineage (generation) it belongs to. That is the whole
     // question a crash recovery asks before it can prove a checkpoint covers its journaled
     // edits and clear them. Document-scoped and conditional exactly as /_/save is: If-Match
     // names the bytes whose state is being asked for, so a stamp that has moved on is a 412
     // and never a state paired with bytes the client does not hold.
-    app.get('/page-state', async (req, res, next) => {
-      if (!req.originalUrl.startsWith('/_/page-state')) return next();
+    app.get('/blockeditor-state', async (req, res, next) => {
+      if (!req.originalUrl.startsWith('/_/blockeditor-state')) return next();
       res.set('Cache-Control', 'no-store');
       const refuse = (status, code, etag) => {
         if (etag) res.set('ETag', etag);
@@ -2620,14 +2633,14 @@ function createApp(ctxOrDir, devHooks = null, isKnownPath = null) {
       };
       const href = documentUrlHeader(req);
       const ifMatch = req.get('if-match');
-      if (!href) return refuse(404, 'no-page-state');
+      if (!href) return refuse(404, 'no-blockeditor-state');
       if (!ifMatch || !ifMatch.trim()) return refuse(428, 'precondition-required');
       let name, filePath;
       try {
         name = resolveResourceFromHref(href);
         filePath = await resolveWriteTarget(paths, name);
       } catch {
-        return refuse(404, 'no-page-state');
+        return refuse(404, 'no-blockeditor-state');
       }
       try {
         // Read, compare and select under the file's own lock, the one the save path takes,
@@ -2636,10 +2649,10 @@ function createApp(ctxOrDir, devHooks = null, isKnownPath = null) {
           let raw;
           try {
             const stats = await fs.stat(filePath);
-            if (!stats.isFile()) return refuse(404, 'no-page-state');
+            if (!stats.isFile()) return refuse(404, 'no-blockeditor-state');
             raw = await fs.readFile(filePath);
           } catch {
-            return refuse(404, 'no-page-state');
+            return refuse(404, 'no-blockeditor-state');
           }
           // The same document /_/meta stamps, so the stamp a client read there is the one
           // this route compares, and the one it names back with a 412.
@@ -2653,7 +2666,7 @@ function createApp(ctxOrDir, devHooks = null, isKnownPath = null) {
           // never the newest record in the sidecar. A record written before this host kept
           // generations proves no lineage, so it is not served as proven state.
           const record = await readPageRecord(baseDir, name, roomsPackage().pageRev(raw.toString('utf8')));
-          if (!record) return refuse(404, 'no-page-state', etag);
+          if (!record) return refuse(404, 'no-blockeditor-state', etag);
           res.set('ETag', etag);
           return res.status(200).json({
             version: 1,
@@ -3142,12 +3155,12 @@ function createApp(ctxOrDir, devHooks = null, isKnownPath = null) {
         // disk, wherever the version's bytes came from.
         let html = stripSaveToken(data.toString('utf8'));
         const state = await readPageState(baseDir, rel);
-        const { pageFormatFloor, withPageFormatFloor } = roomsPackage();
+        const { blockeditorFormatFloor, withPageFormatFloor } = roomsPackage();
         // A restore is a person's explicit choice, so it is never refused; it only
         // keeps the floor the document already established.
-        const storedFloor = pageFormatFloor(current ? current.toString('utf8') : '');
+        const storedFloor = blockeditorFormatFloor(current ? current.toString('utf8') : '');
         const stamped = state && !roomsPackage().splitPage(html).state
-          ? roomsPackage().stampPageRev(html, state.rev, Math.max(storedFloor, pageFormatFloor(html)))
+          ? roomsPackage().stampPageRev(html, state.rev, Math.max(storedFloor, blockeditorFormatFloor(html)))
           : null;
         const edit = Boolean(stamped);
         if (stamped) html = stamped;
@@ -3310,8 +3323,8 @@ function createApp(ctxOrDir, devHooks = null, isKnownPath = null) {
     const pageFailure = (error) => {
       if (error?.code === 'revision-required') return { status: 428, json: { code: error.code, error: error.message } };
       if (error?.code === 'revision-stale') return { status: 409, json: { code: error.code, error: error.message } };
-      if (error?.code === 'invalid-content' || error?.code === 'incomplete-page' ||
-          error?.code === 'unknown-page-content' || error?.code === 'unsupported-projection' ||
+      if (error?.code === 'invalid-content' || error?.code === 'incomplete-blockeditor' ||
+          error?.code === 'unknown-blockeditor-content' || error?.code === 'unsupported-projection' ||
           error?.code === 'invalid-document' ||
           (error?.name === 'PersistentReservationError' && error.code === 'invalid-target') ||
           ['WriteRejected', 'WriteRefused', 'ShapeMismatch', 'EmptyListInsert', 'RuleTargetReadOnly', 'WriteNotRoundTripped'].includes(error?.name)) {
@@ -3348,7 +3361,7 @@ function createApp(ctxOrDir, devHooks = null, isKnownPath = null) {
         const authoritative = await authoritativePageHtml(ctx.localAuthority, target, html);
         const { readPageDocument } = await loadPageModules();
         const page = await readPageDocument(cheerio.load, authoritative, options);
-        return { status: 200, headers: { ETag: documentEtag(stored), 'Page-Revision': page.revision }, json: page.data };
+        return { status: 200, headers: { ETag: documentEtag(stored), 'Blockeditor-Revision': page.revision }, json: page.data };
       } catch (error) {
         const refusal = pageFailure(error);
         if (refusal) return refusal;
@@ -3429,8 +3442,8 @@ function createApp(ctxOrDir, devHooks = null, isKnownPath = null) {
           const etag = documentEtag(stored);
           const changed = await ctx.localAuthority.reconcileDisk(target, previous, token);
           if (changed.kind === 'replacement') throw movedOrDeleted();
-          if (!req.headers['page-if-match']) {
-            return { status: 428, headers: { ETag: etag }, json: { code: 'revision-required', error: 'Page-If-Match is required' } };
+          if (!req.headers['blockeditor-if-match']) {
+            return { status: 428, headers: { ETag: etag }, json: { code: 'revision-required', error: 'Blockeditor-If-Match is required' } };
           }
           if (!req.headers['if-match']) {
             return { status: 428, headers: { ETag: etag }, json: { code: 'etag-required', error: 'If-Match is required' } };
@@ -3448,8 +3461,8 @@ function createApp(ctxOrDir, devHooks = null, isKnownPath = null) {
               ...(query.present ? { rules: preparedWrite.rules } : {}) };
             const { readPageDocument, writePageDocument } = await loadPageModules();
             const current = await readPageDocument(cheerio.load, authoritative, options);
-            if (current.revision !== req.headers['page-if-match']) {
-              return { status: 409, headers: { ETag: etag, 'Page-Revision': current.revision },
+            if (current.revision !== req.headers['blockeditor-if-match']) {
+              return { status: 409, headers: { ETag: etag, 'Blockeditor-Revision': current.revision },
                 json: { code: 'revision-stale', error: 'The page revision has changed' } };
             }
             const result = await writePageDocument(cheerio.load, authoritative, data, {
@@ -3457,7 +3470,7 @@ function createApp(ctxOrDir, devHooks = null, isKnownPath = null) {
             });
             if (result.html === previous) {
               const fresh = await readPageDocument(cheerio.load, previous, options);
-              return { status: 200, headers: { ETag: etag, 'Page-Revision': fresh.revision }, json: fresh.data };
+              return { status: 200, headers: { ETag: etag, 'Blockeditor-Revision': fresh.revision }, json: fresh.data };
             }
             pending = { target, html: result.html, previous, checksum: await calculateChecksum(bytes), held, options };
             return undefined;
@@ -3478,7 +3491,7 @@ function createApp(ctxOrDir, devHooks = null, isKnownPath = null) {
             kind: 'data-api', name, filePath: pending.target.canonicalPath, bytes: pending.html,
             dataLossPrev: pending.previous, userDriven: false, saveId: '', opHandle,
             expected: { type: 'checksum', value: pending.checksum },
-            pageFormat: req.get('X-Clay-Page-Format'),
+            pageFormat: req.get('X-Clay-Blockeditor-Format'),
             context: { target: pending.target, token: null },
           });
         } finally {
@@ -3496,7 +3509,7 @@ function createApp(ctxOrDir, devHooks = null, isKnownPath = null) {
         const { readPageDocument } = await loadPageModules();
         const fresh = await readPageDocument(cheerio.load, content, pending.options);
         return { status: 200, headers: { ETag: documentEtag(Buffer.from(content, 'utf8')),
-          'Page-Revision': fresh.revision }, json: fresh.data };
+          'Blockeditor-Revision': fresh.revision }, json: fresh.data };
       }
       return { status: 503, headers: { 'Retry-After': '1' }, json: { reason: 'changed', retryable: true } };
     }
@@ -3539,8 +3552,8 @@ function createApp(ctxOrDir, devHooks = null, isKnownPath = null) {
                 const etag = documentEtag(stored);
                 const changed = await ctx.localAuthority.reconcileDisk(target, previous, token);
                 if (changed.kind === 'replacement') throw movedOrDeleted();
-                if (!req.headers['page-if-match']) {
-                  return { status: 428, headers: { ETag: etag }, json: { code: 'revision-required', error: 'Page-If-Match is required' } };
+                if (!req.headers['blockeditor-if-match']) {
+                  return { status: 428, headers: { ETag: etag }, json: { code: 'revision-required', error: 'Blockeditor-If-Match is required' } };
                 }
                 if (!req.headers['if-match']) {
                   return { status: 428, headers: { ETag: etag }, json: { code: 'etag-required', error: 'If-Match is required' } };
@@ -3558,8 +3571,8 @@ function createApp(ctxOrDir, devHooks = null, isKnownPath = null) {
                     ...(query.present ? { rules: preparedWrite.rules } : {}) };
                   const { readPageDocument, writePageDocument } = await loadPageModules();
                   const current = await readPageDocument(cheerio.load, authoritative, options);
-                  if (current.revision !== req.headers['page-if-match']) {
-                    return { status: 409, headers: { ETag: etag, 'Page-Revision': current.revision },
+                  if (current.revision !== req.headers['blockeditor-if-match']) {
+                    return { status: 409, headers: { ETag: etag, 'Blockeditor-Revision': current.revision },
                       json: { code: 'revision-stale', error: 'The page revision has changed' } };
                   }
                   const result = await writePageDocument(cheerio.load, authoritative, data, {
@@ -3568,11 +3581,11 @@ function createApp(ctxOrDir, devHooks = null, isKnownPath = null) {
                   const written = result.html === previous ? previous : await commitDocument({
                     name, filePath: target.canonicalPath, content: result.html, dataLossPrev: previous,
                     userDriven: false, saveId: '', origin: 'api', target, token, persistentToken: held,
-                    pageFormat: req.get('X-Clay-Page-Format'),
+                    pageFormat: req.get('X-Clay-Blockeditor-Format'),
                   });
                   const fresh = await readPageDocument(cheerio.load, written, options);
                   return { status: 200, headers: { ETag: documentEtag(Buffer.from(written, 'utf8')),
-                    'Page-Revision': fresh.revision }, json: fresh.data };
+                    'Blockeditor-Revision': fresh.revision }, json: fresh.data };
                 } catch (error) {
                   const refusal = pageFailure(error);
                   if (refusal) return refusal;
@@ -3590,7 +3603,7 @@ function createApp(ctxOrDir, devHooks = null, isKnownPath = null) {
                 commit: (html, previous) => commitDocument({
                   name, filePath: target.canonicalPath, content: html, dataLossPrev: previous,
                   userDriven: false, saveId: '', origin: 'api', target, token,
-                  pageFormat: req.get('X-Clay-Page-Format')
+                  pageFormat: req.get('X-Clay-Blockeditor-Format')
                 })
               });
             })
@@ -3600,7 +3613,7 @@ function createApp(ctxOrDir, devHooks = null, isKnownPath = null) {
               ...(query.present ? { dataParam: query.text } : {}),
               commit: (html, previous) => commitDocument({
                 name, filePath: sourcePath, content: html, dataLossPrev: previous, userDriven: false, saveId: '', origin: 'api',
-                pageFormat: req.get('X-Clay-Page-Format')
+                pageFormat: req.get('X-Clay-Blockeditor-Format')
               })
             }));
         if (result.status === 200) console.log(`Wrote data into ${name}`);
@@ -3775,6 +3788,9 @@ function createApp(ctxOrDir, devHooks = null, isKnownPath = null) {
           const wireId = Number(req.query['workspace-frame']);
           const frame = Number.isSafeInteger(wireId) && wireId > 0 && ctx.workspaceFrame
             ? ctx.workspaceFrame(ctx.root.id, htmlMatch[1], wireId) : null;
+          await catchUpPageRecord(ctx.syncEngineFor?.(), htmlMatch[1]).catch((error) => {
+            console.warn(`[SYNC] Could not catch up the page state for ${htmlMatch[1]}:`, error && error.message ? error.message : error);
+          });
           return await serveHtml(req, res, realPath, frame, baseDir, htmlMatch[1]);
         }
         // An SVG is a document: it can carry <script>, and served inline from

@@ -1133,8 +1133,8 @@ describe('D2c1: the engine claims a document before it queues', () => {
     await engine.downloadFile(7, 'page.html');
 
     const stored = fs.readFileSync(filePath, 'utf8');
-    expect(stored).not.toContain('merge="page"');
-    expect(stored).toContain('data-page="1"');
+    expect(stored).not.toContain('merge="blockeditor"');
+    expect(stored).toContain('data-blockeditor="1"');
     expect(await readPageState(dir, 'page.html')).toEqual(splitPage(page).state);
   });
 

@@ -9,7 +9,7 @@ const { AsyncLocalStorage } = require('async_hooks');
 //
 // A reader has readFile(file, encoding) and stat(file, options), shaped like
 // fs/promises, and may have versionFiles(dir, baseDir), shaped like
-// page-rebase's newestVersionFiles, which is used when it is absent.
+// blockeditor-rebase's newestVersionFiles, which is used when it is absent.
 const disk = Object.freeze({
   readFile: (file, encoding) => fs.readFile(file, encoding),
   stat: (file, options) => fs.stat(file, options),

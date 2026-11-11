@@ -23,7 +23,7 @@ const COMPARED_HEADERS = [
   'cache-control',
   'vary',
   'retry-after',
-  'page-revision',
+  'blockeditor-revision',
   'x-content-type-options',
   'set-cookie',
   'content-disposition',
@@ -311,8 +311,8 @@ function normalizeBodies(request, responseA, responseB, sideA, sideB, allowances
       }
     }
 
-    if (responseA.ok && Object.prototype.hasOwnProperty.call(responseA.headers, 'page-revision')) {
-      delete responseA.headers['page-revision'];
+    if (responseA.ok && Object.prototype.hasOwnProperty.call(responseA.headers, 'blockeditor-revision')) {
+      delete responseA.headers['blockeditor-revision'];
       allowances.AD3 += 1;
     }
   }

@@ -10,9 +10,9 @@ function pageFixture(text = 'abc', blocks = null) {
     const value = seedValue(${items});
     const page = await readYValue(value);
     const rendered = projection.renderBlocks(page.blocks);
-    const html = '<!doctype html><html><head><script type="application/json" merge="page" clay="live">' +
+    const html = '<!doctype html><html><head><script type="application/json" merge="blockeditor" clay="live">' +
       JSON.stringify(value) + '</script><script type="application/json" data-rules-name="api" data-rules-version="1">' +
-      JSON.stringify({ body: 'article p', rev: 'article@data-rev' }) + '</script></head><body><article data-page="1" data-rev="' +
+      JSON.stringify({ body: 'article p', rev: 'article@data-rev' }) + '</script></head><body><article data-blockeditor="1" data-rev="' +
       rendered.rev + '">' + rendered.html + '</article></body></html>';
     const doc = docFromValue(value, { strict: true });
     doc.clientID = 123;

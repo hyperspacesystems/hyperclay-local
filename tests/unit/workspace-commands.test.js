@@ -74,8 +74,8 @@ test('renaming a page moves its merge state beside it and it composes at the new
   expect(await readPageState(h.dir, 'A.html')).toBeNull();
   expect(await readPageState(h.dir, 'B.html')).toEqual(state);
   const stored = await fs.readFile(path.join(h.dir, 'B.html'), 'utf8');
-  expect(stored).not.toContain('merge="page"');
-  expect(await logicalDocument(h.dir, 'B.html', stored)).toContain('merge="page"');
+  expect(stored).not.toContain('merge="blockeditor"');
+  expect(await logicalDocument(h.dir, 'B.html', stored)).toContain('merge="blockeditor"');
 });
 
 test('renaming a folder takes its documents\u2019 merge state with it', async () => {
@@ -93,7 +93,7 @@ test('renaming a folder takes its documents\u2019 merge state with it', async ()
   expect(await readPageState(h.dir, 'Notes/A.html')).toBeNull();
   expect(await readPageState(h.dir, 'Archive/A.html')).toEqual(state);
   const stored = await fs.readFile(path.join(h.dir, 'Archive/A.html'), 'utf8');
-  expect(stored).not.toContain('merge="page"');
+  expect(stored).not.toContain('merge="blockeditor"');
 });
 
 test('Trashing a page drops its merge state, and Trashing a folder drops the whole mirror', async () => {
@@ -112,7 +112,7 @@ test('Trashing a page drops its merge state, and Trashing a folder drops the who
 
   expect(await command(request, { command: 'trash', path: 'Notes' }))
     .toEqual({ status: 200, body: { path: '.trash/Notes' } });
-  await expect(fs.access(path.join(h.dir, '.hyperclay', 'page-state', 'Notes')))
+  await expect(fs.access(path.join(h.dir, '.hyperclay', 'blockeditor-state', 'Notes')))
     .rejects.toMatchObject({ code: 'ENOENT' });
   expect(await readPageState(h.dir, 'Notes/A.html')).toBeNull();
 });
@@ -196,8 +196,8 @@ test('a duplicate never overwrites the destination, and leaves the metadata of t
   const template = await fs.readFile(path.join(__dirname, '../fixtures/ypage-template.html'), 'utf8');
   await fs.writeFile(path.join(h.dir, 'A.html'), await storePageState(h.dir, 'A.html', template));
   const metadataBefore = {};
-  for (const name of await fs.readdir(path.join(h.dir, '.hyperclay', 'page-state'), { recursive: true })) {
-    const file = path.join(h.dir, '.hyperclay', 'page-state', name);
+  for (const name of await fs.readdir(path.join(h.dir, '.hyperclay', 'blockeditor-state'), { recursive: true })) {
+    const file = path.join(h.dir, '.hyperclay', 'blockeditor-state', name);
     if ((await fs.lstat(file)).isFile()) metadataBefore[name] = await fs.readFile(file);
   }
   await fs.writeFile(path.join(h.dir, 'Taken.html'), 'occupant');
@@ -208,8 +208,8 @@ test('a duplicate never overwrites the destination, and leaves the metadata of t
   expect(await fs.readFile(path.join(h.dir, 'Taken.html'), 'utf8')).toBe('occupant');
 
   const metadataAfter = {};
-  for (const name of await fs.readdir(path.join(h.dir, '.hyperclay', 'page-state'), { recursive: true })) {
-    const file = path.join(h.dir, '.hyperclay', 'page-state', name);
+  for (const name of await fs.readdir(path.join(h.dir, '.hyperclay', 'blockeditor-state'), { recursive: true })) {
+    const file = path.join(h.dir, '.hyperclay', 'blockeditor-state', name);
     if ((await fs.lstat(file)).isFile()) metadataAfter[name] = await fs.readFile(file);
   }
   expect(Object.keys(metadataAfter).length).toBeGreaterThan(0);

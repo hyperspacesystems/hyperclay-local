@@ -11,7 +11,7 @@
 const path = require('upath');
 const { readPageState } = require('../main/page-state-store');
 const { getPageState, putPageState } = require('./api-client');
-const { documentHostFor } = require('./local-boundary');
+const { documentHostFor, withLocalDocumentWrite } = require('./local-boundary');
 
 const PAGE_PATTERN = /\.(html|htmlclay)$/i;
 
@@ -45,17 +45,65 @@ async function readPageRecord(engine, nodeId, rel) {
   }
 }
 
+// Node and revision pairs checked this run: true once the server answered, or the
+// lookup in flight, which concurrent opens share. A failed lookup is forgotten, so the
+// next open asks again.
+const caughtUp = new Map();
+
+/**
+ * The server's record for a synced Block document that has none beside it.
+ *
+ * A Local from before the Block editor rename asked for records on a route that no
+ * longer answers, read that as "no record", and kept none. Local reads a record again
+ * only when a changed file downloads, so an unchanged file would never get one, and
+ * its editor would start a second history that the next upload writes over the
+ * server's. Called before the document is served, so the record is in place before
+ * any editor can start.
+ */
+async function catchUpPageRecord(engine, rel) {
+  if (!engine || !engine.repo || !engine.syncFolder || !PAGE_PATTERN.test(rel)) return false;
+  const tracked = engine.repo.getByPath(rel);
+  if (!tracked) return false;
+  const file = await documentHostFor(engine).read(rel, path.join(engine.syncFolder, rel));
+  const rev = file ? require('@panphora/clayjs/server/rooms').pageRev(file.bytes.toString('utf8')) : null;
+  const key = `${tracked.nodeId}:${rev}`;
+  if (!rev || caughtUp.get(key) === true) return false;
+  if (caughtUp.has(key)) return caughtUp.get(key);
+  const lookup = catchUp(engine, rel, tracked.nodeId, rev);
+  caughtUp.set(key, lookup);
+  try {
+    const applied = await lookup;
+    caughtUp.set(key, true);
+    return applied;
+  } catch (error) {
+    caughtUp.delete(key);
+    throw error;
+  }
+}
+
+async function catchUp(engine, rel, nodeId, rev) {
+  const held = () => readPageState(engine.syncFolder, rel, { rev, exact: true });
+  if (await held()) return false;
+  const record = await getPageState(engine.conn, nodeId, { strict: true });
+  if (!record || record.rev !== rev) return false;
+  return withLocalDocumentWrite(engine, rel, async () => {
+    if (await held()) return false;
+    await applyPageRecord(engine, rel, record);
+    return true;
+  });
+}
+
 /** The server's record beside the file, written before the file itself. */
 async function applyPageRecord(engine, rel, record) {
   if (!record || !PAGE_PATTERN.test(rel)) return;
-  await documentHostFor(engine).pageState({ op: 'write', name: rel, record });
+  await documentHostFor(engine).blockeditorState({ op: 'write', name: rel, record });
 }
 
 // A relocation already happened on disk; a sidecar that cannot follow it is
 // logged and left behind, never allowed to undo the content move.
 async function moveState(engine, fromRel, toRel, op) {
   try {
-    await documentHostFor(engine).pageState({ op, name: fromRel, to: toRel });
+    await documentHostFor(engine).blockeditorState({ op, name: fromRel, to: toRel });
   } catch (error) {
     console.warn(`[SYNC] Could not move the page state for ${fromRel}:`, reasonOf(error));
   }
@@ -78,7 +126,7 @@ async function moveFolderPageState(engine, fromRel, toRel) {
 async function dropDocumentPageState(engine, rel) {
   if (!rel || !PAGE_PATTERN.test(rel)) return;
   try {
-    await documentHostFor(engine).pageState({ op: 'drop', name: rel });
+    await documentHostFor(engine).blockeditorState({ op: 'drop', name: rel });
   } catch (error) {
     console.warn(`[SYNC] Could not drop the page state for ${rel}:`, reasonOf(error));
   }
@@ -88,13 +136,13 @@ async function dropDocumentPageState(engine, rel) {
 async function dropFolderPageState(engine, rel) {
   if (!rel) return;
   try {
-    await documentHostFor(engine).pageState({ op: 'dropDir', name: rel });
+    await documentHostFor(engine).blockeditorState({ op: 'dropDir', name: rel });
   } catch (error) {
     console.warn(`[SYNC] Could not drop the page state for ${rel}:`, reasonOf(error));
   }
 }
 
 module.exports = {
-  sendPageState, readPageRecord, applyPageRecord,
+  sendPageState, readPageRecord, applyPageRecord, catchUpPageRecord,
   moveDocumentPageState, moveFolderPageState, dropDocumentPageState, dropFolderPageState
 };

@@ -62,7 +62,7 @@ test('the JS service checkpoint, observe and structure handlers, proven against 
   const edit = () => {
     n += 1;
     return service.authority.rooms.apply(room, 'editor', {
-      name: 'page', n, epoch: room.epoch, pageGeneration: room.pageTransition?.id ?? null,
+      name: 'blockeditor', n, epoch: room.epoch, blockeditorGeneration: room.blockeditorTransition?.id ?? null,
       compaction: 1,
       ops: [{ op: 'set', path: ['y', `uedit-${n}-x`], value: FIXTURE.update }],
     });

@@ -141,14 +141,14 @@ function listNames(dir) {
 function snapshot(rootDir, docPath) {
   return {
     document: sha256File(path.join(rootDir, docPath)),
-    sidecar: sha256File(path.join(rootDir, '.hyperclay', 'page-state', `${docPath}.json`)),
+    sidecar: sha256File(path.join(rootDir, '.hyperclay', 'blockeditor-state', `${docPath}.json`)),
     versions: listNames(path.join(rootDir, '.hyperclay', 'versions', docPath.replace(/\.html$/, ''))),
   };
 }
 
 function sidecarText(rootDir, docPath) {
   try {
-    return fs.readFileSync(path.join(rootDir, '.hyperclay', 'page-state', `${docPath}.json`), 'utf8');
+    return fs.readFileSync(path.join(rootDir, '.hyperclay', 'blockeditor-state', `${docPath}.json`), 'utf8');
   } catch {
     return '';
   }
@@ -926,9 +926,9 @@ async function runLiveParts({ goBin }) {
       return { status: response.status, body: parsed };
     };
 
-    const page = await joinLiveClient(ctx, { rootId: 'root-a', docPath: DOC, clientId: 'page-a' });
+    const page = await joinLiveClient(ctx, { rootId: 'root-a', docPath: DOC, clientId: 'blockeditor-a' });
     const store = await joinLiveClient(ctx, { rootId: 'root-a', docPath: DOC, clientId: 'game-b' });
-    const pageEdit = await page.edit('page', [{ op: 'set', path: ['y', 'http-a-1'], value: doc.update }]);
+    const pageEdit = await page.edit('blockeditor', [{ op: 'set', path: ['y', 'http-a-1'], value: doc.update }]);
     const storeEdit = await store.edit('game', [{ op: 'add', path: ['score'], n: 1 }]);
     detail.partB = { pageEdit, storeEdit };
     if (pageEdit.status !== 200) throw new Error(`the live page edit answered ${pageEdit.status}`);
@@ -956,8 +956,8 @@ async function runLiveParts({ goBin }) {
     detail.partC = { armed };
     if (armed.status !== 200) throw new Error(`the durable fault was not armed: ${JSON.stringify(armed.body)}`);
 
-    const cPage = await joinLiveClient(ctx, { rootId: 'root-a', docPath: DOC, clientId: 'page-c' });
-    const cEdit = await cPage.edit('page', [{ op: 'set', path: ['y', 'p9-c'], value: doc.update }]);
+    const cPage = await joinLiveClient(ctx, { rootId: 'root-a', docPath: DOC, clientId: 'blockeditor-c' });
+    const cEdit = await cPage.edit('blockeditor', [{ op: 'set', path: ['y', 'p9-c'], value: doc.update }]);
     detail.partC.edit = cEdit;
     await cPage.close();
     const dirty = await checkpointWait(2500);
@@ -1229,7 +1229,7 @@ async function p12DataRead(rootUrl, name) {
   return {
     status: answer.status,
     etag: answer.headers ? answer.headers.get('etag') : null,
-    revision: answer.headers ? answer.headers.get('page-revision') : null,
+    revision: answer.headers ? answer.headers.get('blockeditor-revision') : null,
     body: answer.body,
   };
 }
@@ -1240,7 +1240,7 @@ async function p12DataWrite(rootUrl, name, data, { etag, revision } = {}) {
     headers: {
       'content-type': 'application/json',
       ...(etag ? { 'if-match': etag } : {}),
-      ...(revision ? { 'page-if-match': revision } : {}),
+      ...(revision ? { 'blockeditor-if-match': revision } : {}),
     },
     body: JSON.stringify(data),
   });
@@ -1378,7 +1378,7 @@ async function p12PartB({ bin, part }) {
           stores: Object.keys(joined.stores ?? {}),
           game: joined.stores && joined.stores.game ? joined.stores.game.value : null,
         };
-        const edit = await second.edit('page', [{ op: 'set', path: ['y', 'p12-b-edit'], value: doc.update }]);
+        const edit = await second.edit('blockeditor', [{ op: 'set', path: ['y', 'p12-b-edit'], value: doc.update }]);
         part.detail.edit = { status: edit.status, body: edit.body };
       } finally {
         await second.close();
@@ -1651,7 +1651,7 @@ function p12FakeSyncServer() {
           return;
         }
       }
-      if (/^\/_\/sync\/nodes\/\d+\/page-state$/.test(route)) {
+      if (/^\/_\/sync\/nodes\/\d+\/blockeditor-state$/.test(route)) {
         if (request.method === 'GET') {
           answer(404, { error: 'no page state' });
           return;

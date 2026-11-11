@@ -75,7 +75,7 @@ describe('a page document is stored clean and read composed', () => {
   };
 
   beforeEach(async () => {
-    dir = path.resolve(await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'page-state-save-'))));
+    dir = path.resolve(await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'blockeditor-state-save-'))));
     jest.spyOn(console, 'log').mockImplementation(() => {});
     jest.spyOn(console, 'error').mockImplementation(() => {});
 
@@ -119,10 +119,10 @@ describe('a page document is stored clean and read composed', () => {
 
     expect(res.status).toBe(200);
     const disk = await onDisk();
-    expect(disk).not.toContain('merge="page"');
-    expect(disk).toContain('merge="page.tools"');
-    expect(disk).toContain('<article class="page"');
-    expect(disk).toContain('data-page="1"');
+    expect(disk).not.toContain('merge="blockeditor"');
+    expect(disk).toContain('merge="blockeditor.tools"');
+    expect(disk).toContain('<article class="blockeditor"');
+    expect(disk).toContain('data-blockeditor="1"');
 
     const state = await readPageState(dir, NAME);
     expect(state).toEqual({ v: 1, rev: SPLIT.state.rev, tag: SPLIT.state.tag });
@@ -148,9 +148,9 @@ describe('a page document is stored clean and read composed', () => {
 
     expect(res.status).toBe(200);
     const served = res.body.toString('utf8');
-    expect(served).toContain('merge="page"');
-    expect(served).toContain('merge="page.tools"');
-    expect(served).toContain('data-page="1"');
+    expect(served).toContain('merge="blockeditor"');
+    expect(served).toContain('merge="blockeditor.tools"');
+    expect(served).toContain('data-blockeditor="1"');
     expect(servedDocumentEtag(res.body)).toBe(saved.body.etag);
     expect(servedDocumentEtag(res.body)).toBe(documentEtag(LOGICAL));
   });
@@ -170,7 +170,7 @@ describe('a page document is stored clean and read composed', () => {
   test('a save of the clean file keeps the merge state it did not carry', async () => {
     const first = await save(FIXTURE);
     const clean = await onDisk();
-    expect(clean).not.toContain('merge="page"');
+    expect(clean).not.toContain('merge="blockeditor"');
 
     const second = await save(clean, { 'If-Match': first.body.etag });
 
@@ -180,7 +180,7 @@ describe('a page document is stored clean and read composed', () => {
     const state = await readPageState(dir, NAME);
     expect(state.tag).toBe(SPLIT.state.tag);
     const served = await getRaw();
-    expect(served.body.toString('utf8')).toContain('merge="page"');
+    expect(served.body.toString('utf8')).toContain('merge="blockeditor"');
   });
 
   // A save from the code view is based on the version it was sent, which the page
@@ -195,7 +195,7 @@ describe('a page document is stored clean and read composed', () => {
     expect((await readPageState(dir, NAME)).rev).toBe('newer-rev');
 
     const stale = SPLIT.file.replace('<p data-id="p1"></p>', '<p data-id="p1">from the old version</p>');
-    expect(stale).not.toContain('merge="page"');
+    expect(stale).not.toContain('merge="blockeditor"');
     const res = await save(stale);
 
     expect(res.status).toBe(200);
@@ -203,7 +203,7 @@ describe('a page document is stored clean and read composed', () => {
     expect(disk).toContain('>newer<');
     expect(disk).toContain('from the old version');
     expect(disk).toContain('data-rev="newer-rev"');
-    expect(disk).not.toContain('merge="page"');
+    expect(disk).not.toContain('merge="blockeditor"');
     expect((await readPageState(dir, NAME)).rev).toBe('newer-rev');
     await expect(fs.access(pageStatePath(dir, NAME))).resolves.toBeUndefined();
   });
@@ -222,7 +222,7 @@ describe('a page document is stored clean and read composed', () => {
     expect(publish).toHaveBeenCalledTimes(1);
     const [rel, bytes, msg, opts] = publish.mock.calls[0];
     expect(rel).toBe(NAME);
-    expect(bytes.toString('utf8')).toContain('merge="page"');
+    expect(bytes.toString('utf8')).toContain('merge="blockeditor"');
     expect(bytes.toString('utf8')).toContain('typed in the code view');
     expect(msg).toBe('page.html was changed outside the editor');
     expect(opts).toEqual({ saved: false, continues: true });
@@ -243,8 +243,8 @@ describe('a page document is stored clean and read composed', () => {
     expect(versions.length).toBeGreaterThan(0);
     for (const name of versions) {
       const text = await fs.readFile(path.join(dir, '.hyperclay', 'versions', 'page', name), 'utf8');
-      expect(text).not.toContain('merge="page"');
-      expect(text).toContain('data-page="1"');
+      expect(text).not.toContain('merge="blockeditor"');
+      expect(text).toContain('data-blockeditor="1"');
     }
   });
 
@@ -286,8 +286,8 @@ describe('a page document is stored clean and read composed', () => {
 
     expect(room).toBeTruthy();
     const seeded = opened[opened.length - 1].html;
-    expect(seeded).toContain('merge="page"');
-    expect(seeded).toContain('data-page="1"');
+    expect(seeded).toContain('merge="blockeditor"');
+    expect(seeded).toContain('data-blockeditor="1"');
   });
 
   // The code editor asks for the representation and then edits that buffer, so the
@@ -297,7 +297,7 @@ describe('a page document is stored clean and read composed', () => {
     const first = await save(FIXTURE, { Prefer: 'return=representation' });
 
     expect(first.status).toBe(200);
-    expect(first.body.html).not.toContain('merge="page"');
+    expect(first.body.html).not.toContain('merge="blockeditor"');
     expect(first.body.html).toBe(await onDisk());
     expect(first.body.etag).toBe(documentEtag(LOGICAL));
 
@@ -314,7 +314,7 @@ describe('a page document is stored clean and read composed', () => {
 
     const saved = live.broadcast.mock.calls.filter(([, , opts]) => opts && opts.lane === 'saved');
     expect(saved).toHaveLength(1);
-    expect(saved[0][1].html).not.toContain('merge="page"');
+    expect(saved[0][1].html).not.toContain('merge="blockeditor"');
     expect(saved[0][1].html).toBe(await onDisk());
   });
 
@@ -356,7 +356,7 @@ describe('a page document is stored clean and read composed', () => {
     expect(res.status).toBe(200);
     expect(await fs.readFile(path.join(dir, 'plain.html'), 'utf8')).toBe(PLAIN);
     expect(res.body.etag).toBe(documentEtag(PLAIN));
-    await expect(fs.readdir(path.join(dir, '.hyperclay', 'page-state'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fs.readdir(path.join(dir, '.hyperclay', 'blockeditor-state'))).rejects.toMatchObject({ code: 'ENOENT' });
     const served = await getRaw('plain.html');
     expect(withoutInjectedDocumentEtag(served.body).toString('utf8')).toBe(PLAIN);
     expect(servedDocumentEtag(served.body)).toBe(documentEtag(PLAIN));
@@ -405,8 +405,8 @@ describe('a rebase reads its history from inside the folder only', () => {
 
   beforeEach(async () => {
     jest.spyOn(console, 'error').mockImplementation(() => {});
-    dir = path.resolve(await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'page-rebase-symlink-'))));
-    outside = path.resolve(await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'page-rebase-outside-'))));
+    dir = path.resolve(await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'blockeditor-rebase-symlink-'))));
+    outside = path.resolve(await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'blockeditor-rebase-outside-'))));
     await write(dir);
     await fs.writeFile(path.join(outside, '2026-01-01-00-00-00-000+0000.html'), version('old-rev', { text: 'base' }));
   });
@@ -441,6 +441,6 @@ describe('a rebase reads its history from inside the folder only', () => {
     const lister = () => { throw new Error('unreadable history'); };
 
     expect(await rebaseStaleSave(dir, NAME, incoming(), lister)).toBeNull();
-    expect(console.error).toHaveBeenCalledWith('[page-rebase] rebase failed, writing as before', 'unreadable history');
+    expect(console.error).toHaveBeenCalledWith('[blockeditor-rebase] rebase failed, writing as before', 'unreadable history');
   });
 });

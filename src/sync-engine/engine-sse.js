@@ -130,7 +130,7 @@ module.exports = {
       }
       const written = await host.commit({
         kind: 'sync-download', name: localFilename, filePath: localPath, bytes: data.content,
-        modifiedAt: data.modifiedAt, pageRecord: record,
+        modifiedAt: data.modifiedAt, blockeditorRecord: record,
         expected: current ? { type: 'checksum', value: current.checksum } : { type: 'absent' },
         context: { target, token },
       });

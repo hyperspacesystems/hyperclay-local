@@ -16,9 +16,9 @@ async function readData(ctx, rootId, docPath, label) {
   const response = await ctx.http(rootId, 'GET', apiPath(docPath));
   assertEqual(response.status, 200, `${label}: data read`);
   const etag = response.header('etag');
-  const revision = response.header('page-revision');
+  const revision = response.header('blockeditor-revision');
   assert(typeof etag === 'string' && etag.length > 0, `${label}: data read carries an ETag`);
-  assert(typeof revision === 'string' && revision.length > 0, `${label}: data read carries a Page-Revision`);
+  assert(typeof revision === 'string' && revision.length > 0, `${label}: data read carries a Blockeditor-Revision`);
   return { etag, revision, data: bodyJson(response, label) };
 }
 
@@ -43,10 +43,10 @@ export const PAGE_CASES = [
     id: 'page.api-requires-both-preconditions',
     profiles: PROFILES,
     // src/main/server.js:3814-3826 — a write to a document that holds a page store
-    // needs both Page-If-Match (the page revision) and If-Match (the document
+    // needs both Blockeditor-If-Match (the page revision) and If-Match (the document
     // stamp): a missing page revision is 428 revision-required, a missing stamp is
     // 428 etag-required, and neither refusal writes. With both it writes and answers
-    // the new revision in Page-Revision (server.js:3849-3851).
+    // the new revision in Blockeditor-Revision (server.js:3849-3851).
     async run(ctx) {
       const docPath = `page/preconditions-${RUN}.html`;
       const doc = await pageDocument();
@@ -57,7 +57,7 @@ export const PAGE_CASES = [
       const refused = [
         { label: 'write with neither precondition', headers: {}, code: 'revision-required' },
         { label: 'write with only If-Match', headers: { 'if-match': current.etag }, code: 'revision-required' },
-        { label: 'write with only Page-If-Match', headers: { 'page-if-match': current.revision }, code: 'etag-required' },
+        { label: 'write with only Blockeditor-If-Match', headers: { 'blockeditor-if-match': current.revision }, code: 'etag-required' },
       ];
       for (const attempt of refused) {
         const response = await writeData(ctx, 'root-a', docPath, { second: 'refused' }, attempt.headers, attempt.label);
@@ -69,13 +69,13 @@ export const PAGE_CASES = [
 
       const accepted = await writeData(ctx, 'root-a', docPath, { second: 'written' }, {
         'if-match': current.etag,
-        'page-if-match': current.revision,
+        'blockeditor-if-match': current.revision,
       }, 'write with both preconditions');
       assertEqual(accepted.status, 200, 'write with both preconditions is accepted');
       const written = bodyJson(accepted, 'write with both preconditions');
       assertEqual(written.second, 'written', 'the accepted write landed');
-      const revision = accepted.header('page-revision');
-      assert(typeof revision === 'string' && revision.length > 0, 'the accepted write answers a Page-Revision');
+      const revision = accepted.header('blockeditor-revision');
+      assert(typeof revision === 'string' && revision.length > 0, 'the accepted write answers a Blockeditor-Revision');
       assert(revision !== current.revision, 'the accepted write answers the new page revision');
       const stored = await ctx.read('root-a', docPath);
       assert(stored.text.includes('>written<'), 'the accepted write changed the file');
@@ -86,7 +86,7 @@ export const PAGE_CASES = [
     profiles: PROFILES,
     // src/main/server.js:3837-3840 — the page revision the caller names is compared
     // under the held room, and an older one is 409 revision-stale with the current
-    // Page-Revision, before any commit: the file, the versions folder
+    // Blockeditor-Revision, before any commit: the file, the versions folder
     // (server.js:3335-3336 addresses `.hyperclay/versions/<path without extension>/`)
     // and the page sidecar (utils/artifact-paths.js PAGE_STATE_DIR, written by
     // page-state-store.js) all stay exactly as they were.
@@ -98,12 +98,12 @@ export const PAGE_CASES = [
 
       const accepted = await writeData(ctx, 'root-a', docPath, { second: 'first-write' }, {
         'if-match': first.etag,
-        'page-if-match': first.revision,
+        'blockeditor-if-match': first.revision,
       }, 'first page write');
       assertEqual(accepted.status, 200, 'the first page write is accepted');
 
       const versionsPath = `.hyperclay/versions/${docPath.replace(/\.html$/, '')}`;
-      const sidecarPath = `.hyperclay/page-state/${docPath}.json`;
+      const sidecarPath = `.hyperclay/blockeditor-state/${docPath}.json`;
       const before = {
         file: (await ctx.read('root-a', docPath)).sha256,
         versions: await listDir(ctx, 'root-a', versionsPath),
@@ -115,11 +115,11 @@ export const PAGE_CASES = [
       const current = await readData(ctx, 'root-a', docPath, 'current page read');
       const stale = await writeData(ctx, 'root-a', docPath, { second: 'stale-write' }, {
         'if-match': current.etag,
-        'page-if-match': first.revision,
+        'blockeditor-if-match': first.revision,
       }, 'write under the old page revision');
-      assertEqual(stale.status, 409, 'a stale Page-If-Match is refused');
+      assertEqual(stale.status, 409, 'a stale Blockeditor-If-Match is refused');
       assertEqual(bodyJson(stale, 'stale write').code, 'revision-stale', 'stale refusal code');
-      assertEqual(stale.header('page-revision'), current.revision, 'the refusal names the current page revision');
+      assertEqual(stale.header('blockeditor-revision'), current.revision, 'the refusal names the current page revision');
 
       const after = {
         file: (await ctx.read('root-a', docPath)).sha256,
@@ -145,9 +145,9 @@ export const PAGE_CASES = [
       await ctx.seed('root-a', docPath, doc.html);
       const seeded = await ctx.read('root-a', docPath);
 
-      const client = await joinLiveClient(ctx, { rootId: 'root-a', docPath, clientId: 'page-a' });
+      const client = await joinLiveClient(ctx, { rootId: 'root-a', docPath, clientId: 'blockeditor-a' });
       try {
-        const edit = await client.edit('page', [
+        const edit = await client.edit('blockeditor', [
           { op: 'set', path: ['y', 'http-a-1'], value: doc.update },
         ]);
         assertEqual(edit.status, 200, `the live page edit is accepted: ${JSON.stringify(edit.body)}`);
@@ -159,7 +159,7 @@ export const PAGE_CASES = [
 
         const accepted = await writeData(ctx, 'root-a', docPath, { second: 'api-change' }, {
           'if-match': current.etag,
-          'page-if-match': current.revision,
+          'blockeditor-if-match': current.revision,
         }, 'data write over a dirty room');
         assertEqual(accepted.status, 200, `the data write lands over the dirty room: ${accepted.text.slice(0, 200)}`);
         const written = bodyJson(accepted, 'data write over a dirty room');
@@ -167,8 +167,8 @@ export const PAGE_CASES = [
         assertEqual(written.second, 'api-change', 'the API write landed its own change');
 
         const state = await client.state();
-        assert(state.stores && state.stores.page, 'the participant still holds the page store');
-        assertEqual(state.stores.page.value.y['http-a-1'], doc.update, 'the participant still holds its edit');
+        assert(state.stores && state.stores.blockeditor, 'the participant still holds the page store');
+        assertEqual(state.stores.blockeditor.value.y['http-a-1'], doc.update, 'the participant still holds its edit');
 
         const stored = await ctx.read('root-a', docPath);
         assert(stored.text.includes('>ac<'), 'the next rendered file holds the room edit');

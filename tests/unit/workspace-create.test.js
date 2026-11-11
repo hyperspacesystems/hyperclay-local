@@ -30,7 +30,7 @@ test('bundled templates match their manifest and the hosted source when present'
     const hosted = path.join(__dirname, '../../../hyperclay/public-assets/core-apps', item.file);
     if (await fs.stat(hosted).catch(() => null)) expect(bundled).toEqual(await fs.readFile(hosted));
   }
-  expect(manifest.map(item => item.id)).toEqual(['page', 'blank', 'devlog', 'kanban', 'landing']);
+  expect(manifest.map(item => item.id)).toEqual(['blockeditor', 'blank', 'devlog', 'kanban', 'landing']);
 });
 
 test('each template creates its exact bytes in the selected folder without a backup', async () => {
@@ -57,13 +57,13 @@ test('create of a page body stores the template byte for byte and keeps no page 
   h = await fixture();
   const request = await h.start();
 
-  expect(await command(request, { command: 'create', parent: '', name: 'page.html', template: 'page' }))
+  expect(await command(request, { command: 'create', parent: '', name: 'page.html', template: 'blockeditor' }))
     .toEqual({ status: 200, body: { path: 'page.html' } });
 
-  const template = path.join(__dirname, '../../src/main/document-templates/page.html');
+  const template = path.join(__dirname, '../../src/main/document-templates/blockeditor.html');
   expect(await fs.readFile(path.join(h.dir, 'page.html'))).toEqual(await fs.readFile(template));
   expect(await readPageState(h.dir, 'page.html')).toBeNull();
-  expect((await fs.readFile(path.join(h.dir, 'page.html'), 'utf8'))).toContain('data-page="1"');
+  expect((await fs.readFile(path.join(h.dir, 'page.html'), 'utf8'))).toContain('data-blockeditor="1"');
 });
 
 test('create refuses occupied, unknown-template and unsafe names without changing files', async () => {
@@ -137,16 +137,16 @@ describe('an untagged page template', () => {
   test('the first edit-mode save moves the tag to the sidecar', async () => {
     await editAndSave();
     const stored = await fs.readFile(path.join(h.dir, rel), 'utf8');
-    expect(stored).not.toContain('merge="page"');
+    expect(stored).not.toContain('merge="blockeditor"');
     const state = await readPageState(h.dir, rel);
-    expect(state.tag).toContain('merge="page"');
+    expect(state.tag).toContain('merge="blockeditor"');
   });
 
   test('reopening the document puts the tag back exactly once', async () => {
     await editAndSave();
     const stored = await fs.readFile(path.join(h.dir, rel), 'utf8');
     const document = await logicalDocument(h.dir, rel, stored);
-    expect(document.split('merge="page"')).toHaveLength(2);
-    expect(document).toContain('data-page="1"');
+    expect(document.split('merge="blockeditor"')).toHaveLength(2);
+    expect(document).toContain('data-blockeditor="1"');
   });
 });

@@ -40,8 +40,8 @@ async function run() {
     const room = await authority.roomFor(target, () => ({
       rootId: root.id, logicalPath: 'A.html', canonicalPath: file, identity: target.identity,
     }));
-    const edited = authority.rooms.apply(room, 'editor', { name: 'page', n: 1, epoch: room.epoch,
-      pageGeneration: room.pageTransition?.id ?? null,
+    const edited = authority.rooms.apply(room, 'editor', { name: 'blockeditor', n: 1, epoch: room.epoch,
+      blockeditorGeneration: room.blockeditorTransition?.id ?? null,
       ops: [{ op: 'set', path: ['y', 'edit-1'], value: stored.update }] });
     assert.equal(edited.error, undefined);
     assert.equal(authority.roomIsDirty(room), true);
@@ -53,7 +53,7 @@ async function run() {
     assert.equal(restored.status, 200, await restored.text());
 
     assert.equal(authority.rooms.get(file), room);
-    assert.equal(room.stores.has('page'), true);
+    assert.equal(room.stores.has('blockeditor'), true);
     assert.equal(authority.roomIsDirty(room), true);
     // The room keeps its unsaved edits through the restore, so they are in a
     // recovered copy as well as in memory.
@@ -68,11 +68,11 @@ async function run() {
     const disk = await fs.readFile(file, 'utf8');
     assert.ok(disk.includes('<p data-id="p">abc</p>'), disk);
     assert.ok(disk.includes(`data-rev="${rev}"`), disk);
-    assert.ok(!disk.includes('merge="page"'), disk);
+    assert.ok(!disk.includes('merge="blockeditor"'), disk);
     assert.equal((await readPageState(dir, 'A.html')).rev, rev);
 
     assert.equal(published.length, 1);
-    assert.ok(published[0][1].toString('utf8').includes('merge="page"'));
+    assert.ok(published[0][1].toString('utf8').includes('merge="blockeditor"'));
     console.log('restore of a page version kept the room');
     console.log('restore page room proof passed');
   } finally {

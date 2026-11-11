@@ -1,4 +1,4 @@
-// Document 12 Step 4b: the conditional page-state read. A client that accepted one set of
+// Document 12 Step 4b: the conditional blockeditor-state read. A client that accepted one set of
 // document bytes asks this host which page state it stored for exactly those bytes, and
 // which page lineage (generation) that state belongs to. Only with that answer can it
 // prove a checkpoint covers its journaled edits and clear them.
@@ -49,14 +49,14 @@ const T1 = splitPage(FIXTURE).state.tag;
 const NEWER = page(NEWER_REV, 'edited');
 const T2 = splitPage(NEWER).state.tag;
 
-describe('the conditional page-state read', () => {
+describe('the conditional blockeditor-state read', () => {
   let dir;
   let apps;
 
   const startApp = async () => {
     const core = createRooms({});
     const authority = createLocalAuthority({ rooms: core, withDocument: withDocumentWrite });
-    const root = { id: `page-recovery-root-${apps.length}`, kind: 'personal', path: dir, port: 0 };
+    const root = { id: `blockeditor-recovery-root-${apps.length}`, kind: 'personal', path: dir, port: 0 };
     const live = createRootLive(root);
     const observer = new RootObserver(root, { live, localAuthority: authority });
     const server = await listenLoopback(createApp({
@@ -80,8 +80,8 @@ describe('the conditional page-state read', () => {
 
   const meta = (app) => request(app.server).get('/_/meta').set('Document-URL', documentUrl(app));
 
-  const pageState = (app, headers = {}) => {
-    let req = request(app.server).get('/_/page-state').set('Document-URL', documentUrl(app));
+  const blockeditorState = (app, headers = {}) => {
+    let req = request(app.server).get('/_/blockeditor-state').set('Document-URL', documentUrl(app));
     for (const [key, value] of Object.entries(headers)) req.set(key, value);
     return req;
   };
@@ -91,7 +91,7 @@ describe('the conditional page-state read', () => {
   const sidecar = async () => JSON.parse(await fs.readFile(pageStatePath(dir, NAME), 'utf8'));
 
   beforeEach(async () => {
-    dir = path.resolve(await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'page-recovery-proof-'))));
+    dir = path.resolve(await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'blockeditor-recovery-proof-'))));
     apps = [];
     jest.spyOn(console, 'log').mockImplementation(() => {});
     jest.spyOn(console, 'error').mockImplementation(() => {});
@@ -129,7 +129,7 @@ describe('the conditional page-state read', () => {
     const fresh = await startApp();
     const etag = await etagOf(fresh);
 
-    const res = await pageState(fresh, { 'If-Match': etag });
+    const res = await blockeditorState(fresh, { 'If-Match': etag });
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
@@ -148,27 +148,27 @@ describe('the conditional page-state read', () => {
     expect((await save(app, FIXTURE)).status).toBe(200);
     const etag = await etagOf(app);
 
-    const stale = await pageState(app, { 'If-Match': 'not-the-stamp' });
+    const stale = await blockeditorState(app, { 'If-Match': 'not-the-stamp' });
     expect(stale.status).toBe(412);
     expect(stale.body).toEqual({ error: 'page state unavailable', code: 'etag-mismatch', etag });
     expect(stale.headers.etag).toBe(etag);
 
     // `*` and a list name no single revision, so neither can prove which bytes a state
     // belongs to: this read refuses both rather than guessing.
-    const star = await pageState(app, { 'If-Match': '*' });
+    const star = await blockeditorState(app, { 'If-Match': '*' });
     expect(star.status).toBe(412);
     expect(star.body.code).toBe('etag-mismatch');
     expect(star.body.etag).toBe(etag);
 
-    const list = await pageState(app, { 'If-Match': `${etag}, "another-stamp"` });
+    const list = await blockeditorState(app, { 'If-Match': `${etag}, "another-stamp"` });
     expect(list.status).toBe(412);
     expect(list.body.code).toBe('etag-mismatch');
 
-    const missing = await pageState(app);
+    const missing = await blockeditorState(app);
     expect(missing.status).toBe(428);
     expect(missing.body.code).toBe('precondition-required');
 
-    const ok = await pageState(app, { 'If-Match': etag });
+    const ok = await blockeditorState(app, { 'If-Match': etag });
     expect(ok.status).toBe(200);
     expect(ok.body).toEqual({
       version: 1,
@@ -192,9 +192,9 @@ describe('the conditional page-state read', () => {
     const outside = page('outside-rev', 'replaced');
     await fs.writeFile(path.join(dir, NAME), outside);
 
-    const unknown = await pageState(app, { 'If-Match': await etagOf(app) });
+    const unknown = await blockeditorState(app, { 'If-Match': await etagOf(app) });
     expect(unknown.status).toBe(404);
-    expect(unknown.body.code).toBe('no-page-state');
+    expect(unknown.body.code).toBe('no-blockeditor-state');
 
     expect((await save(app, outside)).status).toBe(200);
     const after = await sidecar();
@@ -202,7 +202,7 @@ describe('the conditional page-state read', () => {
     expect(after.generation).toMatch(GENERATION);
     expect(after.generation).not.toBe(before.generation);
 
-    const proven = await pageState(app, { 'If-Match': await etagOf(app) });
+    const proven = await blockeditorState(app, { 'If-Match': await etagOf(app) });
     expect(proven.status).toBe(200);
     expect(proven.body.generation).toBe(after.generation);
     expect(proven.body.tag).toBe(splitPage(outside).state.tag);
@@ -220,7 +220,7 @@ describe('the conditional page-state read', () => {
     expect(interrupted.tag).not.toBe(before.tag);
     await writePageState(dir, NAME, interrupted);
 
-    const still = await pageState(app, { 'If-Match': diskEtag });
+    const still = await blockeditorState(app, { 'If-Match': diskEtag });
     expect(still.status).toBe(200);
     expect(still.body.tag).toBe(before.tag);
     expect(still.body.generation).toBe(before.generation);
@@ -229,7 +229,7 @@ describe('the conditional page-state read', () => {
     // waiting for it is the one the read answers.
     await fs.writeFile(path.join(dir, NAME), splitPage(page('interrupted-rev', 'never landed')).file);
 
-    const landed = await pageState(app, { 'If-Match': await etagOf(app) });
+    const landed = await blockeditorState(app, { 'If-Match': await etagOf(app) });
     expect(landed.status).toBe(200);
     expect(landed.body.tag).toBe(interrupted.tag);
     expect(landed.body.generation).toBe(before.generation);
@@ -244,10 +244,10 @@ describe('the conditional page-state read', () => {
     await fs.writeFile(file, JSON.stringify({ v: 1, rev: REV, tag: T1 }));
 
     const etag = await etagOf(app);
-    const res = await pageState(app, { 'If-Match': etag });
+    const res = await blockeditorState(app, { 'If-Match': etag });
 
     expect(res.status).toBe(404);
-    expect(res.body.code).toBe('no-page-state');
+    expect(res.body.code).toBe('no-blockeditor-state');
     expect(res.body.etag).toBe(etag);
     await expect(readPageRecord(dir, NAME, REV)).resolves.toBeNull();
 
@@ -263,7 +263,7 @@ describe('the conditional page-state read', () => {
 
     const res = await meta(app);
 
-    expect(res.body.document.pageState).toEqual({ href: '/_/page-state' });
-    expect(res.body.extensions).toContain('page-recovery-v1');
+    expect(res.body.document.blockeditorState).toEqual({ href: '/_/blockeditor-state' });
+    expect(res.body.extensions).toContain('blockeditor-recovery-v1');
   });
 });

@@ -50,15 +50,15 @@ const WITH_RUNTIME = (indent) => DOC(`${indent}${RUNTIME_SCRIPTS.join(`\n${inden
 const PLAIN = '<!DOCTYPE html>\n<html lang="en">\n<body>\n<p>hi</p>\n</body>\n</html>';
 
 const LOCAL_SCRIPT = () =>
-  DOC(`<script src="/_/clayjs/${selected}/clay.js?plugins=page"></script>`);
+  DOC(`<script src="/_/clayjs/${selected}/clay.js?plugins=blockeditor"></script>`);
 
 const descriptor = (entries) =>
   `<script type="application/json" id="clay-runtime-map" clay="no-save no-watch no-snapshot">${JSON.stringify({ schema: 1, version: selected, entries })}</script>`;
 
 const withDescriptor = (html, entries) => html.replace('</head>', `${descriptor(entries)}\n</head>`);
 
-const PUBLIC = `https://clayjs.com/${selected}/clay.js?plugins=page`;
-const LOCAL = `/_/clayjs/${selected}/clay.js?plugins=page`;
+const PUBLIC = `https://clayjs.com/${selected}/clay.js?plugins=blockeditor`;
+const LOCAL = `/_/clayjs/${selected}/clay.js?plugins=blockeditor`;
 
 let dir;
 let app;
@@ -193,11 +193,11 @@ describe('a save this host did not project is canonicalized anyway', () => {
   // The descriptor is read once: an absolute 127.0.0.1 URL still gets its rolling original
   // back, which a pass per origin lost once the first pass had removed the descriptor.
   test('a port-bearing 127.0.0.1 URL with a descriptor saves its rolling original', () => {
-    const local = `http://127.0.0.1:55600/_/clayjs/${selected}/clay.js?plugins=page`;
-    const descriptor = JSON.stringify({ schema: 1, version: selected, entries: [{ original: 'https://clayjs.com/v1/clay.js?plugins=page', local }] });
+    const local = `http://127.0.0.1:55600/_/clayjs/${selected}/clay.js?plugins=blockeditor`;
+    const descriptor = JSON.stringify({ schema: 1, version: selected, entries: [{ original: 'https://clayjs.com/v1/clay.js?plugins=blockeditor', local }] });
     const html = `<script type="application/json" id="clay-runtime-map" clay="no-save no-watch no-snapshot">${descriptor}</script><script src="${local}"></script>`;
 
-    expect(canonicalForWrite(html)).toBe('<script src="https://clayjs.com/v1/clay.js?plugins=page"></script>');
+    expect(canonicalForWrite(html)).toBe('<script src="https://clayjs.com/v1/clay.js?plugins=blockeditor"></script>');
   });
 
   // A browser serializes a URL with character references inside it, and the save
@@ -253,7 +253,7 @@ describe('a JSON data API write leaves disk canonical', () => {
     expect(written).toContain('<p>api</p>');
   });
 
-  test('on a page-store document', async () => {
+  test('on a blockeditor-store document', async () => {
     const page = await fs.readFile(path.join(__dirname, '../fixtures/ypage-template.html'), 'utf8');
     const projected = project(page);
     expect(projected).toContain('/_/clayjs/');
@@ -270,7 +270,7 @@ describe('a JSON data API write leaves disk canonical', () => {
 
     expect([res.status, res.body]).toEqual([200, { t: 'Changed' }]);
     const written = await stored('board.html');
-    expect(written).toContain('https://clayjs.com/v1/clay.js?plugins=page');
+    expect(written).toContain('https://clayjs.com/v1/clay.js?plugins=blockeditor');
     expect(written).not.toContain('/_/clayjs/');
     expect(written).not.toContain('clay-runtime-map');
     expect(written).toContain('<h1 data-id="title">Changed</h1>');

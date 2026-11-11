@@ -42,7 +42,7 @@ const manifest = require(path.join(releaseRoot, selected, 'm/manifest.json'));
 const chunks = manifest.entries;
 const releaseDir = path.join(releaseRoot, selected);
 
-const TEMPLATES = ['page', 'kanban', 'blank'];
+const TEMPLATES = ['blockeditor', 'kanban', 'blank'];
 
 const sha256 = (bytes) => crypto.createHash('sha256').update(bytes).digest('hex');
 
@@ -143,7 +143,7 @@ describe('a switch to edit has every file it loads, offline', () => {
 
     // The edit boot's own entry points, not just the view boot's: the editor module each
     // page feature loads, and the lifecycle that drives the mode the reload lands in.
-    const pageSet = new Set(editSet('page').files);
+    const pageSet = new Set(editSet('blockeditor').files);
     expect(pageSet.has(`m/${chunks['page/editor.js']}`)).toBe(true);
     expect(pageSet.has(`m/${chunks['core/mode-lifecycle.js']}`)).toBe(true);
     expect(pageSet.has(`m/${manifest.runtime}`)).toBe(true);
@@ -189,13 +189,13 @@ describe('a switch to edit has every file it loads, offline', () => {
   });
 
   test('the first edit saves canonical bytes, and the reopened document projects again', async () => {
-    const template = await fs.readFile(path.join(templates, 'page.html'));
+    const template = await fs.readFile(path.join(templates, 'blockeditor.html'));
     await fs.writeFile(file(), template);
     const onDisk = await fs.readFile(file(), 'utf8');
 
     const served = await send('/index.html');
     const servedHtml = text(served);
-    expect(servedHtml).toContain(`src="/_/clayjs/${selected}/clay.js?plugins=page,menu,indicator"`);
+    expect(servedHtml).toContain(`src="/_/clayjs/${selected}/clay.js?plugins=blockeditor,menu,indicator"`);
     expect(servedHtml).toContain('id="clay-runtime-map"');
 
     const edited = servedHtml.replace('<p data-id="p1"></p>', '<p data-id="p1">edited offline</p>');
@@ -212,7 +212,7 @@ describe('a switch to edit has every file it loads, offline', () => {
 
     const reopened = await send('/index.html');
     expect(reopened.status).toBe(200);
-    expect(text(reopened)).toContain(`src="/_/clayjs/${selected}/clay.js?plugins=page,menu,indicator"`);
+    expect(text(reopened)).toContain(`src="/_/clayjs/${selected}/clay.js?plugins=blockeditor,menu,indicator"`);
     expect(text(reopened)).toContain('edited offline');
     expect(text(reopened)).toContain('id="clay-runtime-map"');
   });

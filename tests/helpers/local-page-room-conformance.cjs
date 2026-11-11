@@ -100,7 +100,7 @@ function createLocalPageRoomAdapter({ compaction, buildCandidate, newEpoch = nul
         body: {
           reported: host.rooms.used(),
           receiptBytes: room.receiptBytes ?? 0,
-          transitionBytes: room.pageTransition?.bytes ?? 0,
+          transitionBytes: room.blockeditorTransition?.bytes ?? 0,
           reservedBytes: room.compaction?.job?.reserved ?? 0,
           stores,
         },

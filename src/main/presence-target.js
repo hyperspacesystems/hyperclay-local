@@ -12,7 +12,7 @@
  *   null                      nobody is anywhere
  *   "1.2"                     the legacy dotted block path, unchanged
  *   {kind:"record", id, field?}  a Kanban/Journal record (fieldless journals too)
- *   {kind:"page", v:1, epoch, generation, selection}  a Document's page target
+ *   {kind:"blockeditor", v:1, epoch, generation, selection}  a Document's page target
  *
  * Anything else is refused rather than repaired: a target this module cannot read is never
  * published, and one the host cannot read is never accepted.
@@ -151,7 +151,7 @@ function pageTarget(value) {
   if (!Number.isSafeInteger(value.generation) || value.generation < 0) return refuse('generation');
   const selection = selectionOf(value.selection);
   if (!selection) return refuse('selection');
-  const target = { kind: 'page', v: PRESENCE_VERSION, epoch: value.epoch, generation: value.generation, selection };
+  const target = { kind: 'blockeditor', v: PRESENCE_VERSION, epoch: value.epoch, generation: value.generation, selection };
   return withinSize(target) ? accept(target) : refuse('size');
 }
 
@@ -166,7 +166,7 @@ function validateTarget(value) {
   if (typeof value === 'string') return EDITING_PATH.test(value) ? accept(value) : refuse('path');
   if (!isObject(value)) return refuse('shape');
   if (value.kind === 'record') return recordTarget(value);
-  if (value.kind === 'page') return pageTarget(value);
+  if (value.kind === 'blockeditor') return pageTarget(value);
   return refuse('kind');
 }
 

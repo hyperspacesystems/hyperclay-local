@@ -312,10 +312,10 @@ test('the Go document host adapter', { skip: SKIP }, async (t) => {
     assert.equal(fs.existsSync(path.join(roots[0], 'move-me.html')), false);
   });
 
-  await t.test('pageState writes and moves a sidecar', async () => {
-    assert.equal(await host.pageState({ op: 'write', name: 'moved.html', record: { v: 1, rev: 'rev-1', tag: 'tag-1' } }), undefined);
-    await host.pageState({ op: 'move', name: 'moved.html', to: 'moved-again.html' });
-    await host.pageState({ op: 'drop', name: 'moved-again.html' });
+  await t.test('blockeditorState writes and moves a sidecar', async () => {
+    assert.equal(await host.blockeditorState({ op: 'write', name: 'moved.html', record: { v: 1, rev: 'rev-1', tag: 'tag-1' } }), undefined);
+    await host.blockeditorState({ op: 'move', name: 'moved.html', to: 'moved-again.html' });
+    await host.blockeditorState({ op: 'drop', name: 'moved-again.html' });
   });
 
   await t.test('takeSnapshot answers a relay snapshot once, then null', async () => {

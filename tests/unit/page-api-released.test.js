@@ -122,12 +122,12 @@ if (scenario === 'host-refusal') {
 }
 
 (async () => {
-  const dir = await fs.realpath(await fs.mkdtemp(nodePath.join(os.tmpdir(), 'page-api-released-')));
+  const dir = await fs.realpath(await fs.mkdtemp(nodePath.join(os.tmpdir(), 'blockeditor-api-released-')));
   const file = nodePath.join(dir, 'page.html');
   const fixture = pageFixture();
   await fs.writeFile(file, fixture.html);
   const authority = createLocalAuthority({ rooms: createRooms({}), withDocument: withDocumentWrite });
-  const root = { id: 'page-api-released-root', kind: 'personal', path: dir, port: 0 };
+  const root = { id: 'blockeditor-api-released-root', kind: 'personal', path: dir, port: 0 };
   const server = http.createServer(createApp({ root, localAuthority: authority, devHooks: null, isKnownPath: null }));
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const origin = 'http://127.0.0.1:' + server.address().port;
@@ -139,11 +139,11 @@ if (scenario === 'host-refusal') {
 
     const read = await fetch(origin + '/_/api/page.html');
     const etag = read.headers.get('etag');
-    const revision = read.headers.get('page-revision');
+    const revision = read.headers.get('blockeditor-revision');
     const before = await fs.readFile(file);
     const write = await fetch(origin + '/_/api/page.html', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'If-Match': etag, 'Page-If-Match': revision },
+      headers: { 'Content-Type': 'application/json', 'If-Match': etag, 'Blockeditor-If-Match': revision },
       body: JSON.stringify({ body: 'new' }),
     });
     const body = await write.json().catch(() => null);
@@ -162,7 +162,7 @@ if (scenario === 'host-refusal') {
       readStatus: read.status,
       revision,
       status: write.status,
-      pageRevision: write.headers.get('page-revision'),
+      pageRevision: write.headers.get('blockeditor-revision'),
       retryAfter: write.headers.get('retry-after'),
       xTest: write.headers.get('x-test'),
       body,

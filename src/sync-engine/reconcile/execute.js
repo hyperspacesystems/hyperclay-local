@@ -116,7 +116,7 @@ const CHANGED = 'changed';
 const expectedFrom = (expectLocal) => expectLocal === undefined ? undefined
   : expectLocal === null ? { type: 'absent' } : { type: 'checksum', value: expectLocal };
 
-async function writeLocal(engine, rel, content, { modifiedAt = null, gen, expectLocal, claim = null, explicitCreate = false, pageRecord = null } = {}) {
+async function writeLocal(engine, rel, content, { modifiedAt = null, gen, expectLocal, claim = null, explicitCreate = false, blockeditorRecord = null } = {}) {
   const generation = gen !== undefined ? gen : engine.generation;
   const host = documentHostFor(engine);
   let localPath = null;
@@ -126,7 +126,7 @@ async function writeLocal(engine, rel, content, { modifiedAt = null, gen, expect
     localPath = target.canonicalPath;
     if (gen !== undefined && gen !== engine.generation) { refused = STALE; return null; }
     const written = await host.commit({
-      kind: 'sync-download', name: rel, filePath: localPath, bytes: content, modifiedAt, pageRecord,
+      kind: 'sync-download', name: rel, filePath: localPath, bytes: content, modifiedAt, blockeditorRecord,
       expected: expectedFrom(expectLocal), context: { target, token },
     });
     if (written.outcome === 'indeterminate') throw written.error;
@@ -338,10 +338,10 @@ async function download(engine, nodeId, entry, context, gen) {
   const response = await getNodeContent(engine.conn, idOf(nodeId));
   if (gen !== engine.generation) return { action: A.DOWNLOAD, stale: true };
 
-  const pageRecord = await readPageRecord(engine, idOf(nodeId), rel);
+  const blockeditorRecord = await readPageRecord(engine, idOf(nodeId), rel);
   if (gen !== engine.generation) return { action: A.DOWNLOAD, stale: true };
 
-  const written = await writeLocal(engine, rel, response.content, { modifiedAt: response.modifiedAt, gen, expectLocal, claim, explicitCreate: !entry || entry.path === rel, pageRecord });
+  const written = await writeLocal(engine, rel, response.content, { modifiedAt: response.modifiedAt, gen, expectLocal, claim, explicitCreate: !entry || entry.path === rel, blockeditorRecord });
   if (written.refused === STALE) return { action: A.DOWNLOAD, stale: true };
   if (written.refused === CHANGED) {
     return conflicted(engine, nodeId, entry, context, {

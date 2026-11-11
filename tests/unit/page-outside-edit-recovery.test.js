@@ -54,8 +54,8 @@ async function run(mode, { second = false } = {}) {
     const origin = `http://127.0.0.1:${server.server.address().port}`;
     const target = authority.bindTarget({ rootId: root.id, logicalPath: 'A.html', canonicalPath: file, origin });
     const room = await authority.roomFor(target, () => ({ rootId: root.id, logicalPath: 'A.html', canonicalPath: file, identity: target.identity }));
-    const edited = authority.rooms.apply(room, 'editor', { name: 'page', n: 1, epoch: room.epoch,
-      pageGeneration: room.pageTransition?.id ?? null,
+    const edited = authority.rooms.apply(room, 'editor', { name: 'blockeditor', n: 1, epoch: room.epoch,
+      blockeditorGeneration: room.blockeditorTransition?.id ?? null,
       ops: [{ op: 'set', path: ['y', 'edit-1'], value: stored.update }] });
     assert.equal(edited.error, undefined);
     assert.equal(authority.roomIsDirty(room), true);
@@ -96,9 +96,9 @@ async function run(mode, { second = false } = {}) {
     expect(contents[0]).toContain('>xz<');
     expect(contents[0]).not.toContain('>outside<');
     if (!second) return;
-    assert.equal(authority.rooms.apply(room, 'editor', { name: 'page', n: 2, epoch: room.epoch,
-      pageGeneration: room.pageTransition?.id ?? null,
-      ops: [{ op: 'set', path: ['y', 'edit-2'], value: typeMore(room.stores.get('page').value) }] }).error, undefined);
+    assert.equal(authority.rooms.apply(room, 'editor', { name: 'blockeditor', n: 2, epoch: room.epoch,
+      blockeditorGeneration: room.blockeditorTransition?.id ?? null,
+      ops: [{ op: 'set', path: ['y', 'edit-2'], value: typeMore(room.stores.get('blockeditor').value) }] }).error, undefined);
     await write(incoming.replace('>outside<', '>second outside<'));
     const after = await recovered();
     expect(after).toHaveLength(2);

@@ -1,4 +1,4 @@
-// A page-driven helper request, end to end: a temp root with one document in
+// A blockeditor-driven helper request, end to end: a temp root with one document in
 // it, createApp in its ctx form with a fake `approve` and `ctx.helpers`, the
 // server bound to 127.0.0.1 (see ./loopback.js for why never a wildcard), and a
 // page's own EventSource and fetch on top of the real wire routes (CONTRACTS
@@ -307,7 +307,7 @@ function freePort() {
   });
 }
 
-// The same page-driven request through C1's pool and root server instead of a
+// The same blockeditor-driven request through C1's pool and root server instead of a
 // bare createApp, which is the seam main.js supplies with helpersFor(root): a
 // case can see what a folder server that stops does to its helper children.
 async function withHelperRootServer(options, fn) {

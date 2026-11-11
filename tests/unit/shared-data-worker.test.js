@@ -212,7 +212,7 @@ const postFrame = (clientId, conn, { n = 1, ops = [ADD], name = 'index.html' } =
 });
 
 const PAGE_TARGET = {
-  kind: 'page',
+  kind: 'blockeditor',
   v: 1,
   epoch: 'epoch-1',
   generation: 0,

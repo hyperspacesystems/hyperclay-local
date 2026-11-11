@@ -25,7 +25,7 @@ const FILE = 'index.html';
 const SAME_ORIGIN = { 'Sec-Fetch-Site': 'same-origin' };
 
 const PAGE_TARGET = {
-  kind: 'page',
+  kind: 'blockeditor',
   v: 1,
   epoch: 'epoch-1',
   generation: 0,
@@ -413,7 +413,7 @@ describe('the presence route refuses what it did not admit', () => {
       { v: 1, session: '', n: 1, editing: PAGE_TARGET },
       { v: 1, session: mine.token, n: 1 },
       { editing: '1.2', v: 1 },
-      { v: 1, session: mine.token, n: 1, editing: { kind: 'page', v: 1, epoch: 'e', generation: 0, selection: { kind: 'blocks', ids: [] } } },
+      { v: 1, session: mine.token, n: 1, editing: { kind: 'blockeditor', v: 1, epoch: 'e', generation: 0, selection: { kind: 'blocks', ids: [] } } },
     ]) {
       const refused = await fx.postPresence('tab-a', body);
       expect({ body, status: refused.status }).toEqual({ body, status: 400 });
@@ -434,7 +434,7 @@ describe('metadata names presence only where the relay runs', () => {
     });
     expect(withRelay.status).toBe(200);
     expect(withRelay.json.extensions).toEqual(expect.arrayContaining([
-      'presence', 'page-awareness-v1', 'record-awareness-v1',
+      'presence', 'blockeditor-awareness-v1', 'record-awareness-v1',
     ]));
 
     const dir = tempDir();
@@ -448,7 +448,7 @@ describe('metadata names presence only where the relay runs', () => {
     });
     expect(without.status).toBe(200);
     expect(without.json.extensions).not.toContain('presence');
-    expect(without.json.extensions).not.toContain('page-awareness-v1');
+    expect(without.json.extensions).not.toContain('blockeditor-awareness-v1');
     expect(without.json.extensions).not.toContain('record-awareness-v1');
   });
 });

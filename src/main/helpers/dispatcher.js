@@ -118,7 +118,7 @@ function createHelperDispatcher({ baseDir, helpers, backupBaseline, logger = con
       .map(name => ({ name, state: stateOf(settings, filePath, name, account) }));
     if (HELPER_DOCUMENT.test(filePath)) {
       list.push({ name: 'ai-edit', state: aiEditReady() ? 'ready' : 'unavailable' });
-      // page-tool is built in too, but only where the vendored runtime carries
+      // blockeditor-tool is built in too, but only where the vendored runtime carries
       // the prompt files it needs: a host without them must not offer it.
       if (helpers.pageTool) {
         let prompts = null;
@@ -127,7 +127,7 @@ function createHelperDispatcher({ baseDir, helpers, backupBaseline, logger = con
         } catch {
           prompts = null;
         }
-        if (prompts) list.push({ name: 'page-tool', state: aiEditReady() ? 'ready' : 'unavailable' });
+        if (prompts) list.push({ name: 'blockeditor-tool', state: aiEditReady() ? 'ready' : 'unavailable' });
       }
     }
     return list;
@@ -358,16 +358,16 @@ function createHelperDispatcher({ baseDir, helpers, backupBaseline, logger = con
       return;
     }
 
-    // page-tool is built in beside ai-edit: the same toggle, the same
+    // blockeditor-tool is built in beside ai-edit: the same toggle, the same
     // one-run-per-document guard, and no approval. Its request and reply are
     // checked by the ported contract, not by the page.
-    if (name === 'page-tool') {
+    if (name === 'blockeditor-tool') {
       if (!aiEditReady()) {
         refuse(publish, env, 'helper_not_granted', AI_EDIT_OFF_TEXT);
         return;
       }
       if (env.type === 'wire/describe') {
-        refuse(publish, env, 'invalid_type', 'page-tool does not support wire/describe');
+        refuse(publish, env, 'invalid_type', 'blockeditor-tool does not support wire/describe');
         return;
       }
       if (document === 'edit') {

@@ -1,4 +1,4 @@
-// One `page-tool/1` request and one reply, checked on either side of the model call.
+// One `blockeditor-tool/1` request and one reply, checked on either side of the model call.
 //
 // A request is a prompt, the document context and, on a revision, the tool as it stands. A reply
 // is one JSON object: six artifact strings and a state object. Neither side is trusted: the sizes
@@ -6,7 +6,7 @@
 
 const vm = require('vm');
 
-const PROTOCOL = 'page-tool/1';
+const PROTOCOL = 'blockeditor-tool/1';
 const ARTIFACT_FIELDS = ['title', 'html', 'css', 'javascript', 'fallbackHtml', 'summary'];
 const ARTIFACT_BYTES = 24_576;
 const STATE_BYTES = 8_192;

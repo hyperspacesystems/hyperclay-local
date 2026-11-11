@@ -299,8 +299,8 @@ describe('version history routes', () => {
     const res = await restore('board.html', target.name, { 'If-Match': second.body.etag });
     expect(res.status).toBe(200);
     const disk = await fs.readFile(docPath('board.html'), 'utf8');
-    expect(disk).not.toContain('merge="page"');
-    expect(disk).toContain('data-page="1"');
+    expect(disk).not.toContain('merge="blockeditor"');
+    expect(disk).toContain('data-blockeditor="1"');
     expect(disk).toBe(await versionBytes('board', target.name));
     // The stamp describes the document a reader composes, so the client can hand it
     // straight back as If-Match on the next restore.
@@ -321,13 +321,13 @@ describe('version history routes', () => {
 
     const target = (await list()).body.versions[1];
     const version = await versionBytes('board', target.name);
-    expect(version).not.toContain('merge="page"');
+    expect(version).not.toContain('merge="blockeditor"');
 
     const res = await restore('board.html', target.name);
     expect(res.status).toBe(200);
 
     const disk = await fs.readFile(docPath('board.html'), 'utf8');
-    expect(disk).not.toContain('merge="page"');
+    expect(disk).not.toContain('merge="blockeditor"');
     expect(disk).toBe(version.replace(/data-rev="[^"]*"/, 'data-rev="later-rev"'));
     expect((await readPageState(dir, 'board.html')).rev).toBe('later-rev');
     await expect(fs.access(pageStatePath(dir, 'board.html'))).resolves.toBeUndefined();

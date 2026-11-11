@@ -36,6 +36,15 @@ const METADATA_DIR = '.hyperclay';
 
 const roomsPackage = () => require('@panphora/clayjs/server/rooms');
 
+// A tab still on the runtime from before the Block editor rename saves its live tag
+// under the old name, which this host no longer reads. Its write is refused before
+// every other check, so it always gets ClayJS's refusal and not a conflict, and it is
+// never told to reload: the person keeps the tab and copies their words out first.
+function refuseOldFormat(html) {
+  const { oldBlockeditorFormat, oldFormatRefusal } = roomsPackage();
+  return oldBlockeditorFormat(String(html)) ? oldFormatRefusal() : null;
+}
+
 // The logical document a write stores and the clean file part that reaches disk.
 async function splitWrite(baseDir, name, html, { keepState = true } = {}) {
   const { file, state } = roomsPackage().splitPage(html);
@@ -174,7 +183,7 @@ function createDocumentHost(deps) {
     return authority.confirmKnownWrite(target, html, token, options);
   }
 
-  async function commitExact({ name, filePath: requestedPath, bytes, modifiedAt = null, pageRecord = null, context = {} }) {
+  async function commitExact({ name, filePath: requestedPath, bytes, modifiedAt = null, blockeditorRecord = null, context = {} }) {
     const { target = null, token = null } = context;
     const authorityWrite = Boolean(ctx.localAuthority && target && token);
     if (authorityWrite) assertWriteContext(token, target.canonicalPath);
@@ -183,7 +192,7 @@ function createDocumentHost(deps) {
     const previous = isDocument ? await fs.readFile(filePath, 'utf8').catch(() => null) : null;
     if (isDocument) {
       await createBackupIfExists(filePath, name.replace(DOCUMENT_NAME, ''), baseDir, emit, logger);
-      if (pageRecord) await writePageState(baseDir, name, pageRecord);
+      if (blockeditorRecord) await writePageState(baseDir, name, blockeditorRecord);
     } else {
       await createBinaryBackupIfExists(filePath, name, baseDir, emit, logger);
     }
@@ -370,7 +379,9 @@ function createDocumentHost(deps) {
   // The save lane's first half, which consults no room and writes nothing:
   // Local's normalization, the rebase of a save made against an older page, and
   // the split into the logical document and the file part that reaches disk.
-  async function prepareSave({ name, bytes, pageConversion = null }) {
+  async function prepareSave({ name, bytes, blockeditorConversion = null }) {
+    const refusal = refuseOldFormat(bytes);
+    if (refusal) throw refusal;
     // Normalized once, and before anything is admitted or backed up: the page
     // admission below has to decide against the exact bytes this call would
     // store, and a refusal must leave no backup and no written byte behind.
@@ -386,11 +397,11 @@ function createDocumentHost(deps) {
     // file — saves the document without it. It is still the same document, so
     // the state its sidecar holds is put back here too. A page conversion is the
     // one save where the absence is the point, so that one is never put back.
-    if (!pageConversion) {
+    if (!blockeditorConversion) {
       const rebased = await rebaseStaleSave(baseDir, name, content, reader().versionFiles ?? newestVersionFiles);
       if (rebased) content = rebased.html;
     }
-    const write = await splitWrite(baseDir, name, content, { keepState: !pageConversion });
+    const write = await splitWrite(baseDir, name, content, { keepState: !blockeditorConversion });
     return { content: write.logical, fileContent: write.file };
   }
 
@@ -401,7 +412,7 @@ function createDocumentHost(deps) {
   // refused save.
   async function admitSave({
     name, filePath, origin, content, fileContent, dataLossPrev = null, ifMatch = null,
-    pageConversion = null, pageWrite = null, pageFormat = null, persistentToken = null, target, token,
+    blockeditorConversion = null, blockeditorWrite = null, pageFormat = null, persistentToken = null, target, token,
     writeSafetyVersion = html => createBackup(baseDir, name.replace(/\.(html|htmlclay)$/, ''), html),
   }) {
     const authority = ctx.localAuthority;
@@ -418,8 +429,8 @@ function createDocumentHost(deps) {
       const room = open && String(open.nodeId) === String(target.identity) ? open : null;
       const currentHtml = dataLossPrev ?? '';
       const admission = checkPageWriteAdmission({
-        currentHtml, html: content, header: pageConversion ?? null, ifMatch, room,
-        pageWrite: pageWrite ?? null, createDocument,
+        currentHtml, html: content, header: blockeditorConversion ?? null, ifMatch, room,
+        blockeditorWrite: blockeditorWrite ?? null, createDocument,
       });
       const capability = origin === 'checkpoint' ? PAGE_FORMAT : formatCapability(pageFormat);
       const admitted = authority.admittedFormats(filePath);
@@ -429,12 +440,12 @@ function createDocumentHost(deps) {
       if (admission === 'initial') {
         pageToken = rooms.reservePageInitial(filePath, {
           nodeId: target.identity, currentHtml, html: content, ifMatch,
-          pageWrite: pageWrite ?? null, createDocument,
+          blockeditorWrite: blockeditorWrite ?? null, createDocument,
         });
       } else if (admission === 'conversion') {
         pageToken = rooms.reservePage(filePath, {
-          nodeId: target.identity, header: pageConversion, currentHtml, html: content, ifMatch,
-          pageWrite: pageWrite ?? null, createDocument,
+          nodeId: target.identity, header: blockeditorConversion, currentHtml, html: content, ifMatch,
+          blockeditorWrite: blockeditorWrite ?? null, createDocument,
         });
       } else if (admission === 'ordinary' && room && pageLineageLost(room, content)) {
         // The open room still holds the article this save replaces, and the
@@ -474,7 +485,7 @@ function createDocumentHost(deps) {
       // one) waits for a tab to adopt it, and until then the room's unsaved
       // edits live only in memory: they get a recovered copy, rendered over
       // the document this write replaces.
-      if (room && origin !== 'checkpoint' && !pageToken && content.includes('data-page') && needsAdoption(content)) {
+      if (room && origin !== 'checkpoint' && !pageToken && content.includes('data-blockeditor') && needsAdoption(content)) {
         await authority.recoverUnsavedEdits(target, token);
       }
       return { content, fileContent, pageToken };
@@ -511,7 +522,7 @@ function createDocumentHost(deps) {
     // With an authority the saved lane is already published, once per alias, by
     // the confirmation above; this route is still its own publisher for a
     // no-authority caller, which is every legacy createApp(dir).
-    const adopt = origin !== 'checkpoint' && content.includes('data-page') && needsAdoption(content);
+    const adopt = origin !== 'checkpoint' && content.includes('data-blockeditor') && needsAdoption(content);
     if (adopt) {
       ctx.observer?.publishExternal(
         name,
@@ -555,7 +566,7 @@ function createDocumentHost(deps) {
   async function commitSave(request, { origin }) {
     const {
       name, filePath, bytes, dataLossPrev, userDriven, saveId,
-      ifMatch, pageConversion, pageWrite, pageFormat,
+      ifMatch, blockeditorConversion, blockeditorWrite, pageFormat,
       persistentToken = null, readIdentity = null, context = {},
     } = request;
     const { target = null, token = null } = context;
@@ -565,7 +576,7 @@ function createDocumentHost(deps) {
     // carry the extension (Rule 1).
     const backupName = name.replace(/\.(html|htmlclay)$/, '');
 
-    let { content, fileContent } = await prepareSave({ name, bytes, pageConversion });
+    let { content, fileContent } = await prepareSave({ name, bytes, blockeditorConversion });
 
     const authority = ctx.localAuthority;
     const authorityWrite = Boolean(authority && target && token);
@@ -574,7 +585,7 @@ function createDocumentHost(deps) {
       if (authorityWrite) {
         ({ content, fileContent, pageToken } = await admitSave({
           name, filePath, origin, content, fileContent, dataLossPrev, ifMatch,
-          pageConversion, pageWrite, pageFormat, persistentToken, target, token,
+          blockeditorConversion, blockeditorWrite, pageFormat, persistentToken, target, token,
         }));
       }
 
@@ -915,7 +926,7 @@ function createDocumentHost(deps) {
     if (authority.logicalHtml) currentHtml = await authority.logicalHtml(target, currentHtml);
     const observed = await authority.reconcileDisk(target, currentHtml, token);
     if (observed.kind === 'replacement' || authority.rooms.get(key) !== room ||
-        (room.pageTransition?.id ?? null) !== generation) {
+        (room.blockeditorTransition?.id ?? null) !== generation) {
       return { kind: 'refused', reason: 'invalid-identity' };
     }
     let capture;
@@ -958,18 +969,18 @@ function createDocumentHost(deps) {
     });
   }
 
-  async function pageState({ op, name, to = null, record = null }) {
+  async function blockeditorState({ op, name, to = null, record = null }) {
     const store = require('./page-state-store.js');
     if (op === 'write') return writePageState(baseDir, name, record);
     if (op === 'move') return store.movePageState(baseDir, name, to);
     if (op === 'moveDir') return store.movePageStateDir(baseDir, name, to);
     if (op === 'drop') return store.dropPageState(baseDir, name);
     if (op === 'dropDir') return store.dropPageStateDir(baseDir, name);
-    throw new TypeError(`Unknown page-state operation: ${op}`);
+    throw new TypeError(`Unknown blockeditor-state operation: ${op}`);
   }
 
   return {
-    commit, read, restructure, checkpoint, events, pageState,
+    commit, read, restructure, checkpoint, events, blockeditorState,
     lanes: {
       prepareSave, admitSave, settleSave, recordSaveProvenance,
       prepareReplace, admitReplace, settleReplace,
@@ -1020,4 +1031,4 @@ function createRootDocumentHost({ ctx, live = require('./utils/root-live.js').cr
   });
 }
 
-module.exports = { createDocumentHost, createRootDocumentHost, canonicalForWrite, splitWrite, MAX_EXTERNAL_HTML, LOOPBACK_RUNTIME };
+module.exports = { createDocumentHost, createRootDocumentHost, canonicalForWrite, splitWrite, refuseOldFormat, MAX_EXTERNAL_HTML, LOOPBACK_RUNTIME };

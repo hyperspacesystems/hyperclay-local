@@ -1,9 +1,9 @@
 [
   {
-    "id": "page",
-    "file": "page.html",
-    "bytes": 976,
-    "sha256": "0f816b26aebf1ee3019589112524a7575386f7e3f6855ab53f39df7531388378"
+    "id": "blockeditor",
+    "file": "blockeditor.html",
+    "bytes": 16357,
+    "sha256": "a84305fcce73dcf333c4acaa424f5fb3294ee55ed6d2ba77988781b6a92e744b"
   },
   {
     "id": "blank",

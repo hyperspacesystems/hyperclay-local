@@ -453,7 +453,7 @@ describe('D1 structure preparation', () => {
     const keysBefore = h.core.keys();
 
     const reservation = h.core.reservePageReplacement(cPath, {
-      nodeId: 'page-node', html: '<!doctype html><html><body></body></html>',
+      nodeId: 'blockeditor-node', html: '<!doctype html><html><body></body></html>',
     });
     expect(h.core.get(cPath)).toBeNull();
     expect(h.core.pageReserved(cPath)).toBe(true);
@@ -693,7 +693,7 @@ describe('D1 structure preparation', () => {
     h.core.releasePersistent(again);
   });
 
-  test('an untracked source cannot move onto a page-reserved or occupied destination', async () => {
+  test('an untracked source cannot move onto a blockeditor-reserved or occupied destination', async () => {
     const h = structureHarness();
     const bPath = path.join(h.root, 'B.html');
     const cPath = path.join(h.root, 'C.html');
@@ -702,7 +702,7 @@ describe('D1 structure preparation', () => {
     h.open({ logicalPath: 'B.html', canonicalPath: bPath });
 
     const reservation = h.core.reservePageReplacement(cPath, {
-      nodeId: 'page-node', html: '<!doctype html><html><body></body></html>',
+      nodeId: 'blockeditor-node', html: '<!doctype html><html><body></body></html>',
     });
     const reserved = await h.refuse([
       h.stepOf({ from: ghost, to: cPath, fromRel: 'ghost.html', toRel: 'C.html' }),

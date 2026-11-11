@@ -1,7 +1,7 @@
 // Document 11 Step 6b: the page format floor is enforced at every write boundary.
-// A document's floor is the `<meta name="clay-page-format">` marker (absent is 0,
+// A document's floor is the `<meta name="clay-blockeditor-format">` marker (absent is 0,
 // a floor only rises), and every page write declares what it can read in
-// `X-Clay-Page-Format`. Each path below shows an accepted current-capability write
+// `X-Clay-Blockeditor-Format`. Each path below shows an accepted current-capability write
 // and a refused legacy one against the same fixture, with the file and its page
 // state sidecar untouched by the refusal.
 
@@ -29,12 +29,12 @@ const { documentEtag } = require('../../src/main/spec-wire');
 const { pageFixture } = require('../helpers/page-fixture');
 
 const PAGE = pageFixture();
-const MARKER = '<meta name="clay-page-format" content="1">';
+const MARKER = '<meta name="clay-blockeditor-format" content="1">';
 const FLOOR1 = PAGE.html.replace('<head>', `<head>${MARKER}`);
 const NAME = 'page.html';
 const STORE_NAME = 'store.html';
 const STORE_DOC = `<!doctype html>\n<html><head>${MARKER}</head><body><script type="application/json" merge="store" clay="live">{"count":0}</script></body></html>\n`;
-const UPGRADE = 'page-format-upgrade-required';
+const UPGRADE = 'blockeditor-format-upgrade-required';
 
 describe('the page format floor at every write boundary', () => {
   let dir;
@@ -52,7 +52,7 @@ describe('the page format floor at every write boundary', () => {
   const startApp = async () => {
     const core = createRooms({});
     authority = createLocalAuthority({ rooms: core, withDocument: withDocumentWrite });
-    const root = { id: `page-format-root-${apps.length}`, kind: 'personal', path: dir, port: 0 };
+    const root = { id: `blockeditor-format-root-${apps.length}`, kind: 'personal', path: dir, port: 0 };
     live = createRootLive(root);
     observer = new RootObserver(root, { live, localAuthority: authority });
     server = await listenLoopback(createApp({
@@ -87,7 +87,7 @@ describe('the page format floor at every write boundary', () => {
   };
 
   beforeEach(async () => {
-    dir = path.resolve(await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'page-format-host-'))));
+    dir = path.resolve(await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'blockeditor-format-host-'))));
     apps = [];
     jest.spyOn(console, 'log').mockImplementation(() => {});
     jest.spyOn(console, 'error').mockImplementation(() => {});
@@ -115,7 +115,7 @@ describe('the page format floor at every write boundary', () => {
     expect(await onDisk()).toBe(before);
     expect(await readPageState(dir, NAME)).toEqual(beforeState);
 
-    const accepted = await save(FLOOR1.replace(MARKER, ''), { 'X-Clay-Page-Format': '1' });
+    const accepted = await save(FLOOR1.replace(MARKER, ''), { 'X-Clay-Blockeditor-Format': '1' });
 
     expect(accepted.status).toBe(200);
     expect(await onDisk()).toContain(MARKER);
@@ -125,7 +125,7 @@ describe('the page format floor at every write boundary', () => {
     await fs.writeFile(filePath(), PAGE.html);
     await startApp();
 
-    const activated = await save(FLOOR1, { 'X-Clay-Page-Format': '1' });
+    const activated = await save(FLOOR1, { 'X-Clay-Blockeditor-Format': '1' });
 
     expect(activated.status).toBe(200);
     expect(await onDisk()).toContain(MARKER);
@@ -148,7 +148,7 @@ describe('the page format floor at every write boundary', () => {
 
     expect(res.status).toBe(200);
     const stored = await onDisk();
-    expect(stored).not.toContain('clay-page-format');
+    expect(stored).not.toContain('clay-blockeditor-format');
     expect(stored).toBe(splitPage(PAGE.html).file);
   });
 
@@ -158,11 +158,11 @@ describe('the page format floor at every write boundary', () => {
 
     const before = await onDisk();
     const beforeState = await readPageState(dir, NAME);
-    const synthetic = `<!DOCTYPE html><html><body><script type="application/json" merge="page" clay="live">${JSON.stringify({ v: 1, y: { doc: 'AAAA' } })}</script></body></html>`;
+    const synthetic = `<!DOCTYPE html><html><body><script type="application/json" merge="blockeditor" clay="live">${JSON.stringify({ v: 1, y: { doc: 'AAAA' } })}</script></body></html>`;
     const refused = await save(synthetic, { 'If-Match': documentEtag(before) });
 
     expect(refused.status).toBe(422);
-    expect(refused.body.code).toBe('page-conversion-refused');
+    expect(refused.body.code).toBe('blockeditor-conversion-refused');
     expect(refused.body.reason).toBe('invalid-capture');
     expect(await onDisk()).toBe(before);
     expect(await readPageState(dir, NAME)).toEqual(beforeState);
@@ -178,7 +178,7 @@ describe('the page format floor at every write boundary', () => {
 
     const before = await onDisk();
     const beforeState = await readPageState(dir, NAME);
-    const refused = await save(FLOOR1, { 'X-Clay-Page-Format': '1' });
+    const refused = await save(FLOOR1, { 'X-Clay-Blockeditor-Format': '1' });
 
     expect(refused.status).toBe(409);
     expect(refused.body.code).toBe(UPGRADE);
@@ -186,10 +186,10 @@ describe('the page format floor at every write boundary', () => {
     expect(await onDisk()).toBe(before);
     expect(await readPageState(dir, NAME)).toEqual(beforeState);
 
-    const current = await getState({ 'X-Clay-Page-Format': '1' }, NAME, 'cA');
+    const current = await getState({ 'X-Clay-Blockeditor-Format': '1' }, NAME, 'cA');
     expect(current.status).toBe(200);
 
-    const stored = await save(FLOOR1, { 'X-Clay-Page-Format': '1' });
+    const stored = await save(FLOOR1, { 'X-Clay-Blockeditor-Format': '1' });
     expect(stored.status).toBe(200);
     expect(await onDisk()).toContain(MARKER);
   });
@@ -206,11 +206,11 @@ describe('the page format floor at every write boundary', () => {
     expect(refusedRead.body.code).toBe(UPGRADE);
     expect(refusedRead.body.stores).toBeUndefined();
 
-    const acceptedRead = await getState({ 'X-Clay-Page-Format': '1' }, NAME, 'cA');
+    const acceptedRead = await getState({ 'X-Clay-Blockeditor-Format': '1' }, NAME, 'cA');
     expect(acceptedRead.status).toBe(200);
-    expect(acceptedRead.body.stores.page.value).toBeTruthy();
+    expect(acceptedRead.body.stores.blockeditor.value).toBeTruthy();
 
-    const state = await getState({ 'X-Clay-Page-Format': '1' }, STORE_NAME, 'cA');
+    const state = await getState({ 'X-Clay-Blockeditor-Format': '1' }, STORE_NAME, 'cA');
     expect(state.status).toBe(200);
     const { conn } = state.body;
     expect(typeof conn).toBe('string');
@@ -226,7 +226,7 @@ describe('the page format floor at every write boundary', () => {
     expect(refusedWrite.body.code).toBe(UPGRADE);
 
     const acceptedWrite = await frame(2)
-      .set('X-Clay-Page-Format', '1');
+      .set('X-Clay-Blockeditor-Format', '1');
     expect(acceptedWrite.status).toBe(200);
     expect(acceptedWrite.body.seq).toBeGreaterThan(0);
   });
@@ -244,9 +244,9 @@ const http = require('http');
   const { createApp } = require(process.cwd() + '/src/main/server.js');
   const { createLocalAuthority } = require(process.cwd() + '/src/main/local-authority');
   const { withDocumentWrite } = require(process.cwd() + '/src/main/utils/write-queue');
-  const MARKER = '<meta name="clay-page-format" content="1">';
+  const MARKER = '<meta name="clay-blockeditor-format" content="1">';
   const floorOne = process.env.PAGE_HTML.replace('<head>', '<head>' + MARKER);
-  const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'page-format-api-')));
+  const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'blockeditor-format-api-')));
   const file = path.join(dir, 'page.html');
   await fs.writeFile(file, floorOne);
   const authority = createLocalAuthority({ withDocument: withDocumentWrite });
@@ -257,11 +257,11 @@ const http = require('http');
   try {
     const head = await fetch(origin + '/_/api/page.html');
     const etag = head.headers.get('etag');
-    const revision = head.headers.get('page-revision');
+    const revision = head.headers.get('blockeditor-revision');
     const post = async (headers) => {
       const res = await fetch(origin + '/_/api/page.html', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'If-Match': etag, 'Page-If-Match': revision, ...headers },
+        headers: { 'Content-Type': 'application/json', 'If-Match': etag, 'Blockeditor-If-Match': revision, ...headers },
         body: JSON.stringify({ body: 'new' }),
       });
       let body = null;
@@ -271,7 +271,7 @@ const http = require('http');
     const before = await fs.readFile(file, 'utf8');
     const refused = await post({});
     const afterRefused = await fs.readFile(file, 'utf8');
-    const accepted = await post({ 'X-Clay-Page-Format': '1' });
+    const accepted = await post({ 'X-Clay-Blockeditor-Format': '1' });
     const stored = await fs.readFile(file, 'utf8');
     console.log(JSON.stringify({ refused, accepted, unchanged: before === afterRefused, marker: stored.includes(MARKER), written: stored.includes('>new</p>') }));
   } finally {
@@ -302,7 +302,7 @@ const http = require('http');
     await startApp();
 
     expect((await save(PAGE.html)).status).toBe(200);
-    expect((await save(FLOOR1, { 'X-Clay-Page-Format': '1' })).status).toBe(200);
+    expect((await save(FLOOR1, { 'X-Clay-Blockeditor-Format': '1' })).status).toBe(200);
     expect(await onDisk()).toContain(MARKER);
 
     const list = await request(server).get(`/_/versions/${NAME}`);
@@ -343,7 +343,7 @@ const http = require('http');
     legacy.close();
 
     const current = subscribe();
-    const accepted = await post({ 'X-Clay-Page-Format': '1' });
+    const accepted = await post({ 'X-Clay-Blockeditor-Format': '1' });
     expect(accepted.status).toBe(200);
     expect(current.received.length).toBe(1);
     current.close();
@@ -362,6 +362,6 @@ const http = require('http');
 
     await startApp();
     const meta = await request(server).get('/_/meta').set('Document-URL', documentUrl());
-    expect(meta.body.extensions).toContain('page-format-v1');
+    expect(meta.body.extensions).toContain('blockeditor-format-v1');
   });
 });

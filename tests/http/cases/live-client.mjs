@@ -85,7 +85,7 @@ export async function joinLiveClient(ctx, { rootId, docPath, clientId }) {
         name,
         n,
         epoch: session.epoch,
-        pageGeneration: session.pageTransition ? session.pageTransition.id : null,
+        blockeditorGeneration: session.blockeditorTransition ? session.blockeditorTransition.id : null,
         ops,
       }),
       signal: controller.signal,

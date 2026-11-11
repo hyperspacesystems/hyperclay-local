@@ -13,7 +13,7 @@ const RECORDED_HEADERS = [
   'cache-control',
   'vary',
   'retry-after',
-  'page-revision',
+  'blockeditor-revision',
   'x-content-type-options',
 ];
 

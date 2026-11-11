@@ -152,7 +152,7 @@ test('the Code tab declares page format 1, so a floor-1 document still saves fro
   const original = global.fetch;
   let declared = null;
   jest.spyOn(global, 'fetch').mockImplementation(async (url, options) => {
-    if (String(url).endsWith('/_/save')) declared = options.headers['x-clay-page-format'];
+    if (String(url).endsWith('/_/save')) declared = options.headers['x-clay-blockeditor-format'];
     return original(url, options);
   });
   const response = await put(request, { path: 'A.html', html: page('after'),

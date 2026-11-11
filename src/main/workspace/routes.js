@@ -8,7 +8,7 @@ const { stripCopyBytes } = require('../copy-content');
 
 const SAVE_MAX_BYTES = 20 * 1024 * 1024;
 const UPLOAD_MAX_BYTES = 25 * 1024 * 1024;
-const FORWARDED_HEADERS = ['content-type', 'if-match', 'save-id', 'page-if-match', 'page-revision', 'accept'];
+const FORWARDED_HEADERS = ['content-type', 'if-match', 'save-id', 'blockeditor-if-match', 'blockeditor-revision', 'accept'];
 const DOCUMENT_NAME = /\.html(?:clay)?$/i;
 
 function sendJson(res, status, value) {
@@ -101,7 +101,7 @@ async function handleWorkspaceRoute({ req, res, url, root, route, settings, sync
       method: 'POST',
       headers: { 'content-type': 'text/html; charset=utf-8', 'document-url': rootUrl(root, `/${encoded(rel)}`),
         'if-match': request.etag, 'save-id': request.operationId, prefer: 'return=representation',
-        'x-clay-page-format': '1' },
+        'x-clay-blockeditor-format': '1' },
       body: request.html,
     });
     if (!response.ok) return relayRefusal(res, response);

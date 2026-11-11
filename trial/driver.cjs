@@ -71,7 +71,7 @@ function tailwindEdits(html) {
 
 // The paths one document write may change, computed from the action and never
 // from the host's answer: the document, its versions folder, its guard record
-// and recover copy, its page-state and data sidecars, and the stylesheet it
+// and recover copy, its blockeditor-state and data sidecars, and the stylesheet it
 // links.
 function editsFor(rel, html = '') {
   const stem = stemOf(rel);
@@ -80,7 +80,7 @@ function editsFor(rel, html = '') {
     `.hyperclay/versions/${stem}/`,
     `.hyperclay/guard/${stem}.json`,
     `.hyperclay/guard/${stem}.recover.html`,
-    `.hyperclay/page-state/${rel}.json`,
+    `.hyperclay/blockeditor-state/${rel}.json`,
     `.hyperclay/api-v2/${rel}.json`,
     ...tailwindEdits(html),
   ];
@@ -374,7 +374,7 @@ async function main() {
     const entry = { kind: 'auto-name', how, by: 'node', origin: 'node', edits };
     let appDataPath = path.join(runDir, 'app-data');
     try {
-      await command({ command: 'create', parent: '', name: UNTITLED_NAME, template: 'page' });
+      await command({ command: 'create', parent: '', name: UNTITLED_NAME, template: 'blockeditor' });
       const file = path.join(rootB.path, UNTITLED_NAME);
       const current = await host.read(UNTITLED_NAME, file);
       if (!current) throw new Error(`${UNTITLED_NAME} was not created`);
@@ -418,7 +418,7 @@ async function main() {
         }
       }
       try {
-        await autoNamer.record(rootB, UNTITLED_NAME, 'page');
+        await autoNamer.record(rootB, UNTITLED_NAME, 'blockeditor');
         const deadline = Date.now() + 20000;
         for (;;) {
           await autoNamer.departed(room);
@@ -598,7 +598,7 @@ async function main() {
     await httpWriters();
 
     await workspaceWriter('create', 'executeCommand create from the page template through the host', {
-      command: 'create', parent: '', name: 'created.html', template: 'page',
+      command: 'create', parent: '', name: 'created.html', template: 'blockeditor',
     }, editsFor('created.html'));
 
     const duplicateEdits = editsFor('article.html').concat(editsFor('article-copy.html'));

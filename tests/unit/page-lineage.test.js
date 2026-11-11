@@ -6,7 +6,7 @@ const {
 const { createDocument } = require('../../src/main/page-rebase.js');
 
 const version = require('@panphora/clayjs/package.json').version;
-const fixturePath = path.join(__dirname, '..', 'fixtures', 'page-lineage', 'page-lineage.json');
+const fixturePath = require.resolve('@panphora/host-conformance/vectors/blockeditor-lineage.json');
 console.log('clayjs under test:', version, require.resolve('@panphora/clayjs/server/rooms'));
 
 let hasLineage = true;
@@ -21,7 +21,7 @@ if (!hasLineage) console.log('skipped until the installed ClayJS ships page line
 // against: their absence is a packaging fault, not a reason to pass quietly.
 function vectors() {
   if (!fs.existsSync(fixturePath)) {
-    throw new Error(`@panphora/clayjs ${version} does not ship ${fixturePath}, the page lineage vectors this suite judges`);
+    throw new Error(`@panphora/host-conformance does not ship ${fixturePath}, the Block editor lineage vectors this suite judges`);
   }
   return JSON.parse(fs.readFileSync(fixturePath, 'utf8'));
 }
@@ -51,7 +51,7 @@ function admit(write) {
   try {
     return checkPageWriteAdmission({
       currentHtml: current, html: write.body, ifMatch,
-      pageWrite: write.pageWrite ?? null, createDocument
+      blockeditorWrite: write.blockeditorWrite ?? null, createDocument
     });
   } catch (error) {
     if (error instanceof PageConversionError) return error.reason;

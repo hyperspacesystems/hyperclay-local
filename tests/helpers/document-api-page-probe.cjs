@@ -26,25 +26,25 @@ async function run() {
   const get = () => request(server).get('/_/api/doc.html');
   const post = (data, etag, revision) => request(server).post('/_/api/doc.html')
     .set('Content-Type', 'application/json').set('If-Match', etag)
-    .set('Page-If-Match', revision).send(JSON.stringify(data));
+    .set('Blockeditor-If-Match', revision).send(JSON.stringify(data));
   const versions = path.join(dir, '.hyperclay', 'versions');
   try {
     const first = await get();
     assert.equal(first.status, 200);
     assert.equal(first.body.body, 'abc');
-    assert.equal(first.headers['page-revision'], fixture.revision);
+    assert.equal(first.headers['blockeditor-revision'], fixture.revision);
     const selected = await request(server).get('/_/api/doc.html').query({ data: '{body:"article p"}' });
     assert.equal(selected.status, 200);
     assert.equal(selected.body.body, 'abc');
-    assert.equal(selected.headers['page-revision'], fixture.revision);
-    assert.equal((await request(server).get('/_/meta')).body.extensions.includes('page'), true);
+    assert.equal(selected.headers['blockeditor-revision'], fixture.revision);
+    assert.equal((await request(server).get('/_/meta')).body.extensions.includes('blockeditor'), true);
     const missing = await request(server).post('/_/api/doc.html')
       .set('Content-Type', 'application/json').set('If-Match', first.headers.etag)
       .send(JSON.stringify({ body: 'new' }));
     assert.equal(missing.status, 428);
-    assert.equal((await post({ body: 'new' }, '"old"', first.headers['page-revision'])).status, 412);
-    assert.equal((await post({ body: 'new' }, '*', first.headers['page-revision'])).status, 412);
-    const invalid = await post({ rev: 'fake' }, first.headers.etag, first.headers['page-revision']);
+    assert.equal((await post({ body: 'new' }, '"old"', first.headers['blockeditor-revision'])).status, 412);
+    assert.equal((await post({ body: 'new' }, '*', first.headers['blockeditor-revision'])).status, 412);
+    const invalid = await post({ rev: 'fake' }, first.headers.etag, first.headers['blockeditor-revision']);
     assert.equal(invalid.status, 422);
     assert.equal(await fs.readFile(file, 'utf8'), fixture.html);
     assert.deepEqual(await fs.readdir(versions).catch(() => []), []);
@@ -52,7 +52,7 @@ async function run() {
     const room = authority.rooms.get(file);
     const occupied = authority.rooms.holdPersistent(file, { nodeId: room.nodeId });
     try {
-      const conflict = await post({ body: 'new' }, first.headers.etag, first.headers['page-revision']);
+      const conflict = await post({ body: 'new' }, first.headers.etag, first.headers['blockeditor-revision']);
       assert.equal(conflict.status, 503);
       assert.equal(conflict.body.code, 'checkpointing');
     } finally {
@@ -60,15 +60,15 @@ async function run() {
     }
     const accepted = await request(server).post('/_/sync/data?client-id=b')
       .set('Origin', origin).set('Document-URL', `${origin}/doc.html`)
-      .send({ conn: members[1].conn, name: 'page', n: 1, epoch: room.epoch,
-        pageGeneration: room.pageTransition?.id ?? null,
+      .send({ conn: members[1].conn, name: 'blockeditor', n: 1, epoch: room.epoch,
+        blockeditorGeneration: room.blockeditorTransition?.id ?? null,
         ops: [{ op: 'set', path: ['y', 'edit-b-1'], value: fixture.update }] });
     assert.equal(accepted.status, 200);
     assert.ok(accepted.body.seq > 0);
     const beforeRoom = JSON.stringify(authority.rooms.state(room));
     const beforeBytes = await fs.readFile(file, 'utf8');
     const beforeBackups = await fs.readdir(versions).catch(() => []);
-    const stale = await post({ body: 'new' }, first.headers.etag, first.headers['page-revision']);
+    const stale = await post({ body: 'new' }, first.headers.etag, first.headers['blockeditor-revision']);
     assert.equal(stale.status, 409);
     assert.equal(stale.body.code, 'revision-stale');
     assert.equal(await fs.readFile(file, 'utf8'), beforeBytes);
@@ -76,18 +76,18 @@ async function run() {
     assert.deepEqual(await fs.readdir(versions).catch(() => []), beforeBackups);
     const fresh = await get();
     assert.equal(fresh.body.body, 'ac');
-    assert.notEqual(fresh.headers['page-revision'], first.headers['page-revision']);
-    const written = await post({ body: 'new' }, fresh.headers.etag, fresh.headers['page-revision']);
+    assert.notEqual(fresh.headers['blockeditor-revision'], first.headers['blockeditor-revision']);
+    const written = await post({ body: 'new' }, fresh.headers.etag, fresh.headers['blockeditor-revision']);
     assert.equal(written.status, 200, JSON.stringify(written.body));
     assert.equal(written.body.body, 'new');
-    assert.notEqual(written.headers['page-revision'], fresh.headers['page-revision']);
+    assert.notEqual(written.headers['blockeditor-revision'], fresh.headers['blockeditor-revision']);
     const stored = await fs.readFile(file, 'utf8');
     assert.match(stored, />new<\/p>/);
     // The file on disk holds no merge state; the stamp describes the logical
     // document, which is the stored file with that state put back.
-    assert.doesNotMatch(stored, /merge="page"/);
+    assert.doesNotMatch(stored, /merge="blockeditor"/);
     assert.equal(documentEtag(await logicalDocument(dir, 'doc.html', stored)), written.headers.etag);
-    assert.ok(authority.rooms.state(room).stores.page.value.y);
+    assert.ok(authority.rooms.state(room).stores.blockeditor.value.y);
     console.log('page API proof passed');
   } finally {
     for (const member of members) member.close();

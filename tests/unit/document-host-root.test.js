@@ -36,18 +36,18 @@ test('a root alone builds the host with the real formatters', async () => {
 const store = require('../../src/main/page-state-store');
 
 const RECORD = { v: 1, rev: 'rev-a', tag: '<p>merge</p>' };
-const sidecar = (dir, name) => upath.join(dir, '.hyperclay', 'page-state', `${name}.json`);
+const sidecar = (dir, name) => upath.join(dir, '.hyperclay', 'blockeditor-state', `${name}.json`);
 
 function hostFor(dir) {
   return createRootDocumentHost({ ctx: { root: { id: 'r', path: dir } } });
 }
 
-test('pageState write writes the sidecar the store writes', async () => {
+test('blockeditorState write writes the sidecar the store writes', async () => {
   const path = tempDir();
   const direct = tempDir();
   const host = hostFor(path);
 
-  await host.pageState({ op: 'write', name: 'page.html', record: RECORD });
+  await host.blockeditorState({ op: 'write', name: 'page.html', record: RECORD });
   await store.writePageState(direct, 'page.html', RECORD);
 
   const written = JSON.parse(fs.readFileSync(sidecar(path, 'page.html'), 'utf8'));
@@ -58,12 +58,12 @@ test('pageState write writes the sidecar the store writes', async () => {
   expect(await store.readPageState(path, 'page.html')).toMatchObject(RECORD);
 });
 
-test('pageState move moves one page sidecar', async () => {
+test('blockeditorState move moves one page sidecar', async () => {
   const path = tempDir();
   const host = hostFor(path);
   await store.writePageState(path, 'A.html', RECORD);
 
-  await host.pageState({ op: 'move', name: 'A.html', to: 'B.html' });
+  await host.blockeditorState({ op: 'move', name: 'A.html', to: 'B.html' });
 
   expect(fs.existsSync(sidecar(path, 'A.html'))).toBe(false);
   expect(JSON.parse(fs.readFileSync(sidecar(path, 'B.html'), 'utf8'))).toMatchObject(RECORD);
@@ -71,43 +71,43 @@ test('pageState move moves one page sidecar', async () => {
   expect(await store.readPageState(path, 'B.html')).toMatchObject(RECORD);
 });
 
-test('pageState moveDir moves the folder mirror', async () => {
+test('blockeditorState moveDir moves the folder mirror', async () => {
   const path = tempDir();
   const host = hostFor(path);
   await store.writePageState(path, 'Notes/A.html', RECORD);
 
-  await host.pageState({ op: 'moveDir', name: 'Notes', to: 'Archive' });
+  await host.blockeditorState({ op: 'moveDir', name: 'Notes', to: 'Archive' });
 
-  expect(fs.existsSync(upath.join(path, '.hyperclay', 'page-state', 'Notes'))).toBe(false);
+  expect(fs.existsSync(upath.join(path, '.hyperclay', 'blockeditor-state', 'Notes'))).toBe(false);
   expect(JSON.parse(fs.readFileSync(sidecar(path, 'Archive/A.html'), 'utf8'))).toMatchObject(RECORD);
   expect(await store.readPageState(path, 'Archive/A.html')).toMatchObject(RECORD);
 });
 
-test('pageState drop drops one page sidecar', async () => {
+test('blockeditorState drop drops one page sidecar', async () => {
   const path = tempDir();
   const host = hostFor(path);
   await store.writePageState(path, 'A.html', RECORD);
 
-  await host.pageState({ op: 'drop', name: 'A.html' });
+  await host.blockeditorState({ op: 'drop', name: 'A.html' });
 
   expect(fs.existsSync(sidecar(path, 'A.html'))).toBe(false);
   expect(await store.readPageState(path, 'A.html')).toBeNull();
 });
 
-test('pageState dropDir drops the folder mirror', async () => {
+test('blockeditorState dropDir drops the folder mirror', async () => {
   const path = tempDir();
   const host = hostFor(path);
   await store.writePageState(path, 'Notes/A.html', RECORD);
 
-  await host.pageState({ op: 'dropDir', name: 'Notes' });
+  await host.blockeditorState({ op: 'dropDir', name: 'Notes' });
 
-  expect(fs.existsSync(upath.join(path, '.hyperclay', 'page-state', 'Notes'))).toBe(false);
+  expect(fs.existsSync(upath.join(path, '.hyperclay', 'blockeditor-state', 'Notes'))).toBe(false);
   expect(await store.readPageState(path, 'Notes/A.html')).toBeNull();
 });
 
-test('pageState refuses an unknown operation', async () => {
+test('blockeditorState refuses an unknown operation', async () => {
   const path = tempDir();
   const host = hostFor(path);
 
-  await expect(host.pageState({ op: 'rename', name: 'A.html', to: 'B.html' })).rejects.toThrow(TypeError);
+  await expect(host.blockeditorState({ op: 'rename', name: 'A.html', to: 'B.html' })).rejects.toThrow(TypeError);
 });

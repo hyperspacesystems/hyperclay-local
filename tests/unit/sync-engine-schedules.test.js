@@ -349,7 +349,7 @@ const SCENARIOS = [
     relocateOnce: [{ id: 50, descendants: [] }]
   }),
   scenario({
-    id: 'page-delete',
+    id: 'blockeditor-delete',
     title: 'a page deleted outside uploads/ is deleted on the server',
     ops: [{ op: 'rm', path: 'work/page.html' }],
     targets: [21],

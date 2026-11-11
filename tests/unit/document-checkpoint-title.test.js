@@ -27,7 +27,7 @@ function requireHelper() {
 const tag = (name, value) =>
   `<script type="application/json" clay="live" merge="${name}">${serializeLive(value)}</script>`;
 const html = (value, extra = '') =>
-  `<!doctype html><html><head><title>Keep this title</title>${extra}</head><body><article data-page data-rev="old">old article</article>${tag('page', value)}</body></html>`;
+  `<!doctype html><html><head><title>Keep this title</title>${extra}</head><body><article data-blockeditor data-rev="old">old article</article>${tag('blockeditor', value)}</body></html>`;
 const createDocument = () => new JSDOM('<!doctype html><html><body></body></html>', {
   runScripts: undefined, resources: undefined,
 }).window.document;

@@ -25,8 +25,8 @@ async function run() {
     rootId: 'root-a', logicalPath: 'doc.html', canonicalPath: file, identity: target.identity,
   }));
   console.log('stores', [...room.stores.keys()]);
-  const edit = (n) => authority.rooms.apply(room, 'c', { name: 'page', n, epoch: room.epoch,
-    pageGeneration: room.pageTransition?.id ?? null, ops: [{ op: 'set', path: ['y', `edit-${n}`], value: fixture.update }] });
+  const edit = (n) => authority.rooms.apply(room, 'c', { name: 'blockeditor', n, epoch: room.epoch,
+    blockeditorGeneration: room.blockeditorTransition?.id ?? null, ops: [{ op: 'set', path: ['y', `edit-${n}`], value: fixture.update }] });
   console.log('edit1', edit(1).error ?? 'ok');
   console.log('checkpoint1', (await checkpoint.attempt(file)).kind);
   console.log('edit2', edit(2).error ?? 'ok');
@@ -34,7 +34,7 @@ async function run() {
   console.log('checkpoint2', JSON.stringify(second));
   console.log('same room?', authority.rooms.get(file) === room);
   console.log('recovered dir?', fs.existsSync(path.join(dir, '.hyperclay', 'recovered')));
-  console.log('file has page tag?', fs.readFileSync(file, 'utf8').includes('merge="page"'));
+  console.log('file has page tag?', fs.readFileSync(file, 'utf8').includes('merge="blockeditor"'));
   fs.rmSync(dir, { recursive: true, force: true });
 }
 run().catch(e => { console.error(e); process.exitCode = 1; });

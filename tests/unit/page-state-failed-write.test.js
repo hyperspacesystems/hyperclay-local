@@ -30,7 +30,7 @@ describe('a page write whose file never lands', () => {
   };
 
   beforeEach(async () => {
-    dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'page-failed-write-')));
+    dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'blockeditor-failed-write-')));
     file = path.join(dir, 'note.html');
     await atomicWriteFile(file, await storePageState(dir, 'note.html', saved.html));
     await createBackup(dir, 'note', splitPage(saved.html).file);
@@ -42,7 +42,7 @@ describe('a page write whose file never lands', () => {
   test('two failed writes leave the file on disk with its own state', async () => {
     await failWrite(aborted.html);
     await failWrite(second.html);
-    expect(await logicalDocument(dir, 'note.html', onDisk)).toMatch(/merge="page"/);
+    expect(await logicalDocument(dir, 'note.html', onDisk)).toMatch(/merge="blockeditor"/);
   });
 
   test('an outside change to the surviving file is never rebased onto the write that failed', async () => {

@@ -264,7 +264,7 @@ function createPresenceRelay({ now = Date.now, newId = randomUUID } = {}) {
     if (editing !== null && typeof editing !== 'string') {
       const checked = validateTarget(editing);
       if (!checked.ok || checked.target === null || checked.target.kind !== 'record') {
-        return { status: 'invalid', reason: checked.ok ? 'page' : checked.reason };
+        return { status: 'invalid', reason: checked.ok ? 'blockeditor' : checked.reason };
       }
     } else if (editing !== null && !EDITING_PATH.test(editing)) {
       return { status: 'invalid', reason: 'path' };

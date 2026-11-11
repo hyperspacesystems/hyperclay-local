@@ -20,7 +20,7 @@ jest.setTimeout(30000);
 
 const ROOT = path.resolve(__dirname, '../..');
 const TEMPLATE = fs.readFileSync(path.join(__dirname, '../fixtures/ypage-template.html'), 'utf8');
-const SEED = JSON.parse(/<script type="application\/json" merge="page" clay="live">(.*?)<\/script>/.exec(TEMPLATE)[1]).y.seed;
+const SEED = JSON.parse(/<script type="application\/json" merge="blockeditor" clay="live">(.*?)<\/script>/.exec(TEMPLATE)[1]).y.seed;
 const CANONICAL = '/tmp/compaction-doc.html';
 const TARGET_ORIGIN = 'http://127.0.0.1:7000';
 const KEY = (n) => `u1a2b3c4d-inst-${n.toString(36)}`;
@@ -65,7 +65,7 @@ async function start({ pageCompaction, compaction = null } = {}) {
   const room = await authority.roomFor(target, async () => target);
   const tabA = { clientId: 'tabA', events: [] };
   const member = authority.registerEditor(target, { clientId: tabA.clientId, send: (name, payload) => tabA.events.push({ name, payload }) });
-  const body = (n) => ({ conn: member.conn, name: 'page', n: n + 1, epoch: room.epoch, compaction: 1, pageGeneration: room.pageTransition?.id ?? null, ops: [set(n)] });
+  const body = (n) => ({ conn: member.conn, name: 'blockeditor', n: n + 1, epoch: room.epoch, compaction: 1, blockeditorGeneration: room.blockeditorTransition?.id ?? null, ops: [set(n)] });
   const post = (n, { clientId = 'tabA' } = {}) => request(server).post('/_/sync/data')
     .set('Origin', origin).set('Sec-Fetch-Site', 'same-origin')
     .query({ 'client-id': clientId })
@@ -92,8 +92,8 @@ describe('page compaction behind the setting', () => {
 
     const state = await h.readState({ compaction: 1 });
     expect(state.status).toBe(200);
-    expect(state.body.stores.page.value.y.seed).toBe(SEED);
-    expect(state.body.stores.page.compaction).toBeUndefined();
+    expect(state.body.stores.blockeditor.value.y.seed).toBe(SEED);
+    expect(state.body.stores.blockeditor.compaction).toBeUndefined();
 
     const admitted = await h.post(1);
     expect(admitted.status).toBe(200);
@@ -113,7 +113,7 @@ describe('page compaction behind the setting', () => {
     expect(refused.body.code).toBe('checkpoint-required');
   });
 
-  test('on: a compactor commit reaches an editor as a data frame, and page-full answers 409', async () => {
+  test('on: a compactor commit reaches an editor as a data frame, and blockeditor-full answers 409', async () => {
     const h = await start({ pageCompaction: true, compaction: { activeBytes: 200, tailFloor: 64 } });
 
     const first = await h.post(0);
@@ -122,14 +122,17 @@ describe('page compaction behind the setting', () => {
 
     await waitFor(() => h.tabA.events.some((event) => event.name === 'data' && event.payload.from === 'compactor'));
     const frame = h.tabA.events.find((event) => event.name === 'data' && event.payload.from === 'compactor').payload;
-    expect(frame).toMatchObject({ epoch: 'e1', name: 'page', from: 'compactor', n: 0 });
+    expect(frame).toMatchObject({ epoch: 'e1', name: 'blockeditor', from: 'compactor', n: 0 });
     expect(frame.seq).toBe(1);
     expect(frame.ops.some((op) => op.op === 'set' && /^c[0-9a-z]{8}-/.test(op.path[1]))).toBe(true);
     expect(frame.receiptGeneration).toBe(0);
+    await waitFor(() => h.tabA.events.some((event) => event.name === 'data-writer' && event.payload.landed && event.payload.landed.blockeditor !== undefined));
+    const writer = h.tabA.events.filter((event) => event.name === 'data-writer').pop().payload;
+    expect(writer.landed).toEqual({ blockeditor: frame.seq });
 
     const full = await h.post(1);
     expect(full.status).toBe(409);
-    expect(full.body.code).toBe('page-full');
+    expect(full.body.code).toBe('blockeditor-full');
   });
 
   test('on: a state read without compaction=1 hides the page store', async () => {
@@ -137,11 +140,11 @@ describe('page compaction behind the setting', () => {
 
     const old = await h.readState();
     expect(old.status).toBe(200);
-    expect(old.body.stores.page).toBeUndefined();
+    expect(old.body.stores.blockeditor).toBeUndefined();
 
     const capable = await h.readState({ compaction: 1 });
-    expect(capable.body.stores.page.value.y.seed).toBe(SEED);
-    expect(capable.body.stores.page.compaction).toMatchObject({ v: 1 });
+    expect(capable.body.stores.blockeditor.value.y.seed).toBe(SEED);
+    expect(capable.body.stores.blockeditor.compaction).toMatchObject({ v: 1 });
   });
 });
 

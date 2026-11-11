@@ -476,7 +476,7 @@ describe('every commit kind reaches the document host', () => {
       rootId: root.id, logicalPath: name, canonicalPath: file, identity: target.identity,
     }));
     const edited = authority.rooms.apply(room, 'editor', {
-      name: 'page', n: 1, epoch: room.epoch, pageGeneration: room.pageTransition?.id ?? null,
+      name: 'blockeditor', n: 1, epoch: room.epoch, blockeditorGeneration: room.blockeditorTransition?.id ?? null,
       ops: [{ op: 'set', path: ['y', 'edit-1'], value: fixture.update }],
     });
     expect(edited.error).toBeUndefined();
@@ -514,7 +514,7 @@ describe('every restructure kind reaches the document host', () => {
     expect(result.path).toBe('renamed.html');
     const [call] = expectHostCall('restructure', (c) => c.request.kind === 'move');
     expect(recorder.requestedPaths(call)).toEqual([path.join(dir, 'page.html'), path.join(dir, 'renamed.html')]);
-    const [state] = expectHostCall('pageState', (c) => c.request.op === 'move');
+    const [state] = expectHostCall('blockeditorState', (c) => c.request.op === 'move');
     expect(state.request).toEqual({ op: 'move', name: 'page.html', to: 'renamed.html' });
     expect(await readPageState(dir, 'page.html')).toBeNull();
     expect(await readPageState(dir, 'renamed.html')).toMatchObject(PAGE_STATE);
@@ -535,7 +535,7 @@ describe('every restructure kind reaches the document host', () => {
     expect(result.path).toBe('Notes/page.html');
     const [call] = expectHostCall('restructure', (c) => c.request.kind === 'move');
     expect(recorder.requestedPaths(call)).toEqual([path.join(dir, 'page.html'), path.join(dir, 'Notes', 'page.html')]);
-    const [state] = expectHostCall('pageState', (c) => c.request.op === 'move');
+    const [state] = expectHostCall('blockeditorState', (c) => c.request.op === 'move');
     expect(state.request).toEqual({ op: 'move', name: 'page.html', to: 'Notes/page.html' });
     expect(await readPageState(dir, 'Notes/page.html')).toMatchObject(PAGE_STATE);
     expectOnlyHostWrites();
@@ -554,7 +554,7 @@ describe('every restructure kind reaches the document host', () => {
     expect(result.path).toBe('Archive');
     const [call] = expectHostCall('restructure', (c) => c.request.kind === 'move');
     expect(recorder.requestedPaths(call)).toEqual([path.join(dir, 'Notes', 'page.html'), path.join(dir, 'Archive', 'page.html')]);
-    const [state] = expectHostCall('pageState', (c) => c.request.op === 'moveDir');
+    const [state] = expectHostCall('blockeditorState', (c) => c.request.op === 'moveDir');
     expect(state.request).toEqual({ op: 'moveDir', name: 'Notes', to: 'Archive' });
     expect(await readPageState(dir, 'Notes/page.html')).toBeNull();
     expect(await readPageState(dir, 'Archive/page.html')).toMatchObject(PAGE_STATE);
@@ -573,7 +573,7 @@ describe('every restructure kind reaches the document host', () => {
 
     expect(result.path).toBe('.trash/page.html');
     expectHostCall('restructure', (c) => c.request.kind === 'trash');
-    const [state] = expectHostCall('pageState', (c) => c.request.op === 'drop');
+    const [state] = expectHostCall('blockeditorState', (c) => c.request.op === 'drop');
     expect(state.request).toEqual({ op: 'drop', name: 'page.html' });
     expect(await readPageState(dir, 'page.html')).toBeNull();
     expect(await fs.readFile(path.join(dir, '.trash', 'page.html'), 'utf8')).toBe(DOC);
@@ -616,7 +616,7 @@ describe('every restructure kind reaches the document host', () => {
     const appDataPath = await makeRoot('doc-write-auto-name-data-');
     const root = { id: 'root-a', kind: 'personal', path: dir, port: 0 };
     const file = path.join(dir, 'untitled.html');
-    await fs.writeFile(file, '<article data-page><h1>First Heading</h1></article>');
+    await fs.writeFile(file, '<article data-blockeditor><h1>First Heading</h1></article>');
     const room = { key: file, nodeId: 'node-1', emptySince: Date.now() };
     const authority = {
       rooms: new Map([[room.key, room]]),
@@ -632,7 +632,7 @@ describe('every restructure kind reaches the document host', () => {
       appDataPath, authority, checkpoint: { dirty: () => false, pending: () => null },
       rootFor: () => root, rename: (rootArg, from, name) => rename(from, name),
     });
-    await namer.record(root, 'untitled.html', 'page');
+    await namer.record(root, 'untitled.html', 'blockeditor');
     expect(namer.entries.size).toBe(1);
 
     recorder.begin(dir);

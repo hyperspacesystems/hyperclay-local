@@ -275,12 +275,16 @@ async function pageStateFetch(url, init, errorPrefix) {
  * A platform without the route answers 404 and a network failure answers
  * nothing at all; both mean "no record", never a failed content sync.
  *
+ * With `strict`, a network failure throws instead, so a caller can tell "no record"
+ * from "could not ask".
+ *
  * @param {Object} conn
  * @param {number} nodeId
+ * @param {{strict?: boolean}} [options]
  * @returns {Promise<{v:number, rev:string, tag:string}|null>}
  */
-async function getPageState(conn, nodeId) {
-  const url = syncUrl(conn, `/nodes/${nodeId}/page-state`);
+async function getPageState(conn, nodeId, { strict = false } = {}) {
+  const url = syncUrl(conn, `/nodes/${nodeId}/blockeditor-state`);
   console.log(`[API] Reading page state for node ${nodeId}`);
 
   let data;
@@ -289,7 +293,7 @@ async function getPageState(conn, nodeId) {
       headers: authHeaders(conn)
     }, `Read page state for node ${nodeId} failed`);
   } catch (error) {
-    if (error.statusCode === 404 || error.statusCode === undefined) return null;
+    if (error.statusCode === 404 || (error.statusCode === undefined && !strict)) return null;
     throw error;
   }
 
@@ -307,7 +311,7 @@ async function getPageState(conn, nodeId) {
  * @returns {Promise<boolean>}
  */
 async function putPageState(conn, nodeId, record) {
-  const url = syncUrl(conn, `/nodes/${nodeId}/page-state`);
+  const url = syncUrl(conn, `/nodes/${nodeId}/blockeditor-state`);
   console.log(`[API] Writing page state for node ${nodeId}`);
 
   try {

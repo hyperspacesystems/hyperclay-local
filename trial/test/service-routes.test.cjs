@@ -174,13 +174,13 @@ test('the JS service answers Local\'s routes, Go\'s notices and the supervisor, 
     const read = await request(`${rootAUrl}/_/api/page.html`);
     assert.equal(read.status, 200, read.body);
     assert.ok(read.headers.etag, JSON.stringify(read.headers));
-    assert.ok(read.headers['page-revision'], JSON.stringify(read.headers));
+    assert.ok(read.headers['blockeditor-revision'], JSON.stringify(read.headers));
     assert.equal(answered.some((call) => call.method === 'GET' && call.url.startsWith('/_/api/page.html')), true, JSON.stringify(answered));
-    const revision = read.headers['page-revision'];
+    const revision = read.headers['blockeditor-revision'];
 
     const write = await request(`${rootAUrl}/_/api/page.html`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'If-Match': read.headers.etag, 'Page-If-Match': revision },
+      headers: { 'content-type': 'application/json', 'If-Match': read.headers.etag, 'Blockeditor-If-Match': revision },
       body: JSON.stringify({ body: 'go-m9c-api' }),
     });
     assert.equal(write.status, 200, write.body);
@@ -201,7 +201,7 @@ test('the JS service answers Local\'s routes, Go\'s notices and the supervisor, 
     assert.equal(fresh.status, 200, fresh.body);
     const stale = await request(`${rootAUrl}/_/api/page.html`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'If-Match': fresh.headers.etag, 'Page-If-Match': revision },
+      headers: { 'content-type': 'application/json', 'If-Match': fresh.headers.etag, 'Blockeditor-If-Match': revision },
       body: JSON.stringify({ body: 'go-m9c-api' }),
     });
     assert.equal(stale.status, 409, stale.body);
@@ -244,7 +244,7 @@ test('the JS service answers Local\'s routes, Go\'s notices and the supervisor, 
       rootId: rootAId, logicalPath: 'page.html', canonicalPath: pagePath, identity: target.identity,
     }));
     const edited = service.authority.rooms.apply(room, 'editor', {
-      name: 'page', n: 1, epoch: room.epoch, pageGeneration: room.pageTransition?.id ?? null,
+      name: 'blockeditor', n: 1, epoch: room.epoch, blockeditorGeneration: room.blockeditorTransition?.id ?? null,
       compaction: 1,
       ops: [{ op: 'set', path: ['y', 'uflush-1-x'], value: FIXTURE.update }],
     });

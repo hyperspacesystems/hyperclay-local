@@ -168,7 +168,7 @@ function stop() {
 // A real host, with its publishing methods recorded. The implementation is the
 // host's own: the recorder only watches what it was asked to do.
 function spy(host) {
-  for (const method of ['commit', 'restructure', 'checkpoint', 'pageState']) {
+  for (const method of ['commit', 'restructure', 'checkpoint', 'blockeditorState']) {
     const original = host[method];
     if (typeof original !== 'function') continue;
     host[method] = async function recordedHostCall(...args) {

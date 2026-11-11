@@ -121,7 +121,7 @@ test('admitSave releases its reservation when the admission throws after reservi
   const filePath = upath.join(dir, 'a.html');
   const released = [];
   const rooms = {
-    get: () => ({ nodeId: 'node-1', pageTransition: { format: 'yjs' }, stores: new Map([['page', true]]) }),
+    get: () => ({ nodeId: 'node-1', blockeditorTransition: { format: 'yjs' }, stores: new Map([['blockeditor', true]]) }),
     reservePageReplacement: () => 'tok',
     releasePage: (token) => { released.push(token); },
     checkPersistent: () => { throw new Error('persistent reservation is stale'); },

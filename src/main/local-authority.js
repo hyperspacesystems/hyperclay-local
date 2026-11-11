@@ -895,7 +895,7 @@ function createLocalAuthority({ rooms, withDocument, readSaved, publishRecovered
 
   // The floor of the bytes this authority confirmed for one canonical file.
   function pageFormatFloorOf(canonicalPath) {
-    return core.pageFormatFloor(confirmedDocument(canonicalPath) ?? '');
+    return core.blockeditorFormatFloor(confirmedDocument(canonicalPath) ?? '');
   }
 
   function hasParticipatingEditors(canonicalPath) {
@@ -945,9 +945,9 @@ function createLocalAuthority({ rooms, withDocument, readSaved, publishRecovered
       n: 0,
       receiptGeneration: room.receiptGeneration ?? 0,
     };
-    if (answer.pageGeneration !== undefined) frame.pageGeneration = answer.pageGeneration;
+    if (answer.blockeditorGeneration !== undefined) frame.blockeditorGeneration = answer.blockeditorGeneration;
     const sent = publish(room.key, 'data', frame);
-    if (answer.landed === answer.seq) publish(room.key, 'data-writer', { epoch: room.epoch, writer: room.writer, landed: { page: answer.seq } });
+    if (answer.landed === answer.seq) publish(room.key, 'data-writer', { epoch: room.epoch, writer: room.writer, landed: { [answer.name]: answer.seq } });
     return sent;
   }
 
@@ -1177,7 +1177,7 @@ function createLocalAuthority({ rooms, withDocument, readSaved, publishRecovered
       // An outside article the room has not merged is no base to render the
       // room over: recovered copies keep the last one it was built on until a
       // write no longer needs merging.
-      const unmerged = rooms.get(canonicalPath) && next.includes('data-page') && needsAdoption(next);
+      const unmerged = rooms.get(canonicalPath) && next.includes('data-blockeditor') && needsAdoption(next);
       record.recoveryBase = unmerged ? (record.recoveryBase ?? record.baseline) : null;
       record.baseline = next;
     }

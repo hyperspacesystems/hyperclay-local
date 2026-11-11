@@ -82,7 +82,7 @@ const {
 
 const TEMPLATE = fsSync.readFileSync(nodePath.join(__dirname, '../fixtures/ypage-template.html'), 'utf8');
 const { state: TEMPLATE_STATE } = splitPage(TEMPLATE);
-const TAG = 'merge="page"';
+const TAG = 'merge="blockeditor"';
 
 let root;
 let engine;
@@ -101,7 +101,7 @@ async function writePage(rel) {
 beforeEach(async () => {
   jest.clearAllMocks();
 
-  root = upath.resolve(await fsp.realpath(await fsp.mkdtemp(nodePath.join(os.tmpdir(), 'page-state-sync-'))));
+  root = upath.resolve(await fsp.realpath(await fsp.mkdtemp(nodePath.join(os.tmpdir(), 'blockeditor-state-sync-'))));
   const metaDir = nodePath.join(root, '.meta');
   await fsp.mkdir(metaDir);
 
@@ -422,7 +422,7 @@ describe('an upload sends a record only for the file it was written from', () =>
 });
 
 describe('the sync engine writes page state through the document host', () => {
-  const rejectingHost = () => ({ pageState: jest.fn(async () => { throw new Error('sidecar refused'); }) });
+  const rejectingHost = () => ({ blockeditorState: jest.fn(async () => { throw new Error('sidecar refused'); }) });
 
   beforeEach(() => {
     engine.documentHost = createRootDocumentHost({

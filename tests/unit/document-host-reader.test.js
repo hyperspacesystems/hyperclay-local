@@ -102,7 +102,7 @@ test("the replace lane's current read comes from the reader", async () => {
   expect(admitted.refusal).toBeNull();
   expect(recorded).toHaveLength(1);
   expect(recorded[0]).toBe((await logicalBytes(root, NAME, fs.readFileSync(path.join(root, NAME)))).toString('utf8'));
-  expect(recorded[0]).toContain('merge="page"');
+  expect(recorded[0]).toContain('merge="blockeditor"');
   expect(fs.readdirSync(empty)).toEqual([]);
 });
 

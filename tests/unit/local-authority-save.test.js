@@ -53,7 +53,7 @@ const { documentEtag } = require('../../src/main/spec-wire');
 const { pageFixture } = require('../helpers/page-fixture');
 
 const DOC = (value) => `<!DOCTYPE html><html><body><script type="application/json" merge="count" clay="live">${JSON.stringify({ n: value })}</script></body></html>`;
-const PAGE = (value) => `<!DOCTYPE html><html><body><script type="application/json" merge="page" clay="live">${JSON.stringify({ v: 1, y: { doc: value } })}</script></body></html>`;
+const PAGE = (value) => `<!DOCTYPE html><html><body><script type="application/json" merge="blockeditor" clay="live">${JSON.stringify({ v: 1, y: { doc: value } })}</script></body></html>`;
 const PAGE_VALUE = pageFixture().update;
 
 const dirs = [];
@@ -232,14 +232,14 @@ describe('B3a: the browser save through the shared boundary', () => {
 
     const res = await save(a.server, 'index.html', DOC(1), {
       'If-Match': documentEtag(before),
-      'Page-Conversion': `v1; source=file; base=${'a'.repeat(64)}`
+      'Blockeditor-Conversion': `v1; source=file; base=${'a'.repeat(64)}`
     });
 
     expect(res.status).toBe(409);
     expect(res.body).toEqual({
       msg: 'Page conversion refused: invalid-source',
       msgType: 'error',
-      code: 'page-conversion-refused',
+      code: 'blockeditor-conversion-refused',
       reason: 'invalid-source'
     });
     expect(await fsp.readFile(indexPath)).toEqual(before);
@@ -249,8 +249,8 @@ describe('B3a: the browser save through the shared boundary', () => {
   });
 
   for (const [reason, code] of [
-    ['seed-lineage', 'page-lineage-stale'],
-    ['nothing-to-write', 'page-nothing-to-write']
+    ['seed-lineage', 'blockeditor-lineage-stale'],
+    ['nothing-to-write', 'blockeditor-nothing-to-write']
   ]) {
     test(`a ${reason} refusal writes nothing and answers 409 ${code}`, async () => {
       const h = harness();
@@ -306,8 +306,8 @@ describe('B3a: the browser save through the shared boundary', () => {
     // The reservation was held across the backup and the write, then committed
     // into the room this document already had.
     const committed = h.core.get(indexPath);
-    expect(committed.pageTransition.format).toBe('yjs');
-    expect(h.core.state(committed).stores.page.value).toEqual({ v: 1, y: { doc: PAGE_VALUE } });
+    expect(committed.blockeditorTransition.format).toBe('yjs');
+    expect(h.core.state(committed).stores.blockeditor.value).toEqual({ v: 1, y: { doc: PAGE_VALUE } });
     expect(h.fileWrittenCalls).toEqual([{ key: indexPath, html: written }]);
     expect(savedBroadcasts()).toHaveLength(1);
   });
@@ -325,7 +325,7 @@ describe('B3a: the browser save through the shared boundary', () => {
     expect(res.body).toEqual({
       msg: 'Page conversion refused: file-changed',
       msgType: 'error',
-      code: 'page-condition-required',
+      code: 'blockeditor-condition-required',
       reason: 'file-changed'
     });
     expect(await fsp.readFile(indexPath)).toEqual(before);

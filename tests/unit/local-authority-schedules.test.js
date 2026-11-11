@@ -63,8 +63,8 @@ const DOC = (value) => `<!DOCTYPE html><html><body>${tag('count', { n: value })}
 const { pageFixture } = require('../helpers/page-fixture');
 const BIG_PAGE = pageFixture('x'.repeat(8000)).update;
 const SMALL_PAGE = pageFixture('ok').update;
-const PAGE = (value) => `<!DOCTYPE html><html><body>${tag('page', { v: 1, y: { doc: value } })}</body></html>`;
-const HYBRID = (blocks) => `<!DOCTYPE html><html><body>${tag('page', { blocks })}</body></html>`;
+const PAGE = (value) => `<!DOCTYPE html><html><body>${tag('blockeditor', { v: 1, y: { doc: value } })}</body></html>`;
+const HYBRID = (blocks) => `<!DOCTYPE html><html><body>${tag('blockeditor', { blocks })}</body></html>`;
 const STYLED = (value) => '<!DOCTYPE html><html><head>'
   + '<link data-tailwind rel="stylesheet" href="/tailwindcss/styled.css">'
   + `</head><body>${tag('count', { n: value })}</body></html>`;
@@ -449,21 +449,21 @@ describe('L0.fixtures: the write-ordering schedules through their real callers',
 
     const res = await save(a.server, 'page.html', PAGE(BIG_PAGE), {
       'If-Match': documentEtag(before),
-      'Page-Conversion': `v1; source=room; base=${baseline}; epoch=${room.epoch}`
+      'Blockeditor-Conversion': `v1; source=room; base=${baseline}; epoch=${room.epoch}`
     });
 
     expect(res.status).toBe(503);
     expect(res.body).toEqual({
       msg: 'Page conversion refused: budget',
       msgType: 'error',
-      code: 'page-capacity',
+      code: 'blockeditor-capacity',
       reason: 'budget'
     });
     expect(res.headers['retry-after']).toBe('60');
     expect(await fsp.readFile(file)).toEqual(before);
     expect(room.seq).toBe(0);
-    expect(room.pageTransition).toBeUndefined();
-    expect(h.core.state(room).stores.page.value).toEqual({ blocks: { root: { id: 'r' } } });
+    expect(room.blockeditorTransition).toBeUndefined();
+    expect(h.core.state(room).stores.blockeditor.value).toEqual({ blocks: { root: { id: 'r' } } });
     expect(h.core.pageReserved(file)).toBe(false);
     await expect(fsp.access(path.join(h.dir, '.hyperclay', 'versions'))).rejects.toThrow();
     expect(h.fileWrittenCalls).toHaveLength(0);
@@ -472,7 +472,7 @@ describe('L0.fixtures: the write-ordering schedules through their real callers',
     // The same path still accepts a page that does fit its budget.
     const fits = await save(a.server, 'page.html', PAGE(SMALL_PAGE), {
       'If-Match': documentEtag(before),
-      'Page-Conversion': `v1; source=room; base=${baseline}; epoch=${room.epoch}`
+      'Blockeditor-Conversion': `v1; source=room; base=${baseline}; epoch=${room.epoch}`
     });
     expect(fits.status).toBe(200);
     expect(fs.readFileSync(file, 'utf8')).toContain(`"${SMALL_PAGE}"`);
@@ -514,7 +514,7 @@ describe('L0.fixtures: the write-ordering schedules through their real callers',
     expect(res.body.msgType).toBe('error');
     expect(await fsp.readFile(file)).toEqual(before);
     expect(room.seq).toBe(0);
-    expect(room.pageTransition).toBeUndefined();
+    expect(room.blockeditorTransition).toBeUndefined();
     expect(h.core.state(room).stores.count.value).toEqual({ n: 0 });
     expect(h.core.pageReserved(file)).toBe(false);
     expect(h.fileWrittenCalls).toHaveLength(0);
@@ -527,8 +527,8 @@ describe('L0.fixtures: the write-ordering schedules through their real callers',
     expect(retry.status).toBe(200);
     expect(fs.readFileSync(file, 'utf8')).toContain(SMALL_PAGE);
     expect(room.seq).toBe(1);
-    expect(room.pageTransition.format).toBe('yjs');
-    expect(h.core.state(room).stores.page.value).toEqual({ v: 1, y: { doc: SMALL_PAGE } });
+    expect(room.blockeditorTransition.format).toBe('yjs');
+    expect(h.core.state(room).stores.blockeditor.value).toEqual({ v: 1, y: { doc: SMALL_PAGE } });
     expect(h.core.pageReserved(file)).toBe(false);
     expect(h.fileWrittenCalls).toHaveLength(1);
     expect(savedBroadcasts()).toHaveLength(1);

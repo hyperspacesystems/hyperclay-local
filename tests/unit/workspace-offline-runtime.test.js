@@ -97,7 +97,7 @@ test('a loader query is answered with the bundled clay.js', async () => {
 
 test('every clayjs.com URL in the five templates resolves to a bundled asset', async () => {
   const urls = new Set();
-  for (const id of ['page', 'blank', 'devlog', 'kanban', 'landing']) {
+  for (const id of ['blockeditor', 'blank', 'devlog', 'kanban', 'landing']) {
     const html = await fs.readFile(path.join(templates, `${id}.html`), 'utf8');
     for (const match of html.matchAll(/https:\/\/clayjs\.com\/v1\/[^"'\s)<>]+/g)) urls.add(match[0]);
   }

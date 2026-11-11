@@ -20,7 +20,7 @@ function nameFor(base, number) {
 }
 
 function headingOf(html) {
-  const heading = cheerio.load(html)('article[data-page] h1').first().clone();
+  const heading = cheerio.load(html)('article[data-blockeditor] h1').first().clone();
   heading.find('script, style').remove();
   return heading.text().replace(/\s+/gu, ' ').trim();
 }
@@ -75,7 +75,7 @@ function createAutoNamer({ appDataPath, authority, checkpoint, rootFor, rename, 
   };
 
   async function record(root, rel, template) {
-    if (template !== 'page' || !UNTITLED.test(path.basename(rel))) return;
+    if (template !== 'blockeditor' || !UNTITLED.test(path.basename(rel))) return;
     const stat = await statFor(root, rel);
     const canonical = await fs.realpath(path.join(root.path, rel));
     const authorityIdentity = authority?.identityAt(canonical);

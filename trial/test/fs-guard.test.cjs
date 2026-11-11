@@ -62,8 +62,8 @@ async function main() {
   fs.renameSync(p('docs/moved.txt'), p('.trash/moved.txt'));
   fs.writeFileSync(p('docs/unlinked.txt'), 'unlinked');
   fs.unlinkSync(p('docs/unlinked.txt'));
-  fs.mkdirSync(p('.hyperclay/page-state'), { recursive: true });
-  fs.writeFileSync(p('.hyperclay/page-state/app.json'), '{}');
+  fs.mkdirSync(p('.hyperclay/blockeditor-state'), { recursive: true });
+  fs.writeFileSync(p('.hyperclay/blockeditor-state/app.json'), '{}');
   fs.mkdirSync(p('.hyperclay/conflicts'), { recursive: true });
   fs.writeFileSync(p('.hyperclay/conflicts/app.remote.html'), 'conflict');
   fs.writeFileSync(p('.hyperclay/sync-root.json'), '{}');
@@ -118,11 +118,11 @@ test('records a planted write in every class and lets each write through', () =>
   assert.equal(renamed.class, 'document');
   assert.ok(find(report.forbidden, 'renameSync-source', 'docs/moved.txt'), 'rename source should be recorded as a removal');
 
-  const pageState = find(report.forbidden, 'writeFileSync', '.hyperclay/page-state/app.json');
-  assert.ok(pageState, 'page-state write should be recorded');
-  assert.equal(pageState.class, 'go-storage');
-  const pageStateDir = find(report.forbidden, 'mkdirSync', '.hyperclay/page-state');
-  assert.ok(pageStateDir, 'page-state mkdir should be recorded');
+  const blockeditorState = find(report.forbidden, 'writeFileSync', '.hyperclay/blockeditor-state/app.json');
+  assert.ok(blockeditorState, 'blockeditor-state write should be recorded');
+  assert.equal(blockeditorState.class, 'go-storage');
+  const pageStateDir = find(report.forbidden, 'mkdirSync', '.hyperclay/blockeditor-state');
+  assert.ok(pageStateDir, 'blockeditor-state mkdir should be recorded');
   assert.equal(pageStateDir.class, 'go-storage');
 
   assert.ok(find(report.allowed, 'writeFileSync', '.hyperclay/conflicts/app.remote.html'), 'conflict write is allowed');
@@ -146,7 +146,7 @@ test('records a planted write in every class and lets each write through', () =>
   assert.equal(fs.readFileSync(path.join(root, 'docs/stream.txt'), 'utf8'), 'stream');
   assert.equal(fs.readFileSync(path.join(root, '.trash/moved.txt'), 'utf8'), 'moved');
   assert.equal(fs.existsSync(path.join(root, 'docs/unlinked.txt')), false);
-  assert.equal(fs.readFileSync(path.join(root, '.hyperclay/page-state/app.json'), 'utf8'), '{}');
+  assert.equal(fs.readFileSync(path.join(root, '.hyperclay/blockeditor-state/app.json'), 'utf8'), '{}');
   assert.equal(fs.statSync(path.join(root, 'fresh-dir')).isDirectory(), true);
   assert.equal(fs.readFileSync(path.join(outside, 'outside.txt'), 'utf8'), 'outside');
 });

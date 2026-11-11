@@ -14,7 +14,7 @@ describe('page state sidecar store', () => {
   let dir;
 
   beforeEach(async () => {
-    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'page-state-'));
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'blockeditor-state-'));
   });
 
   afterEach(async () => {
@@ -23,7 +23,7 @@ describe('page state sidecar store', () => {
 
   test('a file write that never lands leaves the file on disk with its own state', async () => {
     const { storePageState, logicalDocument } = require('../../src/main/page-state-store');
-    const page = (rev, text) => `<script type="application/json" merge="page" clay="live">{"v":1,"g":0,"y":{"seed":"${text}"}}</script><article data-page="1" data-rev="${rev}"><p>${text}</p></article>`;
+    const page = (rev, text) => `<script type="application/json" merge="blockeditor" clay="live">{"v":1,"g":0,"y":{"seed":"${text}"}}</script><article data-blockeditor="1" data-rev="${rev}"><p>${text}</p></article>`;
     const oldFile = await storePageState(dir, 'note.html', page('rev-old', 'old'));
     await storePageState(dir, 'note.html', page('rev-new', 'new'));
     await expect(readPageState(dir, 'note.html')).resolves.toMatchObject({ rev: 'rev-new' });
@@ -38,25 +38,25 @@ describe('page state sidecar store', () => {
   });
 
   test('write then read returns the record beside the served file', async () => {
-    await writePageState(dir, 'notes.html', { rev: 'r1', tag: '<script merge="page"></script>' });
+    await writePageState(dir, 'notes.html', { rev: 'r1', tag: '<script merge="blockeditor"></script>' });
     await expect(readPageState(dir, 'notes.html')).resolves.toEqual({
       v: 1,
       rev: 'r1',
-      tag: '<script merge="page"></script>'
+      tag: '<script merge="blockeditor"></script>'
     });
-    const file = path.join(dir, '.hyperclay', 'page-state', 'notes.html.json');
+    const file = path.join(dir, '.hyperclay', 'blockeditor-state', 'notes.html.json');
     const text = await fs.readFile(file, 'utf8');
     expect(JSON.parse(text)).toEqual({
       v: 1,
       rev: 'r1',
-      tag: '<script merge="page"></script>',
+      tag: '<script merge="blockeditor"></script>',
       generation: expect.stringMatching(/^[0-9a-f]{32}$/)
     });
   });
 
   test('a nested name keeps its subdirectories', async () => {
     await writePageState(dir, 'a/b/c.htmlclay', { rev: 'r2', tag: 't' });
-    const file = path.join(dir, '.hyperclay', 'page-state', 'a', 'b', 'c.htmlclay.json');
+    const file = path.join(dir, '.hyperclay', 'blockeditor-state', 'a', 'b', 'c.htmlclay.json');
     const stored = JSON.parse(await fs.readFile(file, 'utf8'));
     expect(stored).toEqual({ v: 1, rev: 'r2', tag: 't', generation: expect.stringMatching(/^[0-9a-f]{32}$/) });
   });
@@ -100,7 +100,7 @@ describe('page state sidecar store', () => {
   });
 
   test('an old-format sidecar is read and moved to the name that keeps the extension', async () => {
-    const legacy = path.join(dir, '.hyperclay', 'page-state', 'notes.json');
+    const legacy = path.join(dir, '.hyperclay', 'blockeditor-state', 'notes.json');
     await fs.mkdir(path.dirname(legacy), { recursive: true });
     await fs.writeFile(legacy, JSON.stringify({ v: 1, rev: 'r1', tag: 't' }));
 
@@ -112,7 +112,7 @@ describe('page state sidecar store', () => {
   });
 
   test('an old-format sidecar is left alone while both extensions are beside it', async () => {
-    const legacy = path.join(dir, '.hyperclay', 'page-state', 'notes.json');
+    const legacy = path.join(dir, '.hyperclay', 'blockeditor-state', 'notes.json');
     await fs.mkdir(path.dirname(legacy), { recursive: true });
     await fs.writeFile(legacy, JSON.stringify({ v: 1, rev: 'r1', tag: 't' }));
     await fs.writeFile(path.join(dir, 'notes.html'), '<html><body>one</body></html>');
@@ -123,7 +123,7 @@ describe('page state sidecar store', () => {
     await expect(fs.access(legacy)).resolves.toBeUndefined();
   });
 
-  test('a name that leaves the page-state folder throws', () => {
+  test('a name that leaves the blockeditor-state folder throws', () => {
     expect(() => pageStatePath(dir, '../escape.html')).toThrow('Page state path escapes base directory');
     expect(() => pageStatePath(dir, '../guard/notes.html')).toThrow('Page state path escapes base directory');
     expect(() => pageStatePath(dir, '../../../escape.html')).toThrow('Page state path escapes base directory');

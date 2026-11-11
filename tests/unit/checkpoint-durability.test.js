@@ -134,7 +134,7 @@ describe('a live-room checkpoint is only reported done once its bytes are durabl
       rootId: 'root-a', logicalPath: NAME, canonicalPath: filePath(), identity: target.identity,
     }));
     const edited = authority.rooms.apply(room, 'editor', {
-      name: 'page', n: 1, epoch: room.epoch, pageGeneration: room.pageTransition?.id ?? null,
+      name: 'blockeditor', n: 1, epoch: room.epoch, blockeditorGeneration: room.blockeditorTransition?.id ?? null,
       ops: [{ op: 'set', path: ['y', 'edit-1'], value: FIXTURE.update }],
     });
     expect(edited.error).toBeUndefined();
@@ -173,7 +173,7 @@ describe('a live-room checkpoint is only reported done once its bytes are durabl
       rootId: 'root-a', logicalPath: NAME, canonicalPath: filePath(), identity: target.identity,
     }));
     const edited = authority.rooms.apply(room, 'editor', {
-      name: 'page', n: 1, epoch: room.epoch, pageGeneration: room.pageTransition?.id ?? null,
+      name: 'blockeditor', n: 1, epoch: room.epoch, blockeditorGeneration: room.blockeditorTransition?.id ?? null,
       ops: [{ op: 'set', path: ['y', 'edit-1'], value: FIXTURE.update }],
     });
     expect(edited.error).toBeUndefined();

@@ -41,7 +41,7 @@ test('the synthetic root is deterministic and carries only the golden roots and 
     'index.html',
     'serve/index.html',
     'api/list.html',
-    '.hyperclay/page-state/meta/paged.html.json',
+    '.hyperclay/blockeditor-state/meta/paged.html.json',
     'uploads/img.png',
     'uploads/café-notes.txt',
   ]) {

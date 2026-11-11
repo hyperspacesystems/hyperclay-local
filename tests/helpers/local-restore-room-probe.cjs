@@ -26,16 +26,16 @@ async function run() {
     const origin = `http://127.0.0.1:${server.server.address().port}`;
     const target = authority.bindTarget({ rootId: root.id, logicalPath: 'A.html', canonicalPath: file, origin });
     const room = await authority.roomFor(target, () => ({ canonicalPath: file, identity: target.identity }));
-    authority.rooms.apply(room, 'editor', { name: 'page', n: 1, epoch: room.epoch,
-      pageGeneration: room.pageTransition?.id ?? null,
+    authority.rooms.apply(room, 'editor', { name: 'blockeditor', n: 1, epoch: room.epoch,
+      blockeditorGeneration: room.blockeditorTransition?.id ?? null,
       ops: [{ op: 'set', path: ['y', 'edit-1'], value: page.update }] });
     assert.equal(authority.roomIsDirty(room), true);
     const safetyBackup = checkpoint.safetyBackup.bind(checkpoint);
     checkpoint.safetyBackup = async (...args) => {
-      const concurrent = authority.rooms.apply(room, 'editor', { name: 'page', n: 2, epoch: room.epoch,
-        pageGeneration: room.pageTransition?.id ?? null,
+      const concurrent = authority.rooms.apply(room, 'editor', { name: 'blockeditor', n: 2, epoch: room.epoch,
+        blockeditorGeneration: room.blockeditorTransition?.id ?? null,
         ops: [{ op: 'set', path: ['y', 'edit-2'], value: page.update }] });
-      assert.equal(concurrent.error, 'page-converting');
+      assert.equal(concurrent.error, 'blockeditor-converting');
       return safetyBackup(...args);
     };
     const restored = await fetch(`${origin}/_/restore/A.html/recovered-${recovered.filename}`, {

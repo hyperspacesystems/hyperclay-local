@@ -14,7 +14,7 @@
 const CLIENT_ID = /^[A-Za-z0-9_-]{1,64}$/;
 const SINCE = /^([A-Za-z0-9-]{1,64}):(0|[1-9]\d{0,11})$/;
 
-// The hosted map. `checkpointing` and `page-capacity` are not in the hosted
+// The hosted map. `checkpointing` and `blockeditor-capacity` are not in the hosted
 // ERROR_STATUS table yet but the binding handoff names both: 503 with Retry-After 1.
 const CORE_ERROR_STATUS = {
   'bad-frame': 400,
@@ -22,15 +22,15 @@ const CORE_ERROR_STATUS = {
   'too-large': 413,
   'bad-op': 422,
   'receipt-expired': 409,
-  'page-generation': 409,
-  'page-format': 409,
-  'page-format-upgrade-required': 409,
-  'page-conversion-required': 409,
-  'page-converting': 503,
+  'blockeditor-generation': 409,
+  'blockeditor-format': 409,
+  'blockeditor-format-upgrade-required': 409,
+  'blockeditor-conversion-required': 409,
+  'blockeditor-converting': 503,
   checkpointing: 503,
-  'page-capacity': 503,
+  'blockeditor-capacity': 503,
 };
-const RETRY_AFTER_ONE = new Set(['page-converting', 'checkpointing', 'page-capacity', 'not-connected', 'rate-limited']);
+const RETRY_AFTER_ONE = new Set(['blockeditor-converting', 'checkpointing', 'blockeditor-capacity', 'not-connected', 'rate-limited']);
 const STATUS_CODE = { 400: 'invalid-request', 401: 'forbidden', 403: 'forbidden', 404: 'not-found', 413: 'too-large' };
 const MESSAGE = {
   'bad-frame': 'Live update refused: bad-frame.',
@@ -38,13 +38,13 @@ const MESSAGE = {
   'too-large': 'Live update refused: too-large.',
   'bad-op': 'Live update refused: bad-op.',
   'receipt-expired': 'Live update refused: receipt-expired.',
-  'page-generation': 'Live update refused: page-generation.',
-  'page-format': 'Live update refused: page-format.',
-  'page-format-upgrade-required': 'This document uses a newer page format; update the editor to keep writing.',
-  'page-conversion-required': 'Live update refused: page-conversion-required.',
-  'page-converting': 'This document is being converted.',
+  'blockeditor-generation': 'Live update refused: blockeditor-generation.',
+  'blockeditor-format': 'Live update refused: blockeditor-format.',
+  'blockeditor-format-upgrade-required': 'This document uses a newer page format; update the editor to keep writing.',
+  'blockeditor-conversion-required': 'Live update refused: blockeditor-conversion-required.',
+  'blockeditor-converting': 'This document is being converted.',
   checkpointing: 'This document is being saved. Try again shortly.',
-  'page-capacity': 'Too many page conversions are open right now.',
+  'blockeditor-capacity': 'Too many page conversions are open right now.',
   'not-connected': "This tab is not on the document's live stream.",
   'rate-limited': 'Too many live updates. Slow down.',
   busy: 'Too many live documents are open right now.',
@@ -164,10 +164,10 @@ function createLocalLiveData({ authority, resolveTarget } = {}) {
       const member = authority.currentEditor(target, clientId, body.conn);
       if (!member) return fail(res, 503, 'not-connected', MESSAGE['not-connected'], 1);
       const { formatCapability } = require('@panphora/clayjs/server/rooms');
-      const capability = formatCapability(req.get('X-Clay-Page-Format'));
+      const capability = formatCapability(req.get('X-Clay-Blockeditor-Format'));
       authority.notePageFormat(member, capability);
       if (capability < authority.pageFormatFloorOf(target.canonicalPath)) {
-        return fail(res, 409, 'page-format-upgrade-required', MESSAGE['page-format-upgrade-required']);
+        return fail(res, 409, 'blockeditor-format-upgrade-required', MESSAGE['blockeditor-format-upgrade-required']);
       }
       const connected = authority.connectedIds(target.canonicalPath);
       authority.markParticipating(member);
@@ -200,7 +200,7 @@ function createLocalLiveData({ authority, resolveTarget } = {}) {
         n: body.n,
       };
       if (result.checkpoint) frame.checkpoint = true;
-      if (result.pageGeneration !== undefined) frame.pageGeneration = result.pageGeneration;
+      if (result.blockeditorGeneration !== undefined) frame.blockeditorGeneration = result.blockeditorGeneration;
       if (result.receiptGeneration !== undefined) frame.receiptGeneration = result.receiptGeneration;
       authority.publish(target.canonicalPath, 'data', frame);
       if (result.writer !== writerBefore) {
@@ -242,9 +242,9 @@ function createLocalLiveData({ authority, resolveTarget } = {}) {
       if (!authority.isCurrentTarget(target)) return failWith(res, NOT_FOUND);
 
       const { formatCapability } = require('@panphora/clayjs/server/rooms');
-      const capability = formatCapability(req.get('X-Clay-Page-Format'));
+      const capability = formatCapability(req.get('X-Clay-Blockeditor-Format'));
       if (capability < authority.pageFormatFloorOf(target.canonicalPath)) {
-        return fail(res, 409, 'page-format-upgrade-required', MESSAGE['page-format-upgrade-required']);
+        return fail(res, 409, 'blockeditor-format-upgrade-required', MESSAGE['blockeditor-format-upgrade-required']);
       }
 
       // The newest still-current connection for this exact proof, chosen after

@@ -316,9 +316,9 @@ function createGoDocumentHost({ ctx, checkpointClaim = serviceMode ? serviceMode
     return result;
   }
 
-  async function pageState({ op, name, to = null, record = null } = {}) {
+  async function blockeditorState({ op, name, to = null, record = null } = {}) {
     const opId = randomBytes(16).toString('hex');
-    await request('POST', '/v1/page-state', {
+    await request('POST', '/v1/blockeditor-state', {
       body: { opId, root: rootId(), op, name, to, record },
       opId,
     });
@@ -496,7 +496,7 @@ function createGoDocumentHost({ ctx, checkpointClaim = serviceMode ? serviceMode
   }
 
   return {
-    commit, read, restructure, checkpoint, events, pageState, takeSnapshot, isGoDocumentHost: true,
+    commit, read, restructure, checkpoint, events, blockeditorState, takeSnapshot, isGoDocumentHost: true,
     releasesBoundary: Boolean(serviceMode),
   };
 }

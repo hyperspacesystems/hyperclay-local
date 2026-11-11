@@ -12,7 +12,7 @@ const rawOpen = fs.promises.open;
 const ROOTS_ENV = 'FS_GUARD_ROOTS';
 const OUT_ENV = 'FS_GUARD_OUT';
 
-const GO_STORAGE_DIRS = ['versions', 'recovered', 'page-state', 'guard', 'api-v2', 'tailwindcss'];
+const GO_STORAGE_DIRS = ['versions', 'recovered', 'blockeditor-state', 'guard', 'api-v2', 'tailwindcss'];
 
 const forbidden = [];
 const allowed = [];

@@ -1,10 +1,10 @@
 /**
- * page-tool helper — the built-in handler that makes a tool for a Block-based
+ * blockeditor-tool helper — the built-in handler that makes a tool for a Block-based
  * document with the person's own `claude` or `codex`.
  *
- * Served as the named helper `page-tool` by the helper dispatcher (see
+ * Served as the named helper `blockeditor-tool` by the helper dispatcher (see
  * ./dispatcher.js): no declaration, no approval, and no server state. The page
- * sends a `page-tool/1` payload, the model answers with one artifact and its
+ * sends a `blockeditor-tool/1` payload, the model answers with one artifact and its
  * state, and the page previews it until its owner keeps or discards it.
  *
  * The request and the reply are checked by ./page-tool-contract.js, a port of
@@ -89,7 +89,7 @@ function toolEnv(env) {
 }
 
 async function claudeToolAdapter(engine, system, userTurn, ctx, spawner) {
-  const scratch = await fs.mkdtemp(path.join(os.tmpdir(), 'page-tool-claude-'));
+  const scratch = await fs.mkdtemp(path.join(os.tmpdir(), 'blockeditor-tool-claude-'));
   try {
     const systemFile = path.join(scratch, 'system.md');
     await fs.writeFile(systemFile, system);
@@ -143,7 +143,7 @@ async function claudeToolAdapter(engine, system, userTurn, ctx, spawner) {
 }
 
 async function codexToolAdapter(engine, system, userTurn, ctx, spawner) {
-  const scratch = await fs.mkdtemp(path.join(os.tmpdir(), 'page-tool-codex-'));
+  const scratch = await fs.mkdtemp(path.join(os.tmpdir(), 'blockeditor-tool-codex-'));
   const outFile = path.join(scratch, 'last-message.txt');
   try {
     await new Promise((resolve, reject) => {

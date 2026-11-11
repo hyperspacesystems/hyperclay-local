@@ -93,7 +93,7 @@ const memberSessions = (stream, index) => memberRoster(stream, index)?.people?.[
 const memberFrames = (stream, index) => stream.events.filter((ev) => ev.name === `m${index}`).map((ev) => ev.data);
 
 const PAGE_TARGET = {
-  kind: 'page',
+  kind: 'blockeditor',
   v: 1,
   epoch: 'epoch-1',
   generation: 0,

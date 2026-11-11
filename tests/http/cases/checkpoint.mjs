@@ -7,12 +7,12 @@ import { joinLiveClient } from './live-client.mjs';
 const PROFILES = ['local-full'];
 const RUN = crypto.randomBytes(4).toString('hex');
 
-const sidecarPath = (docPath) => `.hyperclay/page-state/${docPath}.json`;
+const sidecarPath = (docPath) => `.hyperclay/blockeditor-state/${docPath}.json`;
 
 async function editLiveRoom(ctx, docPath, doc) {
-  const page = await joinLiveClient(ctx, { rootId: 'root-a', docPath, clientId: 'page-a' });
+  const page = await joinLiveClient(ctx, { rootId: 'root-a', docPath, clientId: 'blockeditor-a' });
   const store = await joinLiveClient(ctx, { rootId: 'root-a', docPath, clientId: 'game-b' });
-  const pageEdit = await page.edit('page', [{ op: 'set', path: ['y', 'http-a-1'], value: doc.update }]);
+  const pageEdit = await page.edit('blockeditor', [{ op: 'set', path: ['y', 'http-a-1'], value: doc.update }]);
   assertEqual(pageEdit.status, 200, `the live page edit is accepted: ${JSON.stringify(pageEdit.body)}`);
   const storeEdit = await store.edit('game', [{ op: 'add', path: ['score'], n: 1 }]);
   assertEqual(storeEdit.status, 200, `the live store edit is accepted: ${JSON.stringify(storeEdit.body)}`);
@@ -60,13 +60,13 @@ export const CHECKPOINT_CASES = [
       const stored = await ctx.read('root-a', docPath);
       assert(stored.text.includes('>ac<'), 'the rendered file holds the page edit');
       assert(stored.text.includes('"score":1'), 'the rendered file holds the non-page store change');
-      assert(!stored.text.includes('merge="page"'), 'the page state stays out of the file');
+      assert(!stored.text.includes('merge="blockeditor"'), 'the page state stays out of the file');
 
       const sidecar = await ctx.read('root-a', sidecarPath(docPath));
       assertEqual(sidecar.exists, true, 'the checkpoint left a page sidecar');
       const record = JSON.parse(sidecar.text);
       assertEqual(record.v, 1, 'the sidecar is a page state record');
-      assert(typeof record.tag === 'string' && record.tag.includes('merge="page"'), 'the sidecar holds the page tag');
+      assert(typeof record.tag === 'string' && record.tag.includes('merge="blockeditor"'), 'the sidecar holds the page tag');
       assert(record.tag.includes('http-a-1'), 'the sidecar holds the participant\'s page edit');
     },
   },
@@ -104,8 +104,8 @@ export const CHECKPOINT_CASES = [
         const state = await client.ready();
         assert(state.stores && state.stores.game, 'the new participant reads the non-page store');
         assertEqual(state.stores.game.value.score, 1, 'the new participant reads the store change');
-        assert(state.stores.page, 'the new participant reads the page store');
-        assertEqual(state.stores.page.value.y['http-a-1'], doc.update, 'the new participant reads the page edit');
+        assert(state.stores.blockeditor, 'the new participant reads the page store');
+        assertEqual(state.stores.blockeditor.value.y['http-a-1'], doc.update, 'the new participant reads the page edit');
       } finally {
         await client.close();
       }

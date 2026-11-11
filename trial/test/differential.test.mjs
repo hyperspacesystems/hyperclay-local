@@ -116,7 +116,7 @@ function startServer(root, variant = {}) {
       const target = path.join(root, 'uploads', rel);
       const headers = { ETag: '"v1"', 'Content-Type': contentType(rel) };
       if (variant.cacheControlFor === `uploads/${rel}`) headers['Cache-Control'] = 'max-age=60';
-      if (variant.pageRevision) headers['Page-Revision'] = '1';
+      if (variant.pageRevision) headers['Blockeditor-Revision'] = '1';
       if (fs.existsSync(target)) send(200, headers, fs.readFileSync(target));
       else send(404, { 'Content-Type': 'text/plain' }, 'not found');
       return;
@@ -124,7 +124,7 @@ function startServer(root, variant = {}) {
     if (url.pathname.endsWith('/')) {
       const relDir = decodeURIComponent(url.pathname.slice(1, -1));
       const headers = { ETag: '"v1"', 'Content-Type': 'text/html; charset=utf-8' };
-      if (variant.pageRevision) headers['Page-Revision'] = '1';
+      if (variant.pageRevision) headers['Blockeditor-Revision'] = '1';
       send(200, headers, listingBody(relDir, origin));
       return;
     }
@@ -132,7 +132,7 @@ function startServer(root, variant = {}) {
     const target = path.join(root, rel);
     const headers = { ETag: '"v1"', 'Content-Type': contentType(rel) };
     if (variant.cacheControlFor === rel) headers['Cache-Control'] = 'max-age=60';
-    if (variant.pageRevision) headers['Page-Revision'] = '1';
+    if (variant.pageRevision) headers['Blockeditor-Revision'] = '1';
     if (!fs.existsSync(target)) {
       send(404, { 'Content-Type': 'text/plain' }, 'not found');
       return;
@@ -269,7 +269,7 @@ test('meta extensions on A only are an allowance, on B only a difference', async
   });
 });
 
-test('page-revision on A only is an allowance, on B only a difference', async () => {
+test('blockeditor-revision on A only is an allowance, on B only a difference', async () => {
   await withServers({ pageRevision: true }, {}, async ({ root, a, b }) => {
     const out = tempDir('hcl-diff-out-');
     const result = await runCli(['--a', a.url, '--b', b.url, '--root', root, '--out', out]);
@@ -284,7 +284,7 @@ test('page-revision on A only is an allowance, on B only a difference', async ()
     const result = await runCli(['--a', a.url, '--b', b.url, '--root', root, '--out', out]);
     assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
     const doc = readJson(path.join(out, 'differences.json'));
-    assert.ok(differencesOn(doc, '/index.html', 'page-revision').length >= 1);
+    assert.ok(differencesOn(doc, '/index.html', 'blockeditor-revision').length >= 1);
   });
 });
 
@@ -378,14 +378,14 @@ test('the full stage counts the meta line the native stage allows', async () => 
   });
 });
 
-test('the full stage counts a page-revision header on A only', async () => {
+test('the full stage counts a blockeditor-revision header on A only', async () => {
   await withServers({ pageRevision: true }, {}, async ({ root, a, b }) => {
     const out = tempDir('hcl-diff-out-');
     const result = await runCli(['--a', a.url, '--b', b.url, '--root', root, '--out', out, '--stage', 'full']);
     assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
     const doc = readJson(path.join(out, 'differences.json'));
     assert.equal(doc.allowances.AD3, 0);
-    assert.ok(differencesOn(doc, '/index.html', 'page-revision').length >= 1);
+    assert.ok(differencesOn(doc, '/index.html', 'blockeditor-revision').length >= 1);
   });
 });
 

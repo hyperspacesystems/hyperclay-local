@@ -23,7 +23,7 @@ const article = (html) => /<article[^>]*>([\s\S]*)<\/article>/.exec(html)[1].tri
 // One room over two versions of a page, made dirty, with an older copy of the
 // page written to disk underneath it. `edit` puts the hand edit in that copy.
 async function scenario(older, stored, edit) {
-  const dir = path.resolve(await fsp.realpath(await fsp.mkdtemp(path.join(os.tmpdir(), 'stale-page-checkpoint-'))));
+  const dir = path.resolve(await fsp.realpath(await fsp.mkdtemp(path.join(os.tmpdir(), 'stale-blockeditor-checkpoint-'))));
   const file = path.join(dir, 'article.html');
   await fsp.writeFile(file, await storePageState(dir, 'article.html', older.html));
   await createBackup(dir, 'article', splitPage(older.html).file);
@@ -43,7 +43,7 @@ async function scenario(older, stored, edit) {
     rootId: 'root-a', logicalPath: 'article.html', canonicalPath: file, identity: target.identity,
   }));
   const edited = rooms.apply(room, 'editor', {
-    name: 'page', n: 1, epoch: room.epoch, pageGeneration: room.pageTransition?.id ?? null,
+    name: 'blockeditor', n: 1, epoch: room.epoch, blockeditorGeneration: room.blockeditorTransition?.id ?? null,
     ops: [{ op: 'set', path: ['y', 'edit-1'], value: stored.update }],
   }, { connected: ['editor'] });
   assert.equal(edited.error, undefined);
@@ -63,7 +63,7 @@ async function scenario(older, stored, edit) {
   assert.ok(written.includes('<p data-id="a">one!</p>'), written);
   assert.ok(written.includes(edit ? '<p data-id="b">two!</p>' : '<p data-id="a">one!</p>'), written);
   assert.ok(written.includes(`data-rev="${splitPage(stored.html).state.rev}"`), written);
-  assert.ok(!written.includes('merge="page"'), written);
+  assert.ok(!written.includes('merge="blockeditor"'), written);
 
   // The room the rebase kept is dirty, so its unsaved edits are in a recovered
   // copy as well as in memory.

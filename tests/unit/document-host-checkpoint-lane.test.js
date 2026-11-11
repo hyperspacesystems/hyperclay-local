@@ -34,7 +34,7 @@ async function dirtyPage() {
     rootId: 'root-a', logicalPath: NAME, canonicalPath: file, identity: target.identity,
   }));
   const edited = authority.rooms.apply(room, 'a', {
-    name: 'page', n: 1, epoch: room.epoch, pageGeneration: room.pageTransition?.id ?? null,
+    name: 'blockeditor', n: 1, epoch: room.epoch, blockeditorGeneration: room.blockeditorTransition?.id ?? null,
     ops: [{ op: 'set', path: ['y', 'edit-1'], value: fixture.update }],
   });
   expect(edited.error).toBeUndefined();
@@ -50,7 +50,7 @@ function render(page, options = {}) {
   return withDocumentWrite(() => ({ canonicalPath: page.file }), (_locked, token) =>
     page.host.lanes.renderCheckpoint({
       core, key: page.file, roomIdentity: page.target.identity,
-      generation: page.room.pageTransition?.id ?? null,
+      generation: page.room.blockeditorTransition?.id ?? null,
       target: page.target, room: page.room, claim, token, ...options,
     }));
 }

@@ -49,7 +49,7 @@ async function run(mode, withRecord) {
   const target = authority.bindTarget({ rootId: 'root', logicalPath: 'article.html', canonicalPath: file });
   const room = await authority.roomFor(target, async () => ({ ...target }));
   const accepted = rooms.apply(room, 'client', {
-    name: 'page', n: 1, epoch: room.epoch, pageGeneration: room.pageTransition?.id ?? null,
+    name: 'blockeditor', n: 1, epoch: room.epoch, blockeditorGeneration: room.blockeditorTransition?.id ?? null,
     ops: [{ op: 'set', path: ['y', 'edit-1'], value: fixture.update }],
   }, { connected: ['client'] });
   assert.equal(accepted.error, undefined);

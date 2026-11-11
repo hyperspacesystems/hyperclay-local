@@ -12,7 +12,7 @@ const GOLDENS = [
   ['api-golden', 'api'],
   ['upload-golden', 'uploads-case'],
 ];
-const STORES = new Set(['.hyperclay/page-state', '.hyperclay/api-v2']);
+const STORES = new Set(['.hyperclay/blockeditor-state', '.hyperclay/api-v2']);
 // P2 judges uploads only under `uploads/`, so the root carries real upload bytes
 // there: binary, text, a stylesheet, a nested folder and a Unicode name, each
 // copied from a serve-golden file. [serve-golden path, path under uploads/]

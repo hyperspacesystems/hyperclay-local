@@ -61,11 +61,11 @@ test('the JS service lanes, proven against the Go host', { skip: SKIP }, async (
     const versionsBefore = fs.readdirSync(versionsDir).length;
     const admitsBefore = calls.filter((call) => call.path === '/v1/admit').length;
 
-    const answer = await save(rootAUrl, 'notes.html', document('<p>changed</p>'), { 'Page-Conversion': 'v2' });
+    const answer = await save(rootAUrl, 'notes.html', document('<p>changed</p>'), { 'Blockeditor-Conversion': 'v2' });
     assert.equal(answer.status, 400, answer.body);
     const body = JSON.parse(answer.body);
     assert.equal(body.msgType, 'error');
-    assert.equal(body.code, 'page-conversion-refused');
+    assert.equal(body.code, 'blockeditor-conversion-refused');
     assert.equal(body.reason, 'invalid-header');
     assert.equal(typeof body.msg, 'string');
 

@@ -25,7 +25,7 @@ async function root() {
 test('the worker indexes visible document text but skips runtime and editor UI', async () => {
   const item = await root();
   await fs.writeFile(path.join(item.path, 'example.html'), `<title>Café Notes</title>
-    <article data-page><h1>Readable words</h1><p>Fresh details here.</p></article>
+    <article data-blockeditor><h1>Readable words</h1><p>Fresh details here.</p></article>
     <script>secretScriptNeedle</script><style>.secretStyleNeedle{}</style>
     <template>secretTemplateNeedle</template><svg>secretSvgNeedle</svg>
     <noscript>secretNoscriptNeedle</noscript><div clay="editor-ui">secretChromeNeedle</div>

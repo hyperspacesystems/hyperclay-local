@@ -110,7 +110,7 @@ function authorityStub(calls, filePath, state) {
     rooms: {
       reservePageReplacement: (path, options) => {
         calls.push('reservePageReplacement');
-        return 'page-token';
+        return 'blockeditor-token';
       },
       commitPage: (token) => {
         calls.push('commitPage');
@@ -177,12 +177,12 @@ test('sync-download writes the page sidecar before the file', async () => {
     },
   });
   const html = '<html><body>exported</body></html>';
-  const pageRecord = { rev: 7 };
+  const blockeditorRecord = { rev: 7 };
 
-  const result = await host.commit({ kind: 'sync-download', name: 'page.html', filePath, bytes: html, pageRecord });
+  const result = await host.commit({ kind: 'sync-download', name: 'page.html', filePath, bytes: html, blockeditorRecord });
 
   expect(result.outcome).toBe('committed');
-  expect(seen.record).toBe(pageRecord);
+  expect(seen.record).toBe(blockeditorRecord);
   expect(seen.existed).toBe(false);
   expect(fs.readFileSync(filePath, 'utf8')).toBe(html);
 });
@@ -364,7 +364,7 @@ test('the current checksum as expected commits', async () => {
   expect(fs.readFileSync(filePath).equals(bytes)).toBe(true);
 });
 
-test('create writes the bytes through page-state storage and commits', async () => {
+test('create writes the bytes through blockeditor-state storage and commits', async () => {
   const { host, calls, filePath, state } = makeHost();
   const html = '<html><body>new</body></html>';
 
@@ -794,7 +794,7 @@ test('a page conversion rebases nothing and splits without keeping state', async
   });
 
   await host.commit({
-    kind: 'browser-save', name: 'page.html', filePath, bytes: '<html>converted</html>', pageConversion: { to: 2 },
+    kind: 'browser-save', name: 'page.html', filePath, bytes: '<html>converted</html>', blockeditorConversion: { to: 2 },
   });
 
   expect(deps.rebaseStaleSave).not.toHaveBeenCalled();
@@ -1044,7 +1044,7 @@ test('a save whose temp file cannot be synced writes nothing and leaves no temp 
   expect(fs.readdirSync(dir).filter((name) => name.endsWith('.tmp'))).toEqual([]);
 });
 
-test('a page-state failure after the rename is not an indeterminate document write', async () => {
+test('a blockeditor-state failure after the rename is not an indeterminate document write', async () => {
   const { host, filePath } = makeHost({
     storePageState: async () => { throw Object.assign(new Error('sidecar failed'), { afterRename: true }); },
   });

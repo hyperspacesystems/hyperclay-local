@@ -1,4 +1,4 @@
-// The built-in page-tool helper, driven through the real wire routes and the
+// The built-in blockeditor-tool helper, driven through the real wire routes and the
 // real dispatcher. The engine children are fakes: no test ever starts a real
 // `claude` or `codex`.
 const test = require('node:test');
@@ -38,7 +38,7 @@ const claudeResult = (text = replyText()) =>
   `${JSON.stringify({ type: 'result', subtype: 'success', result: text, stop_reason: 'end_turn', model: 'claude-opus-5-5' })}\n`;
 
 const payload = (extra = {}) => ({
-  protocol: 'page-tool/1',
+  protocol: 'blockeditor-tool/1',
   requestId: REQUEST_ID,
   prompt: 'make me a counter',
   context: { page: 'A page about nothing.' },
@@ -48,7 +48,7 @@ const payload = (extra = {}) => ({
 const request = (id, extra = {}) => ({
   type: 'wire/request',
   id,
-  helper: 'page-tool',
+  helper: 'blockeditor-tool',
   document: 'none',
   payload: payload(extra),
 });
@@ -165,11 +165,11 @@ test('an oversized artifact is refused as invalid_reply', async () => {
   });
 });
 
-test('a request that is not page-tool/1 is refused before any child starts', async () => {
+test('a request that is not blockeditor-tool/1 is refused before any child starts', async () => {
   const { spawn, calls } = fakeSpawn();
   await withHelperApp({ html: documentHTML({ helpers: [] }), settings: settings(), pageTool: pageToolFor(spawn) }, async (h) => {
     const stream = await h.page.subscribe();
-    await h.page.send(request('pt5', { protocol: 'page-tool/2' }));
+    await h.page.send(request('pt5', { protocol: 'blockeditor-tool/2' }));
     const error = (await awaitRequest(stream, 'pt5')).at(-1);
     assert.equal(error.payload.code, 'invalid_request');
     assert.equal(calls.length, 0);
@@ -268,18 +268,18 @@ test('a tool already running keeps an edit out of the same document', async () =
   });
 });
 
-test('/_/meta lists page-tool beside ai-edit when the prompt files are present', async () => {
+test('/_/meta lists blockeditor-tool beside ai-edit when the prompt files are present', async () => {
   const { spawn } = fakeSpawn();
   await withHelperApp({ html: documentHTML({ helpers: [] }), settings: settings(), pageTool: pageToolFor(spawn) }, async (h) => {
     const res = await fetch(`${h.page.origin}/_/meta`, { headers: { 'Document-URL': h.docUrl } });
     assert.deepEqual((await res.json()).document.helpers, [
       { name: 'ai-edit', state: 'ready' },
-      { name: 'page-tool', state: 'ready' },
+      { name: 'blockeditor-tool', state: 'ready' },
     ]);
   });
 });
 
-test('/_/meta reads page-tool as unavailable when AI Editing is off', async () => {
+test('/_/meta reads blockeditor-tool as unavailable when AI Editing is off', async () => {
   const { spawn } = fakeSpawn();
   await withHelperApp({
     html: documentHTML({ helpers: [] }),
@@ -290,12 +290,12 @@ test('/_/meta reads page-tool as unavailable when AI Editing is off', async () =
     const res = await fetch(`${h.page.origin}/_/meta`, { headers: { 'Document-URL': h.docUrl } });
     assert.deepEqual((await res.json()).document.helpers, [
       { name: 'ai-edit', state: 'unavailable' },
-      { name: 'page-tool', state: 'unavailable' },
+      { name: 'blockeditor-tool', state: 'unavailable' },
     ]);
   });
 });
 
-test('/_/meta omits page-tool when the prompt files are missing', async () => {
+test('/_/meta omits blockeditor-tool when the prompt files are missing', async () => {
   const { spawn } = fakeSpawn();
   await withHelperApp({ html: documentHTML({ helpers: [] }), settings: settings(), pageTool: pageToolFor(spawn, null) }, async (h) => {
     const res = await fetch(`${h.page.origin}/_/meta`, { headers: { 'Document-URL': h.docUrl } });
@@ -310,7 +310,7 @@ test('loadPrompts reads the selected runtime and answers null when either file i
   assert.equal(await loadPrompts({ readAsset: async (version, publicPath) => Buffer.from(publicPath.endsWith('system.md') ? 'S' : '') }), null);
 });
 
-test('page-tool\u2019s claude child gets the env variable and argv, and ai-edit\u2019s does not', async () => {
+test('blockeditor-tool\u2019s claude child gets the env variable and argv, and ai-edit\u2019s does not', async () => {
   let systemText = '';
   const { spawn, calls } = fakeSpawn(({ child, close, args }) => {
     systemText = fs.readFileSync(args[args.indexOf('--system-prompt-file') + 1], 'utf8');
@@ -412,7 +412,7 @@ test('a document that asks for the page itself with a tool is refused', async ()
   });
 });
 
-test('a host without the prompt files refuses a page-tool request', async () => {
+test('a host without the prompt files refuses a blockeditor-tool request', async () => {
   const { spawn } = fakeSpawn();
   await withHelperApp({ html: documentHTML({ helpers: [] }), settings: settings(), pageTool: pageToolFor(spawn, null) }, async (h) => {
     const stream = await h.page.subscribe();

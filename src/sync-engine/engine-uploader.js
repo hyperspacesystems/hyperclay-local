@@ -61,7 +61,7 @@ module.exports = {
           filePath: localPath,
           bytes: content,
           modifiedAt,
-          pageRecord: record,
+          blockeditorRecord: record,
           context: { target, token },
         });
         if (written.outcome === 'indeterminate') throw written.error;

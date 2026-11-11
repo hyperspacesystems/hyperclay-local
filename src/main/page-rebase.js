@@ -55,7 +55,7 @@ async function rebaseStaleSave(baseDir, name, content, newestFirst, { stored = n
     if (!baseHtml) return null;
     return rebasePage({ storedHtml, state, incomingHtml: content, baseHtml, createDocument });
   } catch (error) {
-    console.error('[page-rebase] rebase failed, writing as before', error && error.message ? error.message : error);
+    console.error('[blockeditor-rebase] rebase failed, writing as before', error && error.message ? error.message : error);
     return null;
   }
 }

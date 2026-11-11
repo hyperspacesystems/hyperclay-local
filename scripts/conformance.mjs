@@ -29,8 +29,8 @@ export const ENGINES = ['all', 'http', 'page'];
 // app's profile hooks, presence from the real authority, and the format and stylesheet
 // rows from the vendored client.
 export const REQUIRED_EXTENSIONS = [
-  'conditional', 'data-guard-v1', 'data-read', 'data-write', 'format', 'live-data', 'live-provenance', 'page',
-  'page-awareness-v1', 'page-format-v1', 'page-recovery-v1', 'people', 'presence', 'receipts',
+  'blockeditor', 'blockeditor-awareness-v1', 'blockeditor-format-v1', 'blockeditor-recovery-v1', 'conditional',
+  'data-guard-v1', 'data-read', 'data-write', 'format', 'live-data', 'live-provenance', 'people', 'presence', 'receipts',
   'record-awareness-v1', 'scoped-stylesheet', 'sync', 'sync-worker', 'sync-worker-data', 'upload', 'wire',
 ];
 

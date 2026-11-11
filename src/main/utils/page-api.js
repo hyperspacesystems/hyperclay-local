@@ -5,7 +5,7 @@ let checkpointModule;
 
 function hasPageStore(html) {
   const $ = cheerio.load(html);
-  return $('script[merge][clay~="live"]').toArray().some((node) => /^page(?:\.[0-9]+)?$/.test($(node).attr('merge')));
+  return $('script[merge][clay~="live"]').toArray().some((node) => /^blockeditor(?:\.[0-9]+)?$/.test($(node).attr('merge')));
 }
 
 function loadPageModules() {
