@@ -7,12 +7,14 @@ const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const source = resolve(repo, '../hyperclay/public-assets/core-apps');
 const destination = join(repo, 'src/main/document-templates');
 const ids = ['page', 'blank', 'devlog', 'kanban', 'landing'];
+// Hyperclay renamed the Block editor's file; Local keeps the id `page` its workspace package sends.
+const sourceFile = { page: 'blockeditor.html' };
 
 await mkdir(destination, { recursive: true });
 const manifest = [];
 for (const id of ids) {
   const file = `${id}.html`;
-  const bytes = await readFile(join(source, file));
+  const bytes = await readFile(join(source, sourceFile[id] ?? file));
   await writeFile(join(destination, file), bytes);
   manifest.push({ id, file, bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') });
 }
