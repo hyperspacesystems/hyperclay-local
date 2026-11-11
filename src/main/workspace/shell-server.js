@@ -433,7 +433,13 @@ function createShellServer({ authority, rootPool, observerFor, settings, appVers
       subscribers.clear();
       flushClients.clear();
       entries.clear();
-      if (server) await new Promise(resolve => server.close(resolve));
+      if (server) {
+        // close() waits for every busy connection, and on Windows the workspace window's
+        // connections outlive the window, so quitting would wait forever.
+        const closed = new Promise(resolve => server.close(resolve));
+        server.closeAllConnections();
+        await closed;
+      }
       server = null;
       origin = null;
     },

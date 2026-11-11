@@ -1,5 +1,6 @@
 const fs = require('fs').promises;
 const http = require('http');
+const net = require('net');
 const { fixture } = require('./workspace-fixture');
 
 async function nextChunk(reader) {
@@ -160,6 +161,26 @@ test('concurrent starts share one server, and stop closes it', async () => {
   for (const ticket of tickets) expect((await fetch(ticket, { redirect: 'manual' })).status).toBe(302);
   await h.shell.stop();
   await expect(fetch(origin)).rejects.toThrow();
+});
+
+test('stop finishes while a window still has a request open', async () => {
+  h = await fixture();
+  await h.start();
+  const { host, port } = new URL(h.shell.origin);
+  const socket = net.connect(Number(port), '127.0.0.1');
+  socket.on('error', () => {});
+  await new Promise(resolve => socket.once('connect', resolve));
+  socket.write(`POST /api/flush-result HTTP/1.1\r\nHost: ${host}\r\nX-Workspace-Token: ${h.shell.token}\r\n`
+    + 'Content-Type: application/json\r\nContent-Length: 100\r\n\r\n{"client":');
+  await new Promise(resolve => setTimeout(resolve, 200));
+  let timer;
+  const outcome = await Promise.race([
+    h.shell.stop().then(() => 'stopped'),
+    new Promise(resolve => { timer = setTimeout(() => resolve('still waiting'), 3000); }),
+  ]);
+  clearTimeout(timer);
+  socket.destroy();
+  expect(outcome).toBe('stopped');
 });
 
 test('a browser tab joins the flush through its events stream', async () => {
