@@ -8,7 +8,10 @@ const pin = require('./browser-runtime.json');
 
 const verified = new Map();
 
+// HYPER_CHROME_CACHE lets a copy of this repo (hypersave's candidate run) share one installed Chrome:
+// the default folder beside this script is gitignored, so a fresh copy never has it.
 function cacheRoot() {
+  if (process.env.HYPER_CHROME_CACHE) return path.resolve(process.env.HYPER_CHROME_CACHE);
   const configured = process.env.PLAYWRIGHT_BROWSERS_PATH;
   return configured && configured !== '0'
     ? path.join(path.resolve(configured), 'chrome-for-testing')
