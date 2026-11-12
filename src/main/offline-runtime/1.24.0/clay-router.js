@@ -1,11 +1,11 @@
-/* clay-dom.js — clayjs satellite: Element prototype helpers (nearest, el, val, text, exec, cycle, show/hide). https://clayjs.com */
+/* clay-router.js — clayjs satellite: URL-hash routing as tab-local attributes. https://clayjs.com */
 (function () {
   var clay = window.clay = window.clay || {};
   clay.loaded = clay.loaded || {};
 
   var script = document.currentScript;
   if (!script || !script.src) {
-    console.error("clay-dom: could not determine my own URL (load me with a classic <script src=...>, not type=\"module\")");
+    console.error("clay-router: could not determine my own URL (load me with a classic <script src=...>, not type=\"module\")");
     return;
   }
   var url = new URL(script.src, location.href);
@@ -70,15 +70,29 @@
     });
   }
   return { tree: tree, runtime: clay.__runtime };
-})({"dir":"m/","manifest":"manifest-C9601F29.js","edit":"manifest-edit-ABF56000.js","preload":["dom/dom-helpers-L7OSR6S4.js","c-XQXZAO7N.js","c-WRBKEJD4.js","c-VHNSBD2M.js","manifest-C9601F29.js"]})
+})({"dir":"m/","manifest":"manifest-98258645.js","edit":"manifest-edit-ABF56000.js","preload":["route/route-62CHXL5B.js","c-VHNSBD2M.js","manifest-98258645.js"]})
 
-  clay.loaded.dom = __clayChunks.runtime.then(function (R) {
-  if (!R.chunks) return import(__clayChunks.tree + "/src/dom/dom-helpers.js");
-  var file = R.manifest.entries["dom/dom-helpers.js"];
-  if (!file) throw new Error("clayjs: release " + R.manifest.version + " has no dom/dom-helpers.js");
+  // Mirror the hash onto <html> now, before the module loads, so a saved
+  // show-when:route-* rule is right at first paint. The module re-applies.
+  try {
+    var raw = location.hash.slice(1);
+    if (raw.indexOf("=") !== -1) {
+      new URLSearchParams(raw).forEach(function (value, name) {
+        if (/^[a-z][a-z0-9-]*$/.test(name) && name !== "active" && value) {
+          document.documentElement.setAttribute("route-" + name, value);
+        }
+      });
+    }
+  } catch (e) { /* the module applies it */ }
+
+  clay.loaded.router = __clayChunks.runtime.then(function (R) {
+  if (!R.chunks) return import(__clayChunks.tree + "/src/route/route.js");
+  var file = R.manifest.entries["route/route.js"];
+  if (!file) throw new Error("clayjs: release " + R.manifest.version + " has no route/route.js");
   return import(R.dir + file);
 })
-    .catch(function (err) { console.error("clay-dom failed to load:", err); throw err; });
+    .then(function (m) { return m.default; })
+    .catch(function (err) { console.error("clay-router failed to load:", err); throw err; });
   // Mark handled: see clay-ui.js.
-  clay.loaded.dom.catch(function () {});
+  clay.loaded.router.catch(function () {});
 })();

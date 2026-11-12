@@ -1,11 +1,11 @@
-/* clay-internals.js — clayjs satellite: clay.internals = the supported low-level surface (snapshot, region policy, save lane). https://clayjs.com */
+/* clay-events.js — clayjs satellite: onclickaway, onclickchildren, onclone, onmutation, onpagemutation, onrender. https://clayjs.com */
 (function () {
   var clay = window.clay = window.clay || {};
   clay.loaded = clay.loaded || {};
 
   var script = document.currentScript;
   if (!script || !script.src) {
-    console.error("clay-internals: could not determine my own URL (load me with a classic <script src=...>, not type=\"module\")");
+    console.error("clay-events: could not determine my own URL (load me with a classic <script src=...>, not type=\"module\")");
     return;
   }
   var url = new URL(script.src, location.href);
@@ -70,16 +70,34 @@
     });
   }
   return { tree: tree, runtime: clay.__runtime };
-})({"dir":"m/","manifest":"manifest-C9601F29.js","edit":"manifest-edit-ABF56000.js","preload":["internals/index-AX4CG7B2.js","c-HSNGLIFB.js","c-LD6UVV5R.js","c-PGSBXHUE.js","c-RXTPKCMC.js","c-RBPZNU2D.js","c-DLBX4JCJ.js","c-BPF2NSPV.js","c-HA6INT6J.js","c-WRBKEJD4.js","c-P7KNDG34.js","c-CYWLPPUS.js","c-N7JPUPGC.js","c-IJUK2GPW.js","c-PWJSJEJU.js","c-XQXZAO7N.js","c-S7LK4KUE.js","c-VG5XIN4T.js","c-2YYDMLNZ.js","c-ICMAOOGK.js","c-VHNSBD2M.js","manifest-C9601F29.js"]})
+})({"dir":"m/","manifest":"manifest-98258645.js","edit":"manifest-edit-ABF56000.js","preload":["events/index-B6TGDYMG.js","c-LA2BW7UY.js","c-IJUK2GPW.js","c-VG5XIN4T.js","c-2YYDMLNZ.js","c-HA6INT6J.js","c-WRBKEJD4.js","c-ICMAOOGK.js","c-VHNSBD2M.js","manifest-98258645.js"]})
 
-  // No DOM gate: nothing here touches document.body at import time, unlike clay-ui.
-  clay.loaded.internals = __clayChunks.runtime.then(function (R) {
-  if (!R.chunks) return import(__clayChunks.tree + "/src/internals/index.js");
-  var file = R.manifest.entries["internals/index.js"];
-  if (!file) throw new Error("clayjs: release " + R.manifest.version + " has no internals/index.js");
+  // The mutation-backed attrs subscribe to a hub that observes document.body, so
+  // wait for DOM ready before importing (same gate as clay.js).
+  function domReady() {
+    return new Promise(function (r) {
+      if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", r);
+      else r();
+    });
+  }
+
+  // [onrender] sweeps the whole document the moment that import resolves, and those
+  // handlers routinely reach for clay-dom's element helpers (this.val, this.exec,
+  // this.nearest). The two satellites are independent dynamic imports with nothing
+  // ordering them, so on a cold load events can win and every handler throws
+  // "Cannot read properties of undefined". By DOM ready every satellite tag has run,
+  // so clay.loaded.dom is present exactly when clay-dom.js is on the page: wait for it
+  // then, proceed when it is absent. A clay-dom that failed to load must not take
+  // events down with it, so its rejection is swallowed here rather than chained.
+  clay.loaded.events = domReady()
+    .then(function () { return clay.loaded.dom && clay.loaded.dom.catch(function () {}); })
+    .then(function () { return __clayChunks.runtime.then(function (R) {
+  if (!R.chunks) return import(__clayChunks.tree + "/src/events/index.js");
+  var file = R.manifest.entries["events/index.js"];
+  if (!file) throw new Error("clayjs: release " + R.manifest.version + " has no events/index.js");
   return import(R.dir + file);
-})
-    .catch(function (err) { console.error("clay-internals failed to load:", err); throw err; });
-  // Mark handled: a blocked satellite must not emit an unhandled rejection.
-  clay.loaded.internals.catch(function () {});
+}); })
+    .catch(function (err) { console.error("clay-events failed to load:", err); throw err; });
+  // Mark handled: see clay-ui.js.
+  clay.loaded.events.catch(function () {});
 })();

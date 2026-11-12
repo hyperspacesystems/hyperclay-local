@@ -1,9 +1,9 @@
 {
  "schema": 1,
  "package": "@panphora/clayjs",
- "version": "1.23.0",
- "build": "4bfb96f651f47cb0d86d3ebe173ca416e7a3386c3940d25609b617163f218353",
- "runtime": "manifest-C9601F29.js",
+ "version": "1.24.0",
+ "build": "09779e1658506a748479013ea77a297418feafdf19beff116136eb0ec0473554",
+ "runtime": "manifest-98258645.js",
  "edit": "manifest-edit-ABF56000.js",
  "entries": {
   "vendor/hljs-bash.vendor.js": "c-KI7M4AY3.js",
@@ -4682,8 +4682,8 @@
    "imports": [],
    "dynamicImports": []
   },
-  "manifest-C9601F29.js": {
-   "sha256": "c9601f2937cb0104a1c23ca5369cea24ac9d18238b7275880b7aa164bc340c4a",
+  "manifest-98258645.js": {
+   "sha256": "982586453ef18b30f79af0fcd7afac6533024620fa83074144df73a825dce74e",
    "bytes": 9328,
    "contentType": "text/javascript; charset=utf-8",
    "imports": [],

@@ -1,11 +1,11 @@
 {
   "schema": 1,
-  "version": "1.23.0",
-  "chunkBuild": "4bfb96f651f47cb0d86d3ebe173ca416e7a3386c3940d25609b617163f218353",
+  "version": "1.24.0",
+  "chunkBuild": "09779e1658506a748479013ea77a297418feafdf19beff116136eb0ec0473554",
   "files": {
     "all.js": {
       "source": "dist/all.js",
-      "sha256": "c7cb08aad3310a64b7c7e8864828303da19d1b4f3c2d7525278ce48e4b6b0647",
+      "sha256": "2ab0ca08ba7c2e1b27774ebdbfbc2de466fd97fc1751a812bbea42b607640f69",
       "bytes": 4115,
       "type": "text/javascript; charset=utf-8"
     },
@@ -23,55 +23,55 @@
     },
     "clay-dom.js": {
       "source": "dist/clay-dom.js",
-      "sha256": "61cdd8e6026ac5b99c5969031ea922c3fd65304eb6c866f45d2fa577063a7a9b",
+      "sha256": "35e6ed1577fd2d337ecac7f279213ab196e16f3ec0f703b416b7066c73e050f2",
       "bytes": 4060,
       "type": "text/javascript; charset=utf-8"
     },
     "clay-events.js": {
       "source": "dist/clay-events.js",
-      "sha256": "819f0cd62173d775df7458c293618fe1efdc5c132984fc94bcc60fe68231e9f2",
+      "sha256": "9aec6c8a7bac13c704d4507efcd02350b0eae5e867b3e56fe01c28694a5ffefd",
       "bytes": 5284,
       "type": "text/javascript; charset=utf-8"
     },
     "clay-internals.js": {
       "source": "dist/clay-internals.js",
-      "sha256": "f5bed6b3d175681a1c045cc25287cee66007836d2c8f0d6d3d739dba0ee1ef26",
+      "sha256": "6924e839cfadb902cb9b6f139cba15c74e90cf7367b7dbf662c3aa6b4676e72c",
       "bytes": 4500,
       "type": "text/javascript; charset=utf-8"
     },
     "clay-options.js": {
       "source": "dist/clay-options.js",
-      "sha256": "f91a98825e2abaa156bf979e2fdbe46d6d8b5a3a1a106d8c3326c12d8dfa3ccf",
+      "sha256": "00c50de0d96a9b0c970e6bb9cbf6b59937584b28357b364e0ca3baa9bd40a556",
       "bytes": 4468,
       "type": "text/javascript; charset=utf-8"
     },
     "clay-router.js": {
       "source": "dist/clay-router.js",
-      "sha256": "7bfcc47923516da1688fd71a59b769ade3e39dc76ba826dfbdd275da195822df",
+      "sha256": "a0a5f54d52c752606b0d757dba9c1dce5e67f7634e1c373d43ceefaf13d8931e",
       "bytes": 4556,
       "type": "text/javascript; charset=utf-8"
     },
     "clay-ui.js": {
       "source": "dist/clay-ui.js",
-      "sha256": "80ea7281698a586fabfd44b97cef9184132a0866a0329e8c7e5467cd12c2226d",
+      "sha256": "e04ba82a6486123f2d96347238004bbad47a080737cdc6168f381530cb32e598",
       "bytes": 4733,
       "type": "text/javascript; charset=utf-8"
     },
     "clay-utils.js": {
       "source": "dist/clay-utils.js",
-      "sha256": "0c3f1353a6de751d87de9e052d4eb43f23f00ad8606f8e43e8e0269e00eae82c",
+      "sha256": "110369f7db3f425dbba4d61280a9dd70811b8aa0f527bdd45dde559017c89fd9",
       "bytes": 4065,
       "type": "text/javascript; charset=utf-8"
     },
     "clay.js": {
       "source": "dist/clay.js",
-      "sha256": "4f2c13d6fc2c0baebb8300f76539158ac3b2e841cfe35ef71cf04e6541189eee",
+      "sha256": "a8fa04279c06c892224fa43c973b2b65d7074a93b3190de28a43a77c8cbc7be1",
       "bytes": 7174,
       "type": "text/javascript; charset=utf-8"
     },
     "clay.standalone.js": {
       "source": "dist/clay.standalone.js",
-      "sha256": "7102ea094727676bb7637fb75ff2a82a91a2a8ac90b5f556d57ee09cc50d1b6e",
+      "sha256": "d9c93e47cc7fc3a7630977c59be4a0aa9172cdb6f9c54d120ee4c6cc8e34d043",
       "bytes": 5813771,
       "type": "text/javascript; charset=utf-8"
     },
@@ -1785,9 +1785,9 @@
       "bytes": 19567,
       "type": "text/javascript; charset=utf-8"
     },
-    "m/manifest-C9601F29.js": {
-      "source": "dist/m/manifest-C9601F29.js",
-      "sha256": "c9601f2937cb0104a1c23ca5369cea24ac9d18238b7275880b7aa164bc340c4a",
+    "m/manifest-98258645.js": {
+      "source": "dist/m/manifest-98258645.js",
+      "sha256": "982586453ef18b30f79af0fcd7afac6533024620fa83074144df73a825dce74e",
       "bytes": 9328,
       "type": "text/javascript; charset=utf-8"
     },
@@ -1799,7 +1799,7 @@
     },
     "m/manifest.json": {
       "source": "dist/m/manifest.json",
-      "sha256": "db112411671de75b933a88db8f1bbd6ad9ab306d3420aa5f16b794fc9a3bddf9",
+      "sha256": "128c90839979053d1c41a3f55931cf4cb18291e527e2436e7cde8da541d9cc0b",
       "bytes": 126676,
       "type": "application/json"
     },

@@ -1,4 +1,4 @@
-/* clayjs 1.23.0 standalone build: every clayjs module in one file. https://clayjs.com/offline
+/* clayjs 1.24.0 standalone build: every clayjs module in one file. https://clayjs.com/offline
    Third-party code inside keeps its own license (Sortable MIT, Squire MIT, DOMPurify Apache-2.0 OR MPL-2.0, MicroModal MIT, parse5 MIT, Highlights from Pierre Apache-2.0): https://clayjs.com/THIRD-PARTY-NOTICES.md */
 (() => {
   var __create = Object.create;

@@ -122,7 +122,7 @@
     });
   }
   return { tree: tree, runtime: clay.__runtime };
-})({"dir":"m/","manifest":"manifest-C9601F29.js","edit":"manifest-edit-ABF56000.js","preload":["loader-5IA5OJ3J.js","c-RS77ODLY.js","c-7SWMYKAI.js","c-UGHH4MB3.js","c-LA2BW7UY.js","c-IJUK2GPW.js","c-VG5XIN4T.js","c-2YYDMLNZ.js","c-HA6INT6J.js","c-WRBKEJD4.js","c-ICMAOOGK.js","c-VHNSBD2M.js","c-46XYM55L.js","c-QTTJYJMA.js","c-VKEDWYDF.js","c-CYWLPPUS.js","manifest-C9601F29.js","core/draft-mode-WSQAT67S.js","c-N7JPUPGC.js","core/is-edit-mode-GK7IFFMT.js","c-DLBX4JCJ.js","c-BPF2NSPV.js","c-P7KNDG34.js","lib/region-policy-KWBPROWF.js"]})
+})({"dir":"m/","manifest":"manifest-98258645.js","edit":"manifest-edit-ABF56000.js","preload":["loader-5IA5OJ3J.js","c-RS77ODLY.js","c-7SWMYKAI.js","c-UGHH4MB3.js","c-LA2BW7UY.js","c-IJUK2GPW.js","c-VG5XIN4T.js","c-2YYDMLNZ.js","c-HA6INT6J.js","c-WRBKEJD4.js","c-ICMAOOGK.js","c-VHNSBD2M.js","c-46XYM55L.js","c-QTTJYJMA.js","c-VKEDWYDF.js","c-CYWLPPUS.js","manifest-98258645.js","core/draft-mode-WSQAT67S.js","c-N7JPUPGC.js","core/is-edit-mode-GK7IFFMT.js","c-DLBX4JCJ.js","c-BPF2NSPV.js","c-P7KNDG34.js","lib/region-policy-KWBPROWF.js"]})
   __clayChunks.runtime.then(function (R) {
   if (!R.chunks) return import(__clayChunks.tree + "/src/loader.js");
   window.clay.__chunked = true;

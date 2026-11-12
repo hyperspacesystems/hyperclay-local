@@ -1,11 +1,11 @@
-/* clay-ui.js — clayjs satellite: toasts, modals, ask/confirm/tell dialogs, auto clay:save-* feedback. https://clayjs.com */
+/* clay-utils.js — clayjs satellite: clay.utils = { throttle, debounce, cookie, slugify, copyToClipboard }. https://clayjs.com */
 (function () {
   var clay = window.clay = window.clay || {};
   clay.loaded = clay.loaded || {};
 
   var script = document.currentScript;
   if (!script || !script.src) {
-    console.error("clay-ui: could not determine my own URL (load me with a classic <script src=...>, not type=\"module\")");
+    console.error("clay-utils: could not determine my own URL (load me with a classic <script src=...>, not type=\"module\")");
     return;
   }
   var url = new URL(script.src, location.href);
@@ -70,26 +70,15 @@
     });
   }
   return { tree: tree, runtime: clay.__runtime };
-})({"dir":"m/","manifest":"manifest-C9601F29.js","edit":"manifest-edit-ABF56000.js","preload":["ui/index-MGTWOW2C.js","c-IUL7PU4P.js","c-UOUUI265.js","c-QHWJ5ZIJ.js","c-4JZDZFF6.js","c-46XYM55L.js","c-ESK4S67I.js","c-MR75YPRT.js","c-5RZNFTWD.js","c-NUHP2XDB.js","c-PKCCHJ5X.js","c-SXNSSHPP.js","c-QY7F6EN6.js","c-ICMAOOGK.js","c-WRBKEJD4.js","c-UL2YUY52.js","c-VKEDWYDF.js","c-5KXDKC5G.js","c-VHNSBD2M.js","manifest-C9601F29.js"]})
+})({"dir":"m/","manifest":"manifest-98258645.js","edit":"manifest-edit-ABF56000.js","preload":["utils/index-4TJCVLT7.js","c-UL2YUY52.js","c-GQ6F6IDK.js","c-P7KNDG34.js","c-VHNSBD2M.js","manifest-98258645.js"]})
 
-  // Toasts and dialogs append to document.body, so `loaded.ui` must not resolve
-  // before the DOM is ready (same gate as clay-events).
-  function domReady() {
-    return new Promise(function (r) {
-      if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", r);
-      else r();
-    });
-  }
-
-  clay.loaded.ui = domReady()
-    .then(function () { return __clayChunks.runtime.then(function (R) {
-  if (!R.chunks) return import(__clayChunks.tree + "/src/ui/index.js");
-  var file = R.manifest.entries["ui/index.js"];
-  if (!file) throw new Error("clayjs: release " + R.manifest.version + " has no ui/index.js");
+  clay.loaded.utils = __clayChunks.runtime.then(function (R) {
+  if (!R.chunks) return import(__clayChunks.tree + "/src/utils/index.js");
+  var file = R.manifest.entries["utils/index.js"];
+  if (!file) throw new Error("clayjs: release " + R.manifest.version + " has no utils/index.js");
   return import(R.dir + file);
-}); })
-    .catch(function (err) { console.error("clay-ui failed to load:", err); throw err; });
-  // Mark handled: a blocked satellite must not emit an unhandled rejection.
-  // Consumers who await clay.loaded.ui still get the error.
-  clay.loaded.ui.catch(function () {});
+})
+    .catch(function (err) { console.error("clay-utils failed to load:", err); throw err; });
+  // Mark handled: see clay-ui.js.
+  clay.loaded.utils.catch(function () {});
 })();

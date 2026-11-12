@@ -1,11 +1,11 @@
-/* all.js — clayjs satellite: All(selector) chainable querySelectorAll wrapper. https://clayjs.com */
+/* clay-dom.js — clayjs satellite: Element prototype helpers (nearest, el, val, text, exec, cycle, show/hide). https://clayjs.com */
 (function () {
   var clay = window.clay = window.clay || {};
   clay.loaded = clay.loaded || {};
 
   var script = document.currentScript;
   if (!script || !script.src) {
-    console.error("all.js: could not determine my own URL (load me with a classic <script src=...>, not type=\"module\")");
+    console.error("clay-dom: could not determine my own URL (load me with a classic <script src=...>, not type=\"module\")");
     return;
   }
   var url = new URL(script.src, location.href);
@@ -70,21 +70,15 @@
     });
   }
   return { tree: tree, runtime: clay.__runtime };
-})({"dir":"m/","manifest":"manifest-C9601F29.js","edit":"manifest-edit-ABF56000.js","preload":["dom/all-APS5ZSKP.js","c-VHNSBD2M.js","manifest-C9601F29.js"]})
+})({"dir":"m/","manifest":"manifest-98258645.js","edit":"manifest-edit-ABF56000.js","preload":["dom/dom-helpers-L7OSR6S4.js","c-XQXZAO7N.js","c-WRBKEJD4.js","c-VHNSBD2M.js","manifest-98258645.js"]})
 
-  clay.loaded.all = __clayChunks.runtime.then(function (R) {
-  if (!R.chunks) return import(__clayChunks.tree + "/src/dom/all.js");
-  var file = R.manifest.entries["dom/all.js"];
-  if (!file) throw new Error("clayjs: release " + R.manifest.version + " has no dom/all.js");
+  clay.loaded.dom = __clayChunks.runtime.then(function (R) {
+  if (!R.chunks) return import(__clayChunks.tree + "/src/dom/dom-helpers.js");
+  var file = R.manifest.entries["dom/dom-helpers.js"];
+  if (!file) throw new Error("clayjs: release " + R.manifest.version + " has no dom/dom-helpers.js");
   return import(R.dir + file);
 })
-    .then(function (m) {
-      var All = m.default;
-      window.All = All;   // interop carve-out (§2.3)
-      clay.All = All;
-      return All;
-    })
-    .catch(function (err) { console.error("all.js failed to load:", err); throw err; });
+    .catch(function (err) { console.error("clay-dom failed to load:", err); throw err; });
   // Mark handled: see clay-ui.js.
-  clay.loaded.all.catch(function () {});
+  clay.loaded.dom.catch(function () {});
 })();
