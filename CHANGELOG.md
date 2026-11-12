@@ -2,6 +2,32 @@
 
 ## [Unreleased]
 
+## [1.37.0] - 2026-11-12
+
+### Added
+- Local announces `data-guard-v1`, so tools can rely on restore, save refusal and live data-loss notices.
+
+### Changed
+- New Page documents open in edit mode.
+- Edit tabs share one sync connection, so more than six tabs can be open and saves keep flowing.
+- The bundled Block editor document now matches Hyperclay's copy.
+- Document template sync now reads the Block editor from its new Hyperclay file location.
+- The bundled Kanban app is now 1.4.0 and matches Hyperclay's gallery copy.
+- The bundled ClayJS runtime is now 1.24.0 and includes its offline runtime.
+
+### Fixed
+- A page edited while Local was closed shows the data-loss notice on first load.
+- A failed sync trash or move is no longer recorded as a success.
+- Restore counts the items it removes by identity, so the number it shows matches what it removed.
+- Hidden edit tabs receive the latest snapshot immediately, so a save after another tab changes the document is not refused as a conflict.
+- A tab that closes during a roster update no longer leaves its presence behind.
+- Local quits on Windows after the workspace window has been opened.
+- Documents save on Windows when the same folder is reached by a different path spelling.
+- Saves, checkpoints, the auto-namer and write locking find the right live room on Windows by either path spelling, including on a checkpoint retry.
+- On Windows, a burst or replay of live sync events no longer drops a healthy client.
+- A live sync session recovers after a gap in its event stream.
+- A failed shared node list no longer becomes an unhandled rejection when the sync lane is busy.
+
 ## [1.36.0] - 2026-11-08
 
 ### Changed
