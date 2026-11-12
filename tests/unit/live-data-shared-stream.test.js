@@ -250,7 +250,7 @@ function harness() {
 // A response the test drives by hand: it records every write, counts its drain
 // listeners, and can refuse writes or report a buffered length. The handler it is
 // handed to is the real one, so what lands in `frames` is the real wire.
-function syntheticResponse({ accepted = false } = {}) {
+function syntheticResponse({ accepted = false, fullAfter = Infinity } = {}) {
   const listeners = new Map();
   const res = {
     accepted,
@@ -282,11 +282,14 @@ function syntheticResponse({ accepted = false } = {}) {
     write(message) {
       res.writes += 1;
       res.frames.push(message);
+      if (res.writes >= fullAfter) res.writableLength = 8 * 1024 * 1024 + 1;
       return res.accepted;
     },
   };
   return res;
 }
+
+const nextTurn = () => new Promise((resolve) => setImmediate(resolve));
 
 const syntheticRequest = (fixture) => {
   const req = new EventEmitter();
@@ -830,7 +833,7 @@ describe('the shared v2 writer', () => {
     expect([...liveSync.subscribers(key)].length).toBe(0);
   });
 
-  test('33 refused writes across cursor, member and snapshot sinks tear the connection down once', async () => {
+  test('refused writes on 33 turns in a row tear the connection down once, across every sink', async () => {
     const h = harness();
     const fixture = await fixtureFor(h, { rootId: 'writer-refused' });
     const canonical = path.join(dir, FILE);
@@ -854,9 +857,19 @@ describe('the shared v2 writer', () => {
     expect(h.authority.connectedIds(canonical)).toEqual(['cA', 'cB']);
     expect([...liveSync.subscribers(key)].length).toBe(2);
 
-    for (let i = 0; res.destroys === 0 && i < 100; i += 1) h.authority.publish(canonical, 'data', { seq: i });
+    // A burst written in one turn counts once, so the connect's own frames are one
+    // refusal; a drain clears it, and each publish below lands on its own turn.
+    await nextTurn();
+    res.drain();
+    let turns = 0;
+    for (let i = 0; res.destroys === 0 && i < 100; i += 1) {
+      h.authority.publish(canonical, 'data', { seq: i });
+      turns += 1;
+      await nextTurn();
+    }
+    const writesAtDrop = res.writes;
 
-    expect(res.writes).toBe(33);
+    expect(turns).toBe(33);
     expect(res.destroys).toBe(1);
     expect(res.drains).toBe(1);
     expect(res.listenerCount('drain')).toBe(0);
@@ -866,7 +879,7 @@ describe('the shared v2 writer', () => {
     expect([...liveSync.subscribers(key)].length).toBe(0);
     // Nothing retained keeps publishing.
     expect(h.authority.publish(canonical, 'data', { seq: 99 })).toBe(0);
-    expect(res.writes).toBe(33);
+    expect(res.writes).toBe(writesAtDrop);
   });
 
   test('one drain resets the refusal count', async () => {
@@ -883,15 +896,15 @@ describe('the shared v2 writer', () => {
     const written = () => withoutPresenceFrames(res.frames).length;
     expect(written()).toBe(4);
 
-    while (written() < 20) h.authority.publish(canonical, 'data', { seq: res.writes });
-    expect(written()).toBe(20);
+    const turn = async () => { h.authority.publish(canonical, 'data', { seq: res.writes }); await nextTurn(); };
+    await nextTurn();
     res.drain();
-    while (written() < 52) h.authority.publish(canonical, 'data', { seq: res.writes });
-    expect(written()).toBe(52);
+    for (let i = 0; i < 20; i += 1) await turn();
+    res.drain();
+    for (let i = 0; i < 32; i += 1) await turn();
     expect(res.destroys).toBe(0);
 
-    for (let i = 0; res.destroys === 0 && i < 100; i += 1) h.authority.publish(canonical, 'data', { seq: res.writes });
-    expect(written()).toBe(53);
+    await turn();
     expect(res.destroys).toBe(1);
     expect(h.authority.connectedIds(canonical)).toEqual([]);
   });
@@ -1017,9 +1030,9 @@ describe('a stream that ends inside its roster burst', () => {
     const h = harness();
     const fixture = await fixtureFor(h, { rootId: 'shared-burst' });
     const doc = documentUrl(fixture);
-    // Every write is refused, so the stream ends while the rosters connect: each
-    // connect sends every session of the document a roster.
-    const res = syntheticResponse();
+    // The buffer passes 8 MiB after 33 writes, so the stream ends while the
+    // rosters connect: each connect sends every session of the document a roster.
+    const res = syntheticResponse({ fullAfter: 33 });
     const members = Array.from({ length: 14 }, (_, i) => `c${i}:${doc}`);
     const req = syntheticRequest(fixture);
     const ctx = { root: fixture.root, live: createRootLive(fixture.root), localAuthority: h.authority };
