@@ -729,8 +729,9 @@ function createLocalAuthority({ rooms, withDocument, readSaved, publishRecovered
 
   function bindTarget({ rootId, logicalPath, canonicalPath, origin, live } = {}) {
     if (typeof canonicalPath !== 'string' || !canonicalPath) throw new Error('bindTarget requires canonicalPath');
-    const { identity } = recordFor(canonicalPath);
-    return bindLogical(Object.freeze({ rootId, logicalPath, canonicalPath, origin, live, identity }));
+    const at = normCanonical(canonicalPath);
+    const { identity } = recordFor(at);
+    return bindLogical(Object.freeze({ rootId, logicalPath, canonicalPath: at, origin, live, identity }));
   }
 
   // One private entry per staged write target: whether its identity is fresh,
@@ -754,7 +755,7 @@ function createLocalAuthority({ rooms, withDocument, readSaved, publishRecovered
       throw new LocalAuthorityError('moved', `admission for ${at} is no longer valid`);
     }
     const target = Object.freeze({
-      rootId, logicalPath, canonicalPath, origin, live, identity: record ? record.identity : newId(),
+      rootId, logicalPath, canonicalPath: at, origin, live, identity: record ? record.identity : newId(),
     });
     stagedTargets.set(target, { fresh: !record, explicitCreate, token });
     return target;

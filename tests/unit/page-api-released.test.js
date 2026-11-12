@@ -149,10 +149,13 @@ if (scenario === 'host-refusal') {
     const body = await write.json().catch(() => null);
     const after = await fs.readFile(file);
 
-    const room = authority.rooms.get(file);
+    // The authority keys its rooms by the canonical form it hands back from the
+    // binding, which is the same file this scenario named natively.
+    const canonical = target.canonicalPath;
+    const room = authority.rooms.get(canonical);
     let hold = 'free';
     try {
-      const freed = authority.rooms.holdPersistent(file, { nodeId: room.nodeId });
+      const freed = authority.rooms.holdPersistent(canonical, { nodeId: room.nodeId });
       authority.rooms.releasePersistent(freed);
     } catch (error) {
       hold = error.code || error.message;

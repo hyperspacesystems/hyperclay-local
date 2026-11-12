@@ -2,8 +2,11 @@ const fs = require('fs');
 const os = require('os');
 const upath = require('upath');
 const { createDocumentHost } = require('../../src/main/document-host');
-const { atomicWriteFile, withStructureChange, assertStructureContext } = require('../../src/main/utils/write-queue');
+const { atomicWriteFile, withStructureChange, withDocumentWrite, assertStructureContext } = require('../../src/main/utils/write-queue');
 const { createLocalAuthority } = require('../../src/main/local-authority');
+const { createLocalCheckpoint } = require('../../src/main/local-checkpoint');
+const { storePageState, logicalDocument } = require('../../src/main/page-state-store');
+const { pageFixture } = require('../helpers/page-fixture');
 const { mockExports } = require('../helpers/mock-exports');
 
 const dirs = [];
@@ -150,4 +153,77 @@ test('a root registered with native separators still admits a structure step and
   authority.registerEditor(moved, { clientId: 'client-2', send: () => {} });
   expect(authority.connectedIds(winRoot + '\\c.html')).toEqual(['client-2']);
   expect(authority.connectedIds(upath.join(root, 'c.html'))).toEqual(['client-2']);
+});
+
+test('a target bound with native separators carries the one canonical form', () => {
+  const root = tempDir();
+  const winRoot = root.split('/').join('\\');
+  const { authority } = structureHost(root);
+
+  const bound = authority.bindTarget({
+    rootId: 'root-a', logicalPath: 'a.html', canonicalPath: `${winRoot}\\a.html`, origin: 'http://localhost',
+  });
+
+  expect(bound.canonicalPath).toBe(upath.join(root, 'a.html'));
+  expect(authority.rooms.get(bound.canonicalPath)).toBe(authority.rooms.get(upath.join(root, 'a.html')));
+});
+
+test('a staged write target carries the one canonical form under a native boundary', async () => {
+  const root = tempDir();
+  const winRoot = root.split('/').join('\\');
+  const file = upath.join(root, 'new.html');
+  const authority = createLocalAuthority({
+    withDocument: withDocumentWrite,
+    readSaved: async () => '<html></html>',
+    now: () => 1000,
+    newId: () => 'id-1',
+  });
+  authority.registerRoot({ id: 'root-a', canonicalPath: root, path: root }, { owner: 'server' });
+  const claim = authority.captureAdmission({ rootId: 'root-a', logicalPath: 'new.html', canonicalPath: file });
+
+  const staged = await withDocumentWrite(
+    () => ({ canonicalPath: `${winRoot}\\new.html` }),
+    async (_locked, token) => authority.admitWriteTarget(claim, {
+      rootId: 'root-a', logicalPath: 'new.html', canonicalPath: `${winRoot}\\new.html`, origin: 'http://localhost',
+    }, token, { explicitCreate: true }),
+  );
+
+  expect(staged.canonicalPath).toBe(file);
+});
+
+test('a checkpoint attempt named with native separators finds the document room', async () => {
+  const root = tempDir();
+  const winRoot = root.split('/').join('\\');
+  const file = upath.join(root, 'page.html');
+  const fixture = pageFixture('abc');
+  fs.writeFileSync(file, await storePageState(root, 'page.html', fixture.html));
+  const authority = createLocalAuthority({
+    withDocument: (resolveTarget, fn) => Promise.resolve().then(async () => fn(await resolveTarget())),
+    readSaved: async () => logicalDocument(root, 'page.html', fs.readFileSync(file, 'utf8')),
+    now: () => 1000,
+    newId: () => 'id-1',
+    pageCompaction: false,
+  });
+  authority.registerRoot({ id: 'root-a', canonicalPath: root, path: root }, { owner: 'server' });
+  const target = authority.bindTarget({
+    rootId: 'root-a', logicalPath: 'page.html', canonicalPath: `${winRoot}\\page.html`, origin: 'http://localhost',
+  });
+  const room = await authority.roomFor(target, () => ({
+    rootId: 'root-a', logicalPath: 'page.html', canonicalPath: upath.join(root, 'page.html'), identity: target.identity,
+  }));
+  const edited = authority.rooms.apply(room, 'editor', {
+    name: 'blockeditor', n: 1, epoch: room.epoch, blockeditorGeneration: room.blockeditorTransition?.id ?? null,
+    ops: [{ op: 'set', path: ['y', 'edit-1'], value: fixture.update }],
+  });
+  expect(edited.error).toBeUndefined();
+
+  const checkpoint = createLocalCheckpoint({
+    authority, logError: () => {},
+    setTimer: () => ({ unref: () => {} }), clearTimer: () => {},
+  });
+  checkpoint.registerHost('root-a', { checkpoint: async () => ({ kind: 'ok', written: fixture.html }) });
+
+  const result = await checkpoint.attempt(`${winRoot}\\page.html`);
+
+  expect(result.kind).toBe('ok');
 });

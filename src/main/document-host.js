@@ -4,6 +4,7 @@ const path = require('upath');
 const { logicalBytes } = require('./page-state-store.js');
 const { publishRecoveredCopy } = require('./utils/backup.js');
 const { reader } = require('./document-reader');
+const { normCanonical } = require('./local-authority');
 
 const KINDS = {
   'browser-save': { lane: 'save', origin: 'save' },
@@ -178,7 +179,7 @@ function createDocumentHost(deps) {
       return authority.confirmKnownWrite(target, stored, token, options);
     }
     const html = await logicalDocument(baseDir, name, stored);
-    const room = authority.rooms.get(target.canonicalPath);
+    const room = authority.rooms.get(normCanonical(target.canonicalPath));
     if (room && authority.roomIsDirty(room)) return authority.observeExternal(target, html, token);
     return authority.confirmKnownWrite(target, html, token, options);
   }
@@ -304,7 +305,7 @@ function createDocumentHost(deps) {
           // The room keeps its unsaved edits through an edit-restore, so they are
           // written to a recovered copy too: they survive even if no tab adopts
           // the restored article. A rendering failure never stops the restore.
-          if (edit && ctx.localCheckpoint && ctx.localCheckpoint.dirty(ctx.localAuthority?.rooms.get(filePath))) {
+          if (edit && ctx.localCheckpoint && ctx.localCheckpoint.dirty(ctx.localAuthority?.rooms.get(normCanonical(filePath)))) {
             try {
               const unsaved = await ctx.localCheckpoint.safetyBackup(filePath, currentHtml);
               await writeRecoveredCopy(unsaved);
@@ -425,7 +426,7 @@ function createDocumentHost(deps) {
       const { checkPageWriteAdmission, pageLineageLost, checkPageFormatAdmission, formatCapability, withPageFormatFloor, PAGE_FORMAT, PAGE_FORMAT_UPGRADE } = require('@panphora/clayjs/server/rooms');
       const { createDocument } = require('./page-rebase.js');
       const rooms = authority.rooms;
-      const open = rooms.get(filePath);
+      const open = rooms.get(normCanonical(filePath));
       const room = open && String(open.nodeId) === String(target.identity) ? open : null;
       const currentHtml = dataLossPrev ?? '';
       const admission = checkPageWriteAdmission({
@@ -911,7 +912,7 @@ function createDocumentHost(deps) {
   }) {
     const authority = ctx.localAuthority;
     authority.validateAdmission(claim, target, token);
-    if (authority.rooms.get(key) !== room || String(room.nodeId) !== String(roomIdentity)) {
+    if (authority.rooms.get(normCanonical(key)) !== room || String(room.nodeId) !== String(roomIdentity)) {
       return { kind: 'refused', reason: 'invalid-identity' };
     }
     let currentHtml;
@@ -925,7 +926,7 @@ function createDocumentHost(deps) {
     }
     if (authority.logicalHtml) currentHtml = await authority.logicalHtml(target, currentHtml);
     const observed = await authority.reconcileDisk(target, currentHtml, token);
-    if (observed.kind === 'replacement' || authority.rooms.get(key) !== room ||
+    if (observed.kind === 'replacement' || authority.rooms.get(normCanonical(key)) !== room ||
         (room.blockeditorTransition?.id ?? null) !== generation) {
       return { kind: 'refused', reason: 'invalid-identity' };
     }

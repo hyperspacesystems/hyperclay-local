@@ -3,6 +3,7 @@ const path = require('upath');
 const cheerio = require('cheerio');
 const { atomicWriteFile } = require('../utils/write-queue');
 const { createRootDocumentHost } = require('../document-host');
+const { normCanonical } = require('../local-authority');
 
 const UNTITLED = /^untitled(?:-\d+)?\.html$/i;
 
@@ -188,6 +189,7 @@ function createAutoNamer({ appDataPath, authority, checkpoint, rootFor, rename, 
 
   async function settle(key) {
     await ready;
+    key = normCanonical(key);
     const room = authority?.rooms.get(key);
     if (!room || room.emptySince === null || authority.hasParticipatingEditors(key) || checkpoint?.dirty(room)) return;
     const target = authority.checkpointTargets(key).find(item => entries.has(keyFor(item.rootId, item.logicalPath)));

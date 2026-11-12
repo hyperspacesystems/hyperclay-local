@@ -1,4 +1,5 @@
 const { loadCheckpoint } = require('./utils/page-api');
+const { normCanonical } = require('./local-authority');
 
 const RETRY_MS = Object.freeze([1000, 5000, 30000]);
 function createLocalCheckpoint({
@@ -96,6 +97,7 @@ function createLocalCheckpoint({
   }
 
   function attempt(key, expectedRoom = null) {
+    key = normCanonical(key);
     const room = authority.rooms.get(key);
     if (expectedRoom && room !== expectedRoom) {
       return Promise.resolve(refusal(expectedRoom, 'invalid-identity'));
@@ -131,6 +133,7 @@ function createLocalCheckpoint({
     dirty,
     async safetyBackup(key, currentHtml) {
       const { splitPage } = require('@panphora/clayjs/server/rooms');
+      key = normCanonical(key);
       const room = authority.rooms.get(key);
       if (!dirty(room) || !/<article\b[^>]*\bdata-blockeditor(?:\s|=|>)/i.test(currentHtml)) return splitPage(currentHtml).file;
       const core = await loadCore();
@@ -146,7 +149,7 @@ function createLocalCheckpoint({
     },
     attempt,
     pending(key) {
-      const room = authority.rooms.get(key);
+      const room = authority.rooms.get(normCanonical(key));
       if (!room) return null;
       const identity = identityOf(room);
       return running.get(identity) || scheduled.get(identity)?.promise || null;
@@ -171,7 +174,7 @@ function createLocalCheckpoint({
       return true;
     },
     arrived(key) {
-      const room = authority.rooms.get(key);
+      const room = authority.rooms.get(normCanonical(key));
       if (!room) return false;
       const identity = identityOf(room);
       const waiting = scheduled.get(identity);
@@ -182,12 +185,14 @@ function createLocalCheckpoint({
       return true;
     },
     wake(key) {
+      key = normCanonical(key);
       const room = authority.rooms.get(key);
       const identity = room ? identityOf(room) : key;
       clearRetry(identity);
       if (room && dirty(room) && !authority.hasParticipatingEditors(key)) service.departed(room);
     },
     retry(key) {
+      key = normCanonical(key);
       const room = authority.rooms.get(key);
       if (room) clearRetry(identityOf(room));
       return attempt(key);

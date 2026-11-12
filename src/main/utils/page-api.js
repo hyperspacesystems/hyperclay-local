@@ -1,4 +1,5 @@
 const cheerio = require('cheerio');
+const { normCanonical } = require('../local-authority');
 
 let pageModules;
 let checkpointModule;
@@ -22,11 +23,12 @@ function loadCheckpoint() {
 }
 
 async function authoritativePageHtml(authority, target, html) {
-  const room = authority.rooms.get(target.canonicalPath);
+  const roomKey = normCanonical(target.canonicalPath);
+  const room = authority.rooms.get(roomKey);
   if (!room || String(room.nodeId) !== String(target.identity) || !authority.roomIsDirty(room)) return html;
   const { captureCheckpoint, renderCheckpoint } = await loadCheckpoint();
   const { JSDOM } = require('jsdom');
-  const capture = captureCheckpoint(room, { nodeId: target.identity, roomKey: target.canonicalPath });
+  const capture = captureCheckpoint(room, { nodeId: target.identity, roomKey });
   const rendered = renderCheckpoint(html, capture, {
     createDocument: () => new JSDOM('<!doctype html><html><body></body></html>', {
       runScripts: undefined, resources: undefined,

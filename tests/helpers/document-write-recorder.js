@@ -28,6 +28,12 @@ const SHAPES = {
 
 const promises = fs.promises;
 const originals = new Map();
+
+// One form for every path this recorder compares: the platform's own. Product
+// code names a file in the authority's normalized form and a caller names it
+// natively, so both are brought to the platform form before they meet in a set.
+const toPlatform = (file) => (typeof file === 'string' ? nodePath.normalize(file) : file);
+
 let records = [];
 let calls = [];
 let rootPath = null;
@@ -43,8 +49,8 @@ for (const [method, indexes] of Object.entries(SHAPES)) {
     if (!rootPath) return original.apply(this, args);
     records.push({
       method,
-      from: indexes.from === undefined ? null : args[indexes.from],
-      to: indexes.to === undefined ? null : args[indexes.to],
+      from: indexes.from === undefined ? null : toPlatform(args[indexes.from]),
+      to: indexes.to === undefined ? null : toPlatform(args[indexes.to]),
     });
     return original.apply(this, args);
   };
@@ -58,9 +64,11 @@ const isInside = (file, dir) => {
 
 // `.page.html.412.7.tmp` beside a document is that document's unpublished bytes.
 function documentBehind(file) {
-  const base = nodePath.basename(file);
+  const platform = toPlatform(file);
+  if (typeof platform !== 'string') return platform;
+  const base = nodePath.basename(platform);
   const match = /^\.(.+\.(?:html|htmlclay))\.\d+\.\d+\.tmp$/i.exec(base);
-  return match ? nodePath.join(nodePath.dirname(file), match[1]) : file;
+  return match ? nodePath.join(nodePath.dirname(platform), match[1]) : platform;
 }
 
 function isDocumentPath(file) {
@@ -93,10 +101,10 @@ function namedPathsOf(call) {
   if (call.method === 'restructure') {
     return (request.context?.entries ?? []).flatMap((entry) => [
       entry.from?.location, entry.from?.canonical, entry.to?.canonical,
-    ]).filter((file) => typeof file === 'string');
+    ]).filter((file) => typeof file === 'string').map(toPlatform);
   }
   const named = request.context?.target?.canonicalPath ?? request.filePath;
-  return typeof named === 'string' ? [named] : [];
+  return typeof named === 'string' ? [toPlatform(named)] : [];
 }
 
 // The document paths one host call names, with a directory expanded to the
@@ -111,8 +119,8 @@ function documentsNamedBy(call, pool) {
     return found;
   }
   for (const entry of call.request?.context?.entries ?? []) {
-    const from = entry.from?.location;
-    const to = entry.to?.canonical;
+    const from = toPlatform(entry.from?.location);
+    const to = toPlatform(entry.to?.canonical);
     if (typeof from !== 'string' || typeof to !== 'string') continue;
     const rels = entry.from?.isDir || docRelsUnder(from, pool).length ? docRelsUnder(from, pool) : null;
     if (rels) {
@@ -159,7 +167,7 @@ function poolOf() {
 }
 
 function begin(root) {
-  rootPath = root;
+  rootPath = toPlatform(root);
   records = [];
   calls = [];
   snapshot = walk(root, new Set());
