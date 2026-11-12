@@ -193,7 +193,6 @@ function createLocalCheckpoint({
     },
     retry(key) {
       const room = roomAt(authority.rooms, key);
-      key = normCanonical(key);
       if (room) clearRetry(identityOf(room));
       return attempt(key);
     },

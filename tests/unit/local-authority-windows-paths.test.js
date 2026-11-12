@@ -291,6 +291,32 @@ test('a checkpoint attempt names a natively keyed room by its native path', asyn
   expect(result.reason).toBe('invalid-document');
 });
 
+test('a checkpoint retry names a natively keyed room by its native path', async () => {
+  const root = tempDir();
+  const winRoot = root.split('/').join('\\');
+  fs.writeFileSync(upath.join(root, 'doc.html'), '<html><body></body></html>');
+  const nativeKey = `${winRoot}\\doc.html`;
+  const room = { key: nativeKey, nodeId: 'node-1', emptySince: 1000 };
+  const authority = {
+    rooms: new Map([[nativeKey, room]]),
+    roomIsDirty: () => true,
+    hasParticipatingEditors: () => false,
+    checkpointTargets: () => [{ rootId: 'root-a', identity: 'node-1', logicalPath: 'doc.html' }],
+    captureAdmission: () => ({}),
+    validateAdmission: () => {},
+    reconcileDisk: async () => ({ kind: 'current' }),
+  };
+  const checkpoint = createLocalCheckpoint({
+    authority, logError: () => {},
+    setTimer: () => ({ unref: () => {} }), clearTimer: () => {},
+  });
+  checkpoint.registerHost('root-a', { checkpoint: async () => ({ kind: 'refused', reason: 'invalid-document' }) });
+
+  const result = await checkpoint.retry(nativeKey);
+
+  expect(result.reason).toBe('invalid-document');
+});
+
 test('a document boundary opened on a native path owns the canonical path', async () => {
   const root = tempDir();
   const winRoot = root.split('/').join('\\');
