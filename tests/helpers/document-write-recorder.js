@@ -8,6 +8,7 @@
 // that document, on both the source and the destination.
 const fs = require('fs');
 const nodePath = require('path');
+const upath = require('upath');
 
 // method -> the argument index of each path it names. Every two-path mutator
 // takes the existing path first and the path it lands on second.
@@ -49,7 +50,11 @@ for (const [method, indexes] of Object.entries(SHAPES)) {
   };
 }
 
-const isInside = (file, dir) => file === dir || file.startsWith(dir + nodePath.sep);
+const isInside = (file, dir) => {
+  const f = upath.normalize(file);
+  const d = upath.normalize(dir);
+  return f === d || f.startsWith(d + '/');
+};
 
 // `.page.html.412.7.tmp` beside a document is that document's unpublished bytes.
 function documentBehind(file) {

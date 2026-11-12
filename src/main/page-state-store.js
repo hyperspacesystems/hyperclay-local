@@ -1,7 +1,7 @@
 // The page editor's merge state for one document, kept out of the user's file.
 // A record is { v: 1, rev, tag }, the shape splitPage and composePage use.
 const fs = require('fs').promises;
-const path = require('path');
+const path = require('upath');
 const crypto = require('crypto');
 const rooms = () => require('@panphora/clayjs/server/rooms');
 const { PAGE_STATE_DIR } = require('./utils/artifact-paths');

@@ -12,6 +12,15 @@ const { createPresenceRelay } = require('./presence');
 const { reader } = require('./document-reader');
 
 const EVENT_NAMES = new Set(['data', 'data-state', 'data-writer']);
+
+// The one form a canonical path takes inside the authority and in every key a
+// caller shares with it: forward slashes, no trailing separator.
+function normCanonical(value) {
+  if (typeof value !== 'string' || !value) return '';
+  const normalized = upath.normalize(value);
+  return normalized.length > 1 ? normalized.replace(/\/+$/, '') : normalized;
+}
+
 const RATE_LIMIT = Object.freeze({ rate: 25, burst: 40, idleMs: 60 * 1000 });
 
 // electron-builder packs node_modules into app.asar, and a worker_threads Worker
@@ -58,7 +67,36 @@ function createLocalAuthority({ rooms, withDocument, readSaved, publishRecovered
   // live in this closure and are never written to a room value, a checkpoint or a sidecar.
   const presence = createPresenceRelay({ now, newId });
 
-  const registry = new Map();
+  const normLogical = (value) => {
+    if (typeof value !== 'string' || !value) return '';
+    return upath.normalize(value).replace(/^\/+/, '').replace(/\/+$/, '');
+  };
+
+  const within = (candidate, prefix) => {
+    const at = normCanonical(candidate);
+    const prefixAt = normCanonical(prefix);
+    return at === prefixAt || at.startsWith(`${prefixAt}/`);
+  };
+
+  // One key form for every canonical path this authority stores, compares or
+  // looks up: a caller's native `C:\\...` and the authority's `C:/...` name the same file.
+  const canonicalMap = () => {
+    const map = new Map();
+    return {
+      get: (key) => map.get(normCanonical(key)),
+      set: (key, value) => { map.set(normCanonical(key), value); return map; },
+      has: (key) => map.has(normCanonical(key)),
+      delete: (key) => map.delete(normCanonical(key)),
+      keys: () => map.keys(),
+      values: () => map.values(),
+      entries: () => map.entries(),
+      [Symbol.iterator]: () => map[Symbol.iterator](),
+      get size() { return map.size; },
+      clear: () => map.clear(),
+    };
+  };
+
+  const registry = canonicalMap();
   const buckets = new Map();
   // One entry per admitted logical root/path/origin. The canonical path is what
   // keys a room, so an alias root shares the room and keeps its own entry.
@@ -78,21 +116,8 @@ function createLocalAuthority({ rooms, withDocument, readSaved, publishRecovered
   // prefix event separately; the greatest applicable revision decides.
   let admissionRevision = 0;
   let rootIncarnation = 0;
-  const canonicalEvents = new Map();
+  const canonicalEvents = canonicalMap();
   const logicalEvents = new Map();
-
-  const normCanonical = (value) => {
-    if (typeof value !== 'string' || !value) return '';
-    const normalized = upath.normalize(value);
-    return normalized.length > 1 ? normalized.replace(/\/+$/, '') : normalized;
-  };
-
-  const normLogical = (value) => {
-    if (typeof value !== 'string' || !value) return '';
-    return upath.normalize(value).replace(/^\/+/, '').replace(/\/+$/, '');
-  };
-
-  const within = (candidate, prefix) => candidate === prefix || candidate.startsWith(`${prefix}/`);
 
   /**
    * The applicable event with the greatest revision: an exact match or a
@@ -370,7 +395,7 @@ function createLocalAuthority({ rooms, withDocument, readSaved, publishRecovered
     const virtual = new Set();
     for (const key of registry.keys()) virtual.add(key);
     for (const key of rooms.keys()) virtual.add(key);
-    for (const target of logical.values()) if (target.canonicalPath) virtual.add(target.canonicalPath);
+    for (const target of logical.values()) if (target.canonicalPath) virtual.add(normCanonical(target.canonicalPath));
 
     // The logical counterpart of the virtual occupancy: one bound-route set per
     // registered root, keyed without origin, so an alias root's own destination
@@ -407,7 +432,7 @@ function createLocalAuthority({ rooms, withDocument, readSaved, publishRecovered
       for (const target of logical.values()) {
         const registered = target.rootId == null ? null : roots.get(target.rootId);
         if (!registered) continue;
-        if (entryMoves(step, entryLocation(registered, target.logicalPath))) affected.add(target.canonicalPath);
+        if (entryMoves(step, entryLocation(registered, target.logicalPath))) affected.add(normCanonical(target.canonicalPath));
       }
 
       if (!step.from.isSymlink) {
@@ -692,7 +717,8 @@ function createLocalAuthority({ rooms, withDocument, readSaved, publishRecovered
    */
   function bindLogical(target) {
     for (const [key, entry] of [...logical]) {
-      if (entry.rootId === target.rootId && entry.logicalPath === target.logicalPath && entry.canonicalPath !== target.canonicalPath) {
+      if (entry.rootId === target.rootId && entry.logicalPath === target.logicalPath &&
+          normCanonical(entry.canonicalPath) !== normCanonical(target.canonicalPath)) {
         logical.delete(key);
       }
     }
@@ -747,7 +773,7 @@ function createLocalAuthority({ rooms, withDocument, readSaved, publishRecovered
     const claim = targetClaims.get(target);
     if (!claim) return false;
     const bound = logical.get(logicalKey(target));
-    if (!bound || bound.canonicalPath !== target.canonicalPath || bound.identity !== target.identity) return false;
+    if (!bound || normCanonical(bound.canonicalPath) !== normCanonical(target.canonicalPath) || bound.identity !== target.identity) return false;
     const record = registry.get(target.canonicalPath);
     if (!record || record.identity !== target.identity) return false;
     if (record.recovering) return false;
@@ -821,7 +847,7 @@ function createLocalAuthority({ rooms, withDocument, readSaved, publishRecovered
         // A late close after the old path gained another occupant must leave that
         // occupant alone: only the record and room this proof was captured for may
         // see the leave.
-        const key = target.canonicalPath;
+        const key = normCanonical(target.canonicalPath);
         if (registry.get(key) !== record) return;
         const room = rooms.get(key);
         if (!room) return;
@@ -841,9 +867,10 @@ function createLocalAuthority({ rooms, withDocument, readSaved, publishRecovered
     record.members.add(member);
     // A connection is current membership, so a room emptied by a previous
     // sweep must not be dropped under it: revive the same window leave() set.
-    const warm = rooms.get(target.canonicalPath);
-    if (warm && String(warm.nodeId) === String(target.identity ?? identityAt(target.canonicalPath))) {
-      rooms.open(target.canonicalPath, '');
+    const key = normCanonical(target.canonicalPath);
+    const warm = rooms.get(key);
+    if (warm && String(warm.nodeId) === String(target.identity ?? identityAt(key))) {
+      rooms.open(key, '');
     }
     return member;
   }
@@ -960,7 +987,7 @@ function createLocalAuthority({ rooms, withDocument, readSaved, publishRecovered
   function publishState(canonicalPath) {
     const record = registry.get(canonicalPath);
     if (!record) return 0;
-    const room = rooms.get(canonicalPath);
+    const room = rooms.get(normCanonical(canonicalPath));
     if (!room) return 0;
     let sent = 0;
     for (const member of [...record.members]) {
@@ -977,7 +1004,7 @@ function createLocalAuthority({ rooms, withDocument, readSaved, publishRecovered
   }
 
   async function roomFor(target, resolveTarget) {
-    const key = target.canonicalPath;
+    const key = normCanonical(target.canonicalPath);
     const claim = captureAdmission(target);
     const identity = target.identity ?? identityAt(key);
     const retired = () => isRetired({ rootId: target.rootId, logicalPath: target.logicalPath, canonicalPath: key });
@@ -996,7 +1023,7 @@ function createLocalAuthority({ rooms, withDocument, readSaved, publishRecovered
       if (typeof currentPath !== 'string' || !currentPath) {
         throw new LocalAuthorityError('not-found', `no document for ${key}`);
       }
-      if (currentPath !== key) throw new LocalAuthorityError('moved', `document moved from ${key}`);
+      if (normCanonical(currentPath) !== key) throw new LocalAuthorityError('moved', `document moved from ${key}`);
       if (retired()) throw new LocalAuthorityError('moved', `document is retired for ${key}`);
       if (token) {
         validateAdmission(claim, {
@@ -1011,9 +1038,9 @@ function createLocalAuthority({ rooms, withDocument, readSaved, publishRecovered
       }
       let nodeId = currentIdentity ?? identity;
 
-      const opened = rooms.get(currentPath);
-      if (opened && String(opened.nodeId) === String(nodeId)) return rooms.open(currentPath, '');
-      if (!opened && (rooms.size() >= core.LIVE_LIMITS.rooms || !rooms.mayFit(currentPath))) return null;
+      const opened = rooms.get(key);
+      if (opened && String(opened.nodeId) === String(nodeId)) return rooms.open(key, '');
+      if (!opened && (rooms.size() >= core.LIVE_LIMITS.rooms || !rooms.mayFit(key))) return null;
 
       let html;
       try {
@@ -1024,12 +1051,12 @@ function createLocalAuthority({ rooms, withDocument, readSaved, publishRecovered
       }
       if (html === null || html === undefined) throw new LocalAuthorityError('not-found', `no saved file for ${key}`);
 
-      if (nodeId == null) nodeId = recordFor(currentPath).identity;
-      recordFor(currentPath).baseline = html;
+      if (nodeId == null) nodeId = recordFor(key).identity;
+      recordFor(key).baseline = html;
 
-      const held = rooms.get(currentPath);
-      if (held) return rooms.reset(currentPath, html, { nodeId });
-      return rooms.open(currentPath, html, { nodeId });
+      const held = rooms.get(key);
+      if (held) return rooms.reset(key, html, { nodeId });
+      return rooms.open(key, html, { nodeId });
     });
   }
 
@@ -1066,7 +1093,7 @@ function createLocalAuthority({ rooms, withDocument, readSaved, publishRecovered
   }
 
   function checkpointTargets(canonicalPath) {
-    return [...logical.values()].filter((target) => target.canonicalPath === canonicalPath && isCurrentTarget(target));
+    return [...logical.values()].filter((target) => normCanonical(target.canonicalPath) === normCanonical(canonicalPath) && isCurrentTarget(target));
   }
 
   function roomIsDirty(room) {
@@ -1113,11 +1140,11 @@ function createLocalAuthority({ rooms, withDocument, readSaved, publishRecovered
       if (!existing || (!broadcasts(existing) && broadcasts(target))) found.set(key, target);
     };
     for (const target of logical.values()) {
-      if (target.canonicalPath !== canonicalPath) continue;
+      if (normCanonical(target.canonicalPath) !== normCanonical(canonicalPath)) continue;
       if (!record || record.identity !== target.identity) continue;
       keep(`${target.rootId}\n${target.logicalPath}`, target);
     }
-    if (extraTarget && extraTarget.canonicalPath === canonicalPath) {
+    if (extraTarget && normCanonical(extraTarget.canonicalPath) === normCanonical(canonicalPath)) {
       keep(`${extraTarget.rootId}\n${extraTarget.logicalPath}`, extraTarget);
     }
     return [...found.values()];
@@ -1177,7 +1204,7 @@ function createLocalAuthority({ rooms, withDocument, readSaved, publishRecovered
       // An outside article the room has not merged is no base to render the
       // room over: recovered copies keep the last one it was built on until a
       // write no longer needs merging.
-      const unmerged = rooms.get(canonicalPath) && next.includes('data-blockeditor') && needsAdoption(next);
+      const unmerged = rooms.get(normCanonical(canonicalPath)) && next.includes('data-blockeditor') && needsAdoption(next);
       record.recoveryBase = unmerged ? (record.recoveryBase ?? record.baseline) : null;
       record.baseline = next;
     }
@@ -1188,7 +1215,7 @@ function createLocalAuthority({ rooms, withDocument, readSaved, publishRecovered
     const html = typeof bytes === 'string' ? bytes : bytes.toString('utf8');
     const result = persistentToken
       ? rooms.writtenPersistent(persistentToken, { html })
-      : rooms.fileWritten(canonicalPath, html);
+      : rooms.fileWritten(normCanonical(canonicalPath), html);
     if (result) publishState(canonicalPath);
     checkpointService?.wake(canonicalPath);
     if (publish) {
@@ -1241,10 +1268,10 @@ function createLocalAuthority({ rooms, withDocument, readSaved, publishRecovered
       const rel = normLogical(binding.logicalPath);
       if (root && rel) routes.set(`${root.id}\n${rel}`, { root, rel });
     };
-    for (const binding of logical.values()) if (binding.canonicalPath === key) include(binding);
+    for (const binding of logical.values()) if (normCanonical(binding.canonicalPath) === normCanonical(key)) include(binding);
     if (target) include(target);
     for (const root of roots.values()) {
-      if (within(key, root.canonicalPath) && key !== root.canonicalPath) {
+      if (within(key, root.canonicalPath) && normCanonical(key) !== root.canonicalPath) {
         const rel = normLogical(upath.relative(root.canonicalPath, key));
         routes.set(`${root.id}\n${rel}`, { root, rel });
       }
@@ -1290,11 +1317,11 @@ function createLocalAuthority({ rooms, withDocument, readSaved, publishRecovered
     const key = target.canonicalPath;
     assertWriteContext(token, key);
     const record = registry.get(key);
-    const room = rooms.get(key);
+    const room = rooms.get(normCanonical(key));
     if (removed && !record) {
       for (const binding of [...logical.values()]) {
         if (binding.rootId === target.rootId && binding.logicalPath === target.logicalPath &&
-            binding.canonicalPath !== key) detachLogical(binding);
+            normCanonical(binding.canonicalPath) !== normCanonical(key)) detachLogical(binding);
       }
     }
     if (!removed && record && !record.recovering && compatibleContinuation(record.baseline, html, room)) {
@@ -1314,7 +1341,7 @@ function createLocalAuthority({ rooms, withDocument, readSaved, publishRecovered
     if (dirty || record?.recovering) {
       if (!record) throw new Error(`Missing recovery record for ${key}`);
       if (!record.recovery) {
-        const hold = rooms.holdPersistent(key, { nodeId: room.nodeId });
+        const hold = rooms.holdPersistent(normCanonical(key), { nodeId: room.nodeId });
         record.recovering = true;
         record.recovery = { hold, html: null, published: new Map(), byDirectory: new Map() };
       }
@@ -1329,10 +1356,10 @@ function createLocalAuthority({ rooms, withDocument, readSaved, publishRecovered
     if (record) {
       for (const member of [...record.members]) member.close();
       for (const snapshot of [...record.snapshots]) snapshot.dispose();
-      rooms.drop(key);
+      rooms.drop(normCanonical(key));
       if (record.recovery?.hold) rooms.releasePersistent(record.recovery.hold);
       registry.delete(key);
-      for (const [bindingKey, binding] of [...logical]) if (binding.canonicalPath === key) logical.delete(bindingKey);
+      for (const [bindingKey, binding] of [...logical]) if (normCanonical(binding.canonicalPath) === normCanonical(key)) logical.delete(bindingKey);
     }
     setAdmission(token, { rootId: target.rootId, logicalPath: target.logicalPath, canonicalPath: key, active: false });
     if (!removed) {
@@ -1363,7 +1390,7 @@ function createLocalAuthority({ rooms, withDocument, readSaved, publishRecovered
   async function observeRemovedPrefix(rootId, logicalPath, canonicalPath, token) {
     assertStructureContext(token);
     setAdmission(token, { rootId, logicalPath, canonicalPath, active: false, prefix: true });
-    const targets = new Map();
+    const targets = canonicalMap();
     for (const binding of logical.values()) {
       if (binding.rootId === rootId && within(normLogical(binding.logicalPath), normLogical(logicalPath))) {
         if (!within(binding.canonicalPath, canonicalPath)) {
@@ -1386,8 +1413,8 @@ function createLocalAuthority({ rooms, withDocument, readSaved, publishRecovered
 
   function registerRoot(root = {}, { owner = 'server' } = {}) {
     if (typeof root.id !== 'string' || !root.id) throw new Error('registerRoot requires root id');
-    const canonicalPath = root.canonicalPath ?? root.path;
-    if (typeof canonicalPath !== 'string' || !canonicalPath) throw new Error('registerRoot requires canonical root path');
+    const canonicalPath = normCanonical(root.canonicalPath ?? root.path);
+    if (!canonicalPath) throw new Error('registerRoot requires canonical root path');
     const existing = roots.get(root.id);
     if (existing) {
       // A root that resolves elsewhere is a different registration; replacing it
@@ -1401,7 +1428,7 @@ function createLocalAuthority({ rooms, withDocument, readSaved, publishRecovered
     const entry = {
       id: root.id,
       canonicalPath,
-      path: root.path ?? canonicalPath,
+      path: normCanonical(root.path ?? canonicalPath),
       incarnation: ++rootIncarnation,
       owners: new Set([owner]),
     };
@@ -1466,7 +1493,7 @@ function createLocalAuthority({ rooms, withDocument, readSaved, publishRecovered
     observeExternal,
     recoverUnsavedEdits(target, token) {
       assertWriteContext(token, target.canonicalPath);
-      return publishRecoveredEdits(target.canonicalPath, target, registry.get(target.canonicalPath), rooms.get(target.canonicalPath));
+      return publishRecoveredEdits(target.canonicalPath, target, registry.get(target.canonicalPath), rooms.get(normCanonical(target.canonicalPath)));
     },
     observeRemovedPrefix,
     setAdmission,
@@ -1479,4 +1506,4 @@ function createLocalAuthority({ rooms, withDocument, readSaved, publishRecovered
   };
 }
 
-module.exports = { createLocalAuthority, LocalAuthorityError, unpackedWorkerUrl };
+module.exports = { createLocalAuthority, LocalAuthorityError, unpackedWorkerUrl, normCanonical };

@@ -53,6 +53,7 @@ const cheerio = require('cheerio');
 const { createRootDocumentHost, canonicalForWrite, refuseOldFormat } = require('./document-host.js');
 const { calculateChecksum } = require('../sync-engine/utils');
 const { writeContexts } = require('./write-contexts');
+const { normCanonical } = require('./local-authority');
 
 const KIND_BY_ORIGIN = { save: 'browser-save', api: 'data-api' };
 
@@ -3451,9 +3452,10 @@ function createApp(ctxOrDir, devHooks = null, isKnownPath = null) {
           if (String(req.headers['if-match']).trim() === '*' || !ifMatchSatisfied(req.headers['if-match'], stored)) {
             return { status: 412, headers: { ETag: etag }, json: { error: 'Precondition Failed', message: `${name} changed since you read it. Nothing was written.` } };
           }
-          const room = ctx.localAuthority.rooms.get(target.canonicalPath);
+          const roomKey = normCanonical(target.canonicalPath);
+          const room = ctx.localAuthority.rooms.get(roomKey);
           const held = room && String(room.nodeId) === String(target.identity)
-            ? ctx.localAuthority.rooms.holdPersistent(target.canonicalPath, { nodeId: target.identity, requireClean: false })
+            ? ctx.localAuthority.rooms.holdPersistent(roomKey, { nodeId: target.identity, requireClean: false })
             : null;
           try {
             const authoritative = await authoritativePageHtml(ctx.localAuthority, target, previous);
@@ -3561,9 +3563,10 @@ function createApp(ctxOrDir, devHooks = null, isKnownPath = null) {
                 if (String(req.headers['if-match']).trim() === '*' || !ifMatchSatisfied(req.headers['if-match'], stored)) {
                   return { status: 412, headers: { ETag: etag }, json: { error: 'Precondition Failed', message: `${name} changed since you read it. Nothing was written.` } };
                 }
-                const room = ctx.localAuthority.rooms.get(target.canonicalPath);
+                const roomKey = normCanonical(target.canonicalPath);
+                const room = ctx.localAuthority.rooms.get(roomKey);
                 const held = room && String(room.nodeId) === String(target.identity)
-                  ? ctx.localAuthority.rooms.holdPersistent(target.canonicalPath, { nodeId: target.identity, requireClean: false })
+                  ? ctx.localAuthority.rooms.holdPersistent(roomKey, { nodeId: target.identity, requireClean: false })
                   : null;
                 try {
                   const authoritative = await authoritativePageHtml(ctx.localAuthority, target, previous);
