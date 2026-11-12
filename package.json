@@ -197,7 +197,7 @@
     "@babel/core": "^7.28.4",
     "@babel/preset-react": "^7.27.1",
     "@electron/notarize": "^3.1.1",
-    "@panphora/host-conformance": "file:vendor/host-conformance.tgz",
+    "@panphora/host-conformance": "1.0.0",
     "@tailwindcss/cli": "^4.1.14",
     "babel-loader": "^10.0.0",
     "concurrently": "^9.2.1",
