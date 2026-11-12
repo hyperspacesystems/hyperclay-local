@@ -11,7 +11,7 @@
     "node": ">=22.12.0"
   },
   "scripts": {
-    "test": "jest",
+    "test": "node --max-old-space-size=6144 node_modules/jest/bin/jest.js",
     "test:http": "node tests/http/self-test.mjs --profile local-full",
     "test:watch": "jest --watch",
     "test:node": "node --test tests/node/data-api-query-write.node-test.js tests/node/data-api-query-routes.node-test.js tests/node/data-extractor.node-test.js tests/node/data-api-write.node-test.js tests/node/data-api-write-review.node-test.js tests/node/data-api-write-announce.node-test.js tests/node/data-loss-guard.node-test.js tests/node/data-guard-wire.node-test.js tests/node/control-lane.node-test.js tests/node/control-rider.node-test.js tests/node/helper-jsonl.node-test.js tests/node/helper-runner.node-test.js tests/node/helper-dispatcher.node-test.js tests/node/ai-edit-setting.node-test.js tests/node/ai-edit-helper.node-test.js tests/node/ai-edit-fallback.node-test.js tests/node/page-tool-helper.node-test.js",
