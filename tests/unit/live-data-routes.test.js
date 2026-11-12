@@ -845,14 +845,19 @@ describe('boundedWriter', () => {
     };
   };
 
-  test('32 refused writes drop the stream once, then it stops writing', () => {
+  const nextTurn = () => new Promise((resolve) => setImmediate(resolve));
+
+  test('refused writes on 33 turns in a row drop the stream once, then it stops writing', async () => {
     const res = synthetic();
     const drops = [];
     const writer = boundedWriter(res, () => drops.push(1));
     expect(res.ons).toBe(1);
     expect(res.hasDrain()).toBe(true);
 
-    for (let i = 0; i < 33; i += 1) writer.write(`frame ${i}`);
+    for (let i = 0; i < 33; i += 1) {
+      writer.write(`frame ${i}`);
+      await nextTurn();
+    }
 
     expect(res.writes).toBe(33);
     expect(drops).toEqual([1]);
@@ -864,20 +869,33 @@ describe('boundedWriter', () => {
     expect(res.writes).toBe(33);
   });
 
-  test('one drain resets the count', () => {
+  test('one drain resets the count', async () => {
     const res = synthetic();
     const drops = [];
     const writer = boundedWriter(res, () => drops.push(1));
 
-    for (let i = 0; i < 20; i += 1) writer.write('frame');
+    for (let i = 0; i < 20; i += 1) { writer.write('frame'); await nextTurn(); }
     expect(drops).toEqual([]);
     res.drain();
-    for (let i = 0; i < 32; i += 1) writer.write('frame');
+    for (let i = 0; i < 32; i += 1) { writer.write('frame'); await nextTurn(); }
     expect(drops).toEqual([]);
     expect(res.writes).toBe(52);
 
     writer.write('frame');
     expect(drops).toEqual([1]);
+  });
+
+  test('a burst refused within one turn, as every write is on Windows, keeps the stream', async () => {
+    const res = synthetic();
+    const drops = [];
+    const writer = boundedWriter(res, () => drops.push(1));
+
+    for (let i = 0; i < 300; i += 1) writer.write(`frame ${i}`);
+    await nextTurn();
+
+    expect(res.writes).toBe(300);
+    expect(drops).toEqual([]);
+    expect(writer.dropped).toBe(false);
   });
 
   test('a reported buffer above 8 MiB drops the stream', () => {
@@ -892,7 +910,7 @@ describe('boundedWriter', () => {
     expect(drops).toEqual([1]);
   });
 
-  test('one writer counts across the cursor, named and snapshot sinks', () => {
+  test('one writer counts across the cursor, named and snapshot sinks', async () => {
     const res = synthetic();
     const drops = [];
     const writer = boundedWriter(res, () => drops.push(1));
@@ -902,7 +920,10 @@ describe('boundedWriter', () => {
       (message) => writer.write(message),
     ];
 
-    for (let i = 0; i < 33; i += 1) sinks[i % 3](`frame ${i}`);
+    for (let i = 0; i < 33; i += 1) {
+      sinks[i % 3](`frame ${i}`);
+      await nextTurn();
+    }
 
     expect(res.writes).toBe(33);
     expect(drops).toEqual([1]);

@@ -1022,15 +1022,18 @@ async function handleSharedSyncStreamV2(ctx, req, res, { resolveTarget, s, m, v 
 
 // One physical SSE response gets one write budget, shared by every sink that
 // writes to it: the replay, the cursor, the named room events and the snapshot
-// subscription. A connection that refuses this many frames in a row, or that has
-// this much already buffered, is not reading, and the stream is torn down rather
-// than buffered without bound. One drain listener resets the count; both go
-// away with the stream.
+// subscription. A connection that refuses writes on this many event-loop turns
+// in a row, or that has this much already buffered, is not reading, and the
+// stream is torn down rather than buffered without bound. A burst written in one
+// turn counts once: on Windows every write in a synchronous loop reports a full
+// buffer until the turn ends, so counting writes dropped healthy clients mid
+// replay. One drain listener resets the count; both go away with the stream.
 const SSE_FALSE_WRITE_LIMIT = 32;
 const SSE_WRITE_BUFFER_LIMIT = 8 * 1024 * 1024;
 
 function boundedWriter(res, onDrop) {
   let refused = 0;
+  let countedThisTurn = false;
   let dropped = false;
   const onDrain = () => { refused = 0; };
   res.on('drain', onDrain);
@@ -1054,8 +1057,10 @@ function boundedWriter(res, onDrop) {
         stop();
         return false;
       }
-      if (ok === false) {
+      if (ok === false && !countedThisTurn) {
         refused += 1;
+        countedThisTurn = true;
+        setImmediate(() => { countedThisTurn = false; });
       }
       if (refused > SSE_FALSE_WRITE_LIMIT || res.writableLength > SSE_WRITE_BUFFER_LIMIT) stop();
       return ok;
