@@ -3,7 +3,7 @@ const path = require('upath');
 const cheerio = require('cheerio');
 const { atomicWriteFile } = require('../utils/write-queue');
 const { createRootDocumentHost } = require('../document-host');
-const { normCanonical } = require('../local-authority');
+const { normCanonical, roomAt } = require('../local-authority');
 
 const UNTITLED = /^untitled(?:-\d+)?\.html$/i;
 
@@ -189,8 +189,8 @@ function createAutoNamer({ appDataPath, authority, checkpoint, rootFor, rename, 
 
   async function settle(key) {
     await ready;
+    const room = roomAt(authority?.rooms, key);
     key = normCanonical(key);
-    const room = authority?.rooms.get(key);
     if (!room || room.emptySince === null || authority.hasParticipatingEditors(key) || checkpoint?.dirty(room)) return;
     const target = authority.checkpointTargets(key).find(item => entries.has(keyFor(item.rootId, item.logicalPath)));
     if (!target) return;
@@ -214,7 +214,7 @@ function createAutoNamer({ appDataPath, authority, checkpoint, rootFor, rename, 
       for (let number = 1; number <= 20; number++) {
         const name = nameFor(base, number);
         if (name === path.basename(entry.path)) return;
-        if (authority.hasParticipatingEditors(key) || checkpoint?.dirty(authority.rooms.get(key))) return;
+        if (authority.hasParticipatingEditors(key) || checkpoint?.dirty(roomAt(authority.rooms, key))) return;
         try {
           await rename(root, entry.path, name);
           await change(() => { entries.delete(recordKey); active.delete(recordKey); });

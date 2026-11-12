@@ -21,6 +21,17 @@ function normCanonical(value) {
   return normalized.length > 1 ? normalized.replace(/\/+$/, '') : normalized;
 }
 
+// The live room for a file, named either by the path the filesystem handed the
+// caller or by the canonical form: on Windows those spellings differ and both
+// address the one room.
+function roomAt(rooms, key) {
+  if (!rooms || typeof key !== 'string' || !key) return null;
+  const room = rooms.get(key);
+  if (room !== undefined && room !== null) return room;
+  const canonical = normCanonical(key);
+  return canonical === key ? null : rooms.get(canonical) ?? null;
+}
+
 const RATE_LIMIT = Object.freeze({ rate: 25, burst: 40, idleMs: 60 * 1000 });
 
 // electron-builder packs node_modules into app.asar, and a worker_threads Worker
@@ -1507,4 +1518,4 @@ function createLocalAuthority({ rooms, withDocument, readSaved, publishRecovered
   };
 }
 
-module.exports = { createLocalAuthority, LocalAuthorityError, unpackedWorkerUrl, normCanonical };
+module.exports = { createLocalAuthority, LocalAuthorityError, unpackedWorkerUrl, normCanonical, roomAt };

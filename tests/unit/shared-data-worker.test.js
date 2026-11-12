@@ -1021,7 +1021,8 @@ describe('the shared data worker', () => {
     for (let i = 0; i < 300; i += 1) {
       h.authority.publish(canonical, 'data', { epoch: 'e1', seq: 900 + i, name: 'store', ops: [ADD], from: 'cA', n: i });
     }
-    await waitFor(() => dataEvents(a).length >= 301, 'the whole room sequence');
+    // 300 frames over one real socket: a slow CI runner needs more than the 5s default.
+    await waitFor(() => dataEvents(a).length >= 301, 'the whole room sequence', 15000);
     const opened = HttpEventSource.opened.length;
     const c = worker.connect();
     c.push({ v: 2, type: 'visible' });

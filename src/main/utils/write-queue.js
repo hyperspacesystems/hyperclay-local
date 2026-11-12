@@ -37,6 +37,14 @@ function withFileLock(key, fn) {
   return run;
 }
 
+// One form (path.normalize: the platform separator, no trailing one) for every name the boundary compares or locks on: a Windows caller's
+// `C:\...` and the canonical `C:/...` name the same file.
+const boundaryKey = (value) => {
+  if (typeof value !== 'string' || !value) return value;
+  const normalized = path.normalize(value);
+  return normalized.length > 1 ? normalized.replace(/\/+$/, '') : normalized;
+};
+
 const boundaryScope = new AsyncLocalStorage();
 const boundaryTokens = new WeakMap();
 const boundaryQueue = [];
@@ -84,7 +92,7 @@ async function withBoundary(exclusive, fn) {
 function assertWriteContext(token, canonicalPath) {
   const state = boundaryTokens.get(token);
   if (!state || state.released || boundaryScope.getStore() !== state ||
-      (!state.exclusive && state.canonicalPath !== canonicalPath)) {
+      (!state.exclusive && state.canonicalPath !== boundaryKey(canonicalPath))) {
     throw new Error('Document boundary ownership required');
   }
 }
@@ -102,8 +110,8 @@ function withDocumentWrite(resolveTarget, fn) {
     if (typeof target?.canonicalPath !== 'string' || !target.canonicalPath) {
       throw new TypeError('Expected an admitted canonical target');
     }
-    state.canonicalPath = target.canonicalPath;
-    return withFileLock(target.canonicalPath, () => fn(target, state.token));
+    state.canonicalPath = boundaryKey(target.canonicalPath);
+    return withFileLock(state.canonicalPath, () => fn(target, state.token));
   });
 }
 

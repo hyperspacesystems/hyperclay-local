@@ -2,7 +2,7 @@ const fs = require('fs');
 const os = require('os');
 const upath = require('upath');
 const { createDocumentHost } = require('../../src/main/document-host');
-const { atomicWriteFile, withStructureChange, withDocumentWrite, assertStructureContext } = require('../../src/main/utils/write-queue');
+const { atomicWriteFile, withStructureChange, withDocumentWrite, assertStructureContext, assertWriteContext } = require('../../src/main/utils/write-queue');
 const { createLocalAuthority } = require('../../src/main/local-authority');
 const { createLocalCheckpoint } = require('../../src/main/local-checkpoint');
 const { storePageState, logicalDocument } = require('../../src/main/page-state-store');
@@ -226,4 +226,84 @@ test('a checkpoint attempt named with native separators finds the document room'
   const result = await checkpoint.attempt(`${winRoot}\\page.html`);
 
   expect(result.kind).toBe('ok');
+});
+
+test('a room named by the native path is the one the auto-namer settles', async () => {
+  const root = tempDir();
+  const winRoot = root.split('/').join('\\');
+  const page = upath.join(root, 'untitled.html');
+  const html = '<article data-blockeditor><h1>First Heading</h1></article>';
+  fs.writeFileSync(page, html);
+  // The key a Windows caller holds: backslashes, as fs.watch and path.join give it.
+  const nativeKey = `${winRoot}\\untitled.html`;
+  const room = { key: nativeKey, nodeId: 'node-1', emptySince: 1000 };
+  const authority = {
+    rooms: new Map([[nativeKey, room]]),
+    identityAt: () => room.nodeId,
+    hasParticipatingEditors: () => false,
+    checkpointTargets: () => [{ rootId: 'root-a', logicalPath: 'untitled.html' }],
+  };
+  const { createAutoNamer } = require('../../src/main/workspace/auto-name');
+  const renames = [];
+  const namer = createAutoNamer({
+    appDataPath: tempDir(), authority,
+    checkpoint: { dirty: () => false, pending: () => null },
+    rootFor: () => ({ id: 'root-a', path: root }),
+    rename: async (_root, from, name) => {
+      renames.push(name);
+      fs.renameSync(upath.join(root, from), upath.join(root, name));
+      return { path: name };
+    },
+  });
+  try {
+    await namer.record({ id: 'root-a', path: root }, 'untitled.html', 'blockeditor');
+    await namer.settle(nativeKey);
+  } finally { namer.close(); }
+
+  expect(renames).toEqual(['first-heading.html']);
+  expect(fs.readFileSync(upath.join(root, 'first-heading.html'), 'utf8')).toBe(html);
+});
+
+test('a checkpoint attempt names a natively keyed room by its native path', async () => {
+  const root = tempDir();
+  const winRoot = root.split('/').join('\\');
+  const page = upath.join(root, 'doc.html');
+  fs.writeFileSync(page, '<html><body></body></html>');
+  const nativeKey = `${winRoot}\\doc.html`;
+  const room = { key: nativeKey, nodeId: 'node-1', emptySince: 1000 };
+  const authority = {
+    rooms: new Map([[nativeKey, room]]),
+    roomIsDirty: () => true,
+    hasParticipatingEditors: () => false,
+    checkpointTargets: () => [{ rootId: 'root-a', identity: 'node-1', logicalPath: 'doc.html' }],
+    captureAdmission: () => ({}),
+    validateAdmission: () => {},
+    reconcileDisk: async () => ({ kind: 'current' }),
+  };
+  const checkpoint = createLocalCheckpoint({
+    authority, logError: () => {},
+    setTimer: () => ({ unref: () => {} }), clearTimer: () => {},
+  });
+  checkpoint.registerHost('root-a', { checkpoint: async () => ({ kind: 'refused', reason: 'invalid-document' }) });
+
+  const result = await checkpoint.attempt(nativeKey);
+
+  expect(result.reason).toBe('invalid-document');
+});
+
+test('a document boundary opened on a native path owns the canonical path', async () => {
+  const root = tempDir();
+  const winRoot = root.split('/').join('\\');
+  const page = upath.join(root, 'A.html');
+  fs.writeFileSync(page, 'a');
+
+  const context = await withDocumentWrite(
+    async () => ({ canonicalPath: `${winRoot}\\A.html` }),
+    async (_target, token) => {
+      assertWriteContext(token, page);
+      return 'written';
+    },
+  );
+
+  expect(context).toBe('written');
 });
