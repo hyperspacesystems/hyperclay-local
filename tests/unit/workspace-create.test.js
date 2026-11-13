@@ -30,7 +30,34 @@ test('bundled templates match their manifest and the hosted source when present'
     const hosted = path.join(__dirname, '../../../hyperclay/public-assets/core-apps', item.file);
     if (await fs.stat(hosted).catch(() => null)) expect(bundled).toEqual(await fs.readFile(hosted));
   }
-  expect(manifest.map(item => item.id)).toEqual(['blockeditor', 'blank', 'devlog', 'kanban', 'landing']);
+  const catalogPath = path.join(__dirname, '../../../hyperclay/public-assets/core-apps/templates.json');
+  const catalog = await fs.readFile(catalogPath, 'utf8').catch(() => null);
+  const listed = manifest.filter(item => item.listed).map(item => item.id);
+  if (catalog) expect(listed).toEqual(['blank', ...JSON.parse(catalog).map(item => item.key)]);
+  for (const id of ['devlog', 'landing']) expect(manifest.find(item => item.id === id)?.listed).toBe(false);
+  for (const item of manifest.filter(entry => entry.thumbnail)) {
+    expect(await fs.stat(path.join(__dirname, '../../src/main/document-templates', item.thumbnail)).catch(() => null)).toBeTruthy();
+  }
+});
+
+test('the bootstrap carries the gallery catalog and the shell serves its thumbnails', async () => {
+  h = await fixture();
+  const request = await h.start();
+
+  const cards = (await (await request('/api/bootstrap')).json()).templates;
+  expect(cards.map(item => item.id)).toEqual(manifest.filter(item => item.listed).map(item => item.id));
+  for (const card of cards) expect([null, `/templates/${card.id}.svg`]).toContain(card.thumbnail);
+  for (const card of cards) expect(card.sizeBytes).toBe(manifest.find(item => item.id === card.id).bytes);
+
+  const thumbnail = await request('/templates/kanban.svg');
+  expect(thumbnail.status).toBe(200);
+  expect(thumbnail.headers.get('content-type')).toBe('image/svg+xml');
+  expect(thumbnail.headers.get('x-content-type-options')).toBe('nosniff');
+  expect(thumbnail.headers.get('content-security-policy')).toBe("default-src 'none'; style-src 'unsafe-inline'");
+  expect(await thumbnail.text()).toBe(await fs.readFile(path.join(__dirname, '../../src/main/document-templates/thumbnails/kanban.svg'), 'utf8'));
+
+  expect((await request('/templates/nope.svg')).status).toBe(404);
+  expect((await request('/templates/../manifest.json')).status).toBe(404);
 });
 
 test('each template creates its exact bytes in the selected folder without a backup', async () => {
@@ -49,7 +76,7 @@ test('each template creates its exact bytes in the selected folder without a bac
       .toEqual(state ? Buffer.from(file, 'utf8') : template);
     expect(await readPageState(h.dir, `Notes/${name}`)).toEqual(state);
   }
-  expect(await fs.readdir(path.join(h.dir, 'Notes'))).toHaveLength(5);
+  expect(await fs.readdir(path.join(h.dir, 'Notes'))).toHaveLength(manifest.length);
   expect(await fs.stat(path.join(h.dir, '.hyperclay', 'versions')).catch(() => null)).toBeNull();
 });
 

@@ -10,6 +10,9 @@ const { createRootDocumentHost } = require('../document-host');
 const { freeCopyName } = require('../utils/free-name');
 const { SearchIndex } = require('./search-index');
 const { handleWorkspaceRoute } = require('./routes');
+const TEMPLATE_ROWS = require('../document-templates/manifest.json');
+const TEMPLATE_CARDS = TEMPLATE_ROWS.filter(item => item.listed)
+  .map(({ id, name, description, thumbnail, bytes }) => ({ id, name, description, sizeBytes: bytes, thumbnail: thumbnail ? `/templates/${id}.svg` : null }));
 
 const MIME = { '.js': 'text/javascript', '.css': 'text/css', '.woff': 'font/woff', '.woff2': 'font/woff2' };
 const collator = new Intl.Collator(undefined, { sensitivity: 'base', numeric: true });
@@ -243,6 +246,7 @@ function createShellServer({ authority, rootPool, observerFor, settings, appVers
           protocol: manifest.protocol, epoch, shellOrigin: origin, appVersion,
           online: state.online !== false,
           account: { signedIn: !!state.account?.signedIn, username: state.account?.username || null }, roots: roots(),
+          templates: TEMPLATE_CARDS,
         });
       }
       if (req.method === 'GET' && url.pathname === '/api/roots') return sendJson(res, 200, roots());
@@ -361,6 +365,16 @@ function createShellServer({ authority, rootPool, observerFor, settings, appVers
         'Content-Security-Policy': "frame-ancestors 'none'", 'X-Frame-Options': 'DENY',
       });
       return res.end(html);
+    }
+    const thumbnail = req.method === 'GET' && url.pathname.match(/^\/templates\/([a-z0-9-]+)\.svg$/);
+    const card = thumbnail && TEMPLATE_ROWS.find(item => item.id === thumbnail[1] && item.thumbnail);
+    if (card) {
+      const bytes = await fs.readFile(path.join(__dirname, '../document-templates', card.thumbnail));
+      res.writeHead(200, {
+        'Content-Type': 'image/svg+xml', 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-cache',
+        'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'",
+      });
+      return res.end(bytes);
     }
     const asset = manifest.assets.find(item => `/${item.path}` === url.pathname);
     if (!asset) return sendJson(res, 404, { error: 'Not found', reason: 'missing' });
