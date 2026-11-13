@@ -1,4 +1,4 @@
-# Runs the jest + node:test suites on a throwaway Hetzner box: `testbox run`.
+# Runs the jest + node:test suites on a throwaway cloud box (Ubicloud by default): `testbox run`.
 # See ~/Documents/GitHub/bash_commands/testbox/README.md.
 TESTBOX_REPO=hyperclay-local
 TESTBOX_SETUP='npm ci --no-audit --no-fund && ./node_modules/.bin/install-electron --no'
