@@ -22,6 +22,15 @@ describe('update-now wiring in main.js', () => {
     expect(handler('second-instance')).toContain('updater.updateNow(updateNowVersion)');
   });
 
+  test('a bare relaunch shows the panel, the only way back where the desktop draws no tray icon', () => {
+    expect(handler('second-instance')).toContain('if (!openPaths.length && !updateNowVersion) popover.showPopover(');
+  });
+
+  test('every About item uses the one dialog that has no parent window', () => {
+    expect([...main.matchAll(/title: 'About Hyperclay Local'/g)]).toHaveLength(1);
+    expect(main).not.toMatch(/showMessageBox\(win,/);
+  });
+
   test('nothing else reaches updateNow: not the cold start argv, open-file, or any IPC handler', () => {
     expect([...main.matchAll(/\.updateNow\(/g)]).toHaveLength(1);
     expect(handler('open-file')).not.toMatch(/updateNow|parseUpdateNowArg/);

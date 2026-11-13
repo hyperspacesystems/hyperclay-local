@@ -682,7 +682,8 @@ function showAboutDialog() {
     title: 'About Hyperclay Local',
     message: `Hyperclay Local Server v${app.getVersion()}`,
     detail: 'A local server for running your malleable documents offline.\n\nMade with \u2764\ufe0f for the Hyperclay platform.',
-    buttons: ['OK']
+    buttons: ['OK'],
+    icon: getAppIcon() || undefined
   });
 }
 
@@ -1995,6 +1996,7 @@ ipcMain.handle('show-options-menu', (event) => {
       click: () => {
         const logsPath = app.getPath('logs');
         const syncLogsPath = path.join(logsPath, 'sync');
+        fs.mkdirSync(syncLogsPath, { recursive: true });
         shell.openPath(syncLogsPath);
       }
     },
@@ -2003,6 +2005,7 @@ ipcMain.handle('show-options-menu', (event) => {
       click: () => {
         const logsPath = app.getPath('logs');
         const errorLogsPath = path.join(logsPath, 'errors');
+        fs.mkdirSync(errorLogsPath, { recursive: true });
         shell.openPath(errorLogsPath);
       }
     },
@@ -2022,19 +2025,7 @@ ipcMain.handle('show-options-menu', (event) => {
     {
       label: 'About Hyperclay Local',
       click: () => {
-        if (process.platform === 'darwin') {
-          app.showAboutPanel();
-        } else {
-          const iconPath = getAppIcon();
-          dialog.showMessageBox(win, {
-            type: 'info',
-            title: 'About Hyperclay Local',
-            message: `Hyperclay Local Server v${app.getVersion()}`,
-            detail: 'A local server for running your malleable documents offline.\n\nMade with \u2764\ufe0f for the Hyperclay platform.',
-            buttons: ['OK'],
-            icon: iconPath || undefined
-          });
-        }
+        showAboutDialog();
       }
     },
     { type: 'separator' },
@@ -2092,11 +2083,14 @@ app.on('open-file', (event, p) => {        // macOS Finder/Apple Events
   if (openHandlerReady) queueOpenPath(p); else pendingOpenPaths.push(p);
 });
 app.on('second-instance', (event, argv) => {  // Windows/Linux re-launch with file arg
-  extractOpenPaths(argv).forEach((p) => (openHandlerReady ? queueOpenPath(p) : pendingOpenPaths.push(p)));
+  const openPaths = extractOpenPaths(argv);
+  openPaths.forEach((p) => (openHandlerReady ? queueOpenPath(p) : pendingOpenPaths.push(p)));
   // Read here and nowhere else: only a second launch by the same user reaches this argv.
   // A cold start's own argv, open-file events and the renderer never carry the request.
   const updateNowVersion = parseUpdateNowArg(argv);
   if (updateNowVersion && updater) updater.updateNow(updateNowVersion);
+  // A bare relaunch is the way back to the panel where the desktop draws no tray icon (GNOME).
+  if (!openPaths.length && !updateNowVersion) popover.showPopover(tray ? tray.getBounds() : null);
 });
 
 // The page merge code (jsdom and clayjs's checkpoint and rooms) takes about half a second to
