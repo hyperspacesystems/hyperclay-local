@@ -33,7 +33,7 @@ test('extractViaTag returns null when no tag carries the api token', async () =>
 });
 
 test('extractViaTag throws UnknownRulesVersion at the wrong version', async () => {
-  const html = `<html><head><script type="application/json" data-rules-name="api" data-rules-version="2">{ "t": "h1" }</script></head><body></body></html>`;
+  const html = `<html><head><script type="application/json" data-rules-name="api" data-rules-version="3">{ "t": "h1" }</script></head><body></body></html>`;
   await assert.rejects(() => extractViaTag(html, 'api'), (e) => e.name === 'UnknownRulesVersion');
 });
 

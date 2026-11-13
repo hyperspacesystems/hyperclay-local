@@ -692,6 +692,7 @@ function createDocumentHost(deps) {
         const dataLossProv = origin === 'api' ? 'external' : dataGuard.provenanceForLocalSave(userDriven);
         dataGuard.runDataLossGuard({
           baseDir, name, newHtml: content, prevContent: dataLossPrev, prov: dataLossProv, live,
+          ifMatched: origin === 'api' && typeof ifMatch === 'string' && dataGuard.namesExactVersion(ifMatch),
         }).catch(err => console.error('[data-guard] /save guard error:', err && err.message ? err.message : err));
       }
 

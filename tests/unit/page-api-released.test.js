@@ -76,6 +76,7 @@ function serviceHost(options) {
         new Promise((resolve) => setTimeout(() => resolve('held'), 200)),
       ]);
       commits.push({
+        ifMatch: request.ifMatch,
         opHandle: request.opHandle,
         expected: request.expected,
         boundary,
@@ -141,13 +142,24 @@ if (scenario === 'host-refusal') {
     const etag = read.headers.get('etag');
     const revision = read.headers.get('blockeditor-revision');
     const before = await fs.readFile(file);
+    const guard = require(nodePath.join(repo, 'src/main/data-loss-guard'));
+    await guard.runDataLossGuard({ baseDir: dir, name: 'page.html', newHtml: before.toString(), prevContent: before.toString(), prov: 'ui-gestured' });
     const write = await fetch(origin + '/_/api/page.html', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'If-Match': etag, 'Blockeditor-If-Match': revision },
+      headers: { 'Content-Type': 'application/json', 'If-Match': scenario === 'stale' ? '"stale"' : etag, 'Blockeditor-If-Match': revision },
       body: JSON.stringify({ body: 'new' }),
     });
     const body = await write.json().catch(() => null);
     const after = await fs.readFile(file);
+    let state = await guard._readGuard(dir, 'page.html');
+    if (write.status === 200) {
+      const until = Date.now() + 2000;
+      while (state?.uiWorkPending && Date.now() < until) {
+        await new Promise(resolve => setTimeout(resolve, 10));
+        state = await guard._readGuard(dir, 'page.html');
+      }
+      if (!state || state.uiWorkPending) throw new Error('guard did not finish');
+    }
 
     // The authority keys its rooms by the canonical form it hands back from the
     // binding, which is the same file this scenario named natively.
@@ -162,6 +174,7 @@ if (scenario === 'host-refusal') {
     }
 
     console.log(JSON.stringify({
+      etag, guardEvent: state?.event ?? null,
       readStatus: read.status,
       revision,
       status: write.status,
@@ -205,6 +218,8 @@ describe('the page API write that releases its boundary', () => {
     expect(result.body.body).toBe('new');
     expect(result.pageRevision).toBeTruthy();
 
+    expect(result.guardEvent).toBeNull();
+    expect(result.first.ifMatch).toBe(result.etag);
     expect(result.commits).toBe(1);
     expect(result.first.boundary).toBe('free');
     expect(result.first.opHandle).toMatch(/^[0-9a-f]{32}$/);
@@ -214,6 +229,13 @@ describe('the page API write that releases its boundary', () => {
 
     expect(result.contexts).toBe(0);
     expect(result.hold).toBe('free');
+  });
+
+  test('a stale matched version is refused before committing', () => {
+    const result = probe('stale');
+    expect(result.status).toBe(412);
+    expect(result.commits).toBe(0);
+    expect(result.unchanged).toBe(true);
   });
 
   test('a document that changed twice is written again from its read', () => {

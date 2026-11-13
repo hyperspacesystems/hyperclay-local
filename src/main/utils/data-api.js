@@ -12,6 +12,7 @@
 const fs = require('fs').promises;
 const path = require('upath');
 const { extractData, extractViaTag, parseExtractionRules, writeViaTag, writeWithRules } = require('./data-extractor');
+const { isQueryRefused, isPatchBodyViaTag, patchViaTag } = require('./sheet-api');
 const { writeApiSidecarData, deleteApiSidecar, readFreshSidecar } = require('./api-sidecar');
 const { withFileLock, assertWriteContext } = require('./write-queue');
 const { documentEtag, ifMatchSatisfied } = require('../spec-wire');
@@ -35,6 +36,27 @@ function mapApiTagError(error) {
   }
   if (message.includes('selector')) {
     return { error: 'Invalid selector in api rules tag', message };
+  }
+  return null;
+}
+
+// Refusals from a sheet query or the sheet codec, with the status the shared cases pin
+// (hyper-html-api scripts/conformance.mjs, sheetError): 409 when the document is fine but
+// this write cannot apply to it as it stands, 400 for the rest. Null for anything else.
+const SHEET_CONFLICTS = ['sheet-not-canonical', 'sheet-write-unavailable'];
+
+function mapSheetError(error) {
+  if (isQueryRefused(error)) {
+    return { status: 400, json: { error: 'Invalid sheet query', message: error.message, code: error.code } };
+  }
+  if (error && error.name === 'CodecRefused') {
+    return {
+      status: SHEET_CONFLICTS.includes(error.code) ? 409 : 400,
+      json: { error: 'Sheet write refused', message: error.message, code: error.code }
+    };
+  }
+  if (error && error.name === 'UnknownCodec') {
+    return { status: 400, json: { error: 'Unknown codec', message: error.message } };
   }
   return null;
 }
@@ -99,11 +121,18 @@ function unusableDataParam(dataParam) {
 // `sourcePath`, when given, is the caller's phase-4 canonical resolved path.
 // Rebuilding `path.join(baseDir, name)` here would follow symlinks independently
 // of the one canonical pass in path-resolver.js.
-async function serveSiteApiLocal(baseDir, name, { sourcePath, boundary } = {}) {
+//
+// `sheetQuery` (from sheetQueryOf) asks for part of a sheet; that read is answered
+// from the document each time and never reads or writes the sidecar, which holds only
+// the whole read.
+async function serveSiteApiLocal(baseDir, name, { sourcePath, boundary, sheetQuery } = {}) {
   sourcePath = sourcePath || path.join(baseDir, name);
+  const read = (target) => (sheetQuery
+    ? readPartialInLock(baseDir, name, target, sheetQuery)
+    : serveSiteApiInLock(baseDir, name, target));
   if (boundary) {
     assertWriteContext(boundary.token, boundary.target.canonicalPath);
-    return serveSiteApiInLock(baseDir, name, boundary.target.canonicalPath);
+    return read(boundary.target.canonicalPath);
   }
   // A1: the freshness stat, the source read, the extraction and the sidecar
   // refresh are ONE critical section on the source file's queue slot — the same
@@ -111,7 +140,31 @@ async function serveSiteApiLocal(baseDir, name, { sourcePath, boundary } = {}) {
   // concurrent save publishes H1 and its H1 sidecar, then overwrite that newer
   // sidecar with H0 data. The fresh mtime then makes the stale data read as
   // current on every subsequent request.
-  return await withFileLock(sourcePath, () => serveSiteApiInLock(baseDir, name, sourcePath));
+  return await withFileLock(sourcePath, () => read(sourcePath));
+}
+
+async function readPartialInLock(baseDir, name, sourcePath, query) {
+  let stored;
+  try {
+    stored = await logicalBytes(baseDir, name, await fs.readFile(sourcePath));
+  } catch (e) {
+    if (e.code !== 'ENOENT') throw e;
+    return { status: 404, json: { error: 'Site content not found', message: 'The site exists but has no content' } };
+  }
+  let data;
+  try {
+    data = await extractViaTag(stored.toString('utf8'), 'api', { query });
+  } catch (err) {
+    const sheet = mapSheetError(err);
+    if (sheet) return sheet;
+    const mapped = mapApiTagError(err);
+    if (!mapped) throw err;
+    return { status: 400, json: mapped };
+  }
+  if (data === null) {
+    return { status: 400, json: { error: 'No api rules tag', message: 'This page has no rules tag with data-rules-name~="api".' } };
+  }
+  return { status: 200, headers: { ETag: documentEtag(stored) }, json: data };
 }
 
 async function serveSiteApiInLock(baseDir, name, sourcePath) {
@@ -143,10 +196,11 @@ async function serveSiteApiInLock(baseDir, name, sourcePath) {
   try {
     data = await extractViaTag(html, 'api');
   } catch (err) {
-    const mapped = mapApiTagError(err);
-    if (!mapped) throw err; // unmapped → 500
+    const sheet = mapSheetError(err);
+    const mapped = sheet ? null : mapApiTagError(err);
+    if (!sheet && !mapped) throw err; // unmapped → 500
     await writeApiSidecarData(baseDir, name, null); // delete stale
-    return { status: 400, json: mapped };
+    return sheet || { status: 400, json: mapped };
   }
 
   if (data === null) {
@@ -277,6 +331,25 @@ async function applySiteDataLocal(baseDir, name, data, options = {}) {
         json: { error: 'Unsupported encoding', message: `${name} is not UTF-8, so it cannot be written through the data API without changing bytes outside the edit.` }
       };
     }
+    if (!supplied && await isPatchBodyViaTag(data, previous, 'api')) {
+      let patched;
+      try {
+        patched = await patchViaTag(previous, data.patch, 'api');
+      } catch (err) {
+        const refusal = mapSheetError(err);
+        if (refusal) return refusal;
+        const mapped = mapWriteError(err);
+        if (!mapped) throw err;
+        return { status: 400, json: mapped };
+      }
+      const written = patched.html === previous ? previous : await commit(patched.html, previous);
+      const etag = documentEtag(Buffer.from(written, 'utf8'));
+      return {
+        status: 200,
+        headers: { ETag: etag },
+        json: { etag, changed: patched.changed, recalculated: false, stale: patched.stale }
+      };
+    }
     if (supplied) {
       try {
         await extractData(previous, rules);
@@ -296,6 +369,8 @@ async function applySiteDataLocal(baseDir, name, data, options = {}) {
     } catch (err) {
       // Rules parsed from the caller's own parameter keep the query path's
       // author-facing wording; everything else keeps the tag path's.
+      const sheet = mapSheetError(err);
+      if (sheet) return sheet;
       const mapped = (supplied && mapQueryError(err)) || mapWriteError(err);
       if (!mapped) throw err;
       return { status: 400, json: mapped };
@@ -323,4 +398,4 @@ async function applySiteDataLocal(baseDir, name, data, options = {}) {
   return await withFileLock(sourcePath, inner);
 }
 
-module.exports = { mapApiTagError, serveSiteApiLocal, extractSiteDataLocal, prepareSiteDataWriteLocal, applySiteDataLocal };
+module.exports = { mapApiTagError, mapSheetError, serveSiteApiLocal, extractSiteDataLocal, prepareSiteDataWriteLocal, applySiteDataLocal };

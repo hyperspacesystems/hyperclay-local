@@ -55,7 +55,7 @@ const FIXTURE = `<!DOCTYPE html><html><head>
 </script></head><body><h1>Hello</h1><ul><li class="item">x</li><li class="item">y</li></ul></body></html>`;
 test('golden-hash parity: local extractor yields the shared canonical hash', async () => {
   const island = await guard.extractIsland(FIXTURE);
-  assert.deepEqual(island, { api: { title: 'Hello', items: ['x', 'y'] } });
+  assert.deepEqual(island, { api: { title: 'Hello', items: ['x', 'y'] }, '@form': 'stored' });
   assert.equal(core.islandHash(island), GOLDEN);
 });
 

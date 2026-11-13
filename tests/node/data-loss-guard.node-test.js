@@ -305,22 +305,20 @@ test('getGuardEvent does not seed for an island-less page', async () => {
   assert.strictEqual(g, null); // no guard file created
 });
 
-test('a data-rules-version skew fails open: the write proceeds, no guard action', async () => {
+test('an unreadable rules version preserves the baseline and raises a data loss event', async () => {
   const baseDir = await freshBaseDir();
   const orig = page({ items: ['a', 'b', 'c'] });
   await guard.runDataLossGuard({ baseDir, name: NAME, newHtml: orig, prevContent: orig, prov: 'external' });
   const before = await guard._readGuard(baseDir, NAME);
 
-  // newHtml whose api tag carries an unsupported version -> extractViaTag throws
-  // -> safeExtractIsland is not-ok -> runDataLossGuard returns early (fail open).
   const skew = `<!DOCTYPE html><html><head>
-<script type="application/json" data-rules-name="api" data-rules-version="2">
+<script type="application/json" data-rules-name="api" data-rules-version="3">
 { "title": "h1", "items": ".item[]" }
 </script></head><body><h1>x</h1></body></html>`;
   const ev = await guard.runDataLossGuard({ baseDir, name: NAME, newHtml: skew, prevContent: orig, prov: 'external' });
-  assert.strictEqual(ev, null);                                  // no throw, no event
+  assert.ok(ev);
   const after = await guard._readGuard(baseDir, NAME);
-  assert.strictEqual(after.event, null);
+  assert.ok(after.event);
   assert.deepStrictEqual(after.baseline.data, before.baseline.data); // baseline untouched
 });
 

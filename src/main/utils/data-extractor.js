@@ -8,6 +8,7 @@
 // engine's cheerio adapter does NOT pull cheerio in — the wrapper owns it, exactly
 // like the platform wrapper does).
 const cheerio = require('cheerio');
+const { loadRead } = require('./sheet-api');
 
 let enginePromise = null;
 function loadEngine() {
@@ -42,12 +43,13 @@ async function extractData(html, rules) {
   return extract(queryAdapter, cheerio.load(html).root(), rules);
 }
 
-async function extractViaTag(html, token) {
-  const { extract, findRulesIn, cheerioAdapter } = await loadEngine();
-  const $ = cheerio.load(html);
-  const found = findRulesIn(cheerioAdapter, $.root(), token);
-  if (!found) return null;
-  return extract(cheerioAdapter, $.root(), found.rules);
+// The document's data through its own rules tag, by the reader hyperclay.com uses: a
+// sheet's canonical tables are read without parsing them through the tree. `query`
+// narrows a sheet read ({ shape: 'index' } or { sheet, range, render }); `view: 'digest'`
+// is the data loss guard's view. Null when no tag carries `token`.
+async function extractViaTag(html, token, { query, view } = {}) {
+  const { readDocument } = await loadRead();
+  return readDocument(cheerio.load, html, { token, query, view }).data;
 }
 
 async function parseExtractionRules(str) {

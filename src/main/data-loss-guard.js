@@ -32,9 +32,14 @@ const {
   islandsEqual,
   meaningful,
   isEmptyIsland,
+  CODECS_KEY,
+  FORM_KEY,
+  codecRowChanges,
 } = core;
 
 const RULES_NAME = 'api';
+const GUARD_CODECS = {};
+const rooms = () => require('@panphora/clayjs/server/rooms');
 
 // Cached dynamic import of the ESM engine (apply/findRulesIn/errors) — same
 // bridge pattern as utils/data-extractor.js. cheerio is a plain require.
@@ -44,20 +49,68 @@ function loadEngine() {
     enginePromise = Promise.all([
       import('hyper-html-api/engine'),
       import('hyper-html-api/cheerio'),
-    ]).then(([engine, cheerioAdapterMod]) => ({
-      apply: engine.apply,
-      findRulesIn: engine.findRulesIn,
-      errors: engine.errors,
-      cheerioAdapter: cheerioAdapterMod.default,
-    }));
+      import('hyper-html-api/codecs/sheet'),
+      import('hyper-html-api/read'),
+    ]).then(([engine, cheerioAdapterMod, sheetModule, reader]) => {
+      GUARD_CODECS.sheet = { rowChange: sheetModule.grid.rowChange };
+      return {
+        readDocument: reader.readDocument,
+        documentRules: reader.documentRules,
+        extract: engine.extract,
+        codecOf: engine.codecOf,
+        sheet: sheetModule.sheet,
+        apply: engine.apply,
+        findRulesIn: engine.findRulesIn,
+        errors: engine.errors,
+        cheerioAdapter: cheerioAdapterMod.default,
+      };
+    });
   }
   return enginePromise;
 }
 
 // --- extraction (async). { api: data } | null; throws on version skew. ---
 async function extractIsland(html) {
-  const data = await extractViaTag(html, RULES_NAME);
-  return data === null || data === undefined ? null : { [RULES_NAME]: data };
+  if (typeof html === 'string' && !/data-rules-name/i.test(html)) return null;
+  const { extract, codecOf, sheet, findRulesIn, cheerioAdapter, readDocument, documentRules } = await loadEngine();
+  const file = rooms().splitPage(html).file;
+  if (file.includes('@codec(')) {
+    try {
+      const found = documentRules(cheerio.load, file, { token: RULES_NAME });
+      const rules = found?.rules;
+      const entries = rules && typeof rules === 'object' && !Array.isArray(rules) ? Object.entries(rules) : [];
+      const declared = Object.fromEntries(entries.map(([key, rule]) => [key, codecOf(rule)?.name]).filter(([, name]) => name));
+      if (Object.keys(declared).length) {
+        const { data } = readDocument(cheerio.load, file, { token: RULES_NAME, view: 'digest' });
+        return { [RULES_NAME]: data, [CODECS_KEY]: { [RULES_NAME]: declared }, [FORM_KEY]: 'stored' };
+      }
+    } catch {}
+  }
+  const root = cheerio.load(file).root();
+  const found = findRulesIn(cheerioAdapter, root, RULES_NAME);
+  if (!found) return null;
+  const opts = { version: found.version, codecs: { sheet }, view: 'digest' };
+  const declared = {};
+  const ordinary = {};
+  if (found.rules && typeof found.rules === 'object' && !Array.isArray(found.rules)) {
+    for (const [key, rule] of Object.entries(found.rules)) {
+      let codec;
+      try { codec = codecOf(rule); } catch { codec = { name: '' }; }
+      if (codec) declared[key] = codec.name;
+      else ordinary[key] = rule;
+    }
+  }
+  if (!Object.keys(declared).length) {
+    const data = extract(cheerioAdapter, root, found.rules, opts);
+    return data == null ? null : { [RULES_NAME]: data, [FORM_KEY]: 'stored' };
+  }
+  const data = extract(cheerioAdapter, root, ordinary, opts) || {};
+  for (const key of Object.keys(declared)) {
+    try {
+      data[key] = extract(cheerioAdapter, root, { [key]: found.rules[key] }, opts)[key];
+    } catch {}
+  }
+  return { [RULES_NAME]: data, [CODECS_KEY]: { [RULES_NAME]: declared }, [FORM_KEY]: 'stored' };
 }
 async function safeExtractIsland(html) {
   try {
@@ -67,12 +120,18 @@ async function safeExtractIsland(html) {
   }
 }
 
+function namesExactVersion(ifMatch) {
+  if (typeof ifMatch !== 'string') return false;
+  const tags = ifMatch.split(',').map((tag) => tag.trim()).filter(Boolean);
+  return tags.length > 0 && !tags.includes('*');
+}
+
 const islandHash = core.islandHash;
 
 // classifyDestruction + log the cost-guard fallback (plan §4: "log() the skip").
 // The pure core only flags it on D; the environment wrapper does the logging.
 function classify(base, inc) {
-  const D = classifyDestruction(base, inc);
+  const D = classifyDestruction(base, inc, { codecs: GUARD_CODECS });
   if (D.fuzzyFallback) {
     console.warn('[data-guard] item list too large for fuzzy matching; used a coarser index-aligned compare (detection may be less precise).');
   }
@@ -200,16 +259,20 @@ async function newestVersionIn(baseDir, versionsDir, base) {
 //
 // Returns the client-safe event when a loss is raised, else null. Never throws.
 // ---------------------------------------------------------------------------
-async function runDataLossGuard({ baseDir, name, newHtml, prevContent, prov, live = createRootLive(null) }) {
+async function runDataLossGuard({ baseDir, name, newHtml, prevContent, prov, ifMatched = false, live = createRootLive(null) }) {
   try {
     const inc = await safeExtractIsland(newHtml);
-    if (!inc.ok) return null; // parse/version skew -> fail open
 
     let raised = null;
     let autoResolvedId = null;
 
     await withLock(`${baseDir}::${name}`, async () => {
       const guard = (await readGuard(baseDir, name)) || emptyGuard();
+      normalizeComposedBaseline(guard, prevContent);
+      if (!inc.ok && !guard.event && (!guard.baseline || isEmptyIsland(guard.baseline.data))) {
+        const seed = guard.baseline || prevContent == null ? null : await safeExtractIsland(prevContent);
+        if (!seed || !seed.ok || !seed.island || isEmptyIsland(seed.island)) return;
+      }
 
       // Cold start (seed-on-first-sight from KNOWN-GOOD content only).
       if (!guard.baseline) {
@@ -243,7 +306,7 @@ async function runDataLossGuard({ baseDir, name, newHtml, prevContent, prov, liv
         // merely modifies a recoverable atom to a new value has NOT restored it, so
         // lossUndone stays false and the (valid) warning is preserved.
         const D = classify(base, inc.island);
-        if (lossUndone(D)) {
+        if (lossUndone(classify(comparableRecovery(guard.event.recoverableData, newHtml), inc.island))) {
           autoResolvedId = guard.event.id;
           guard.event = null;
           guard.status = 'restored';
@@ -252,7 +315,7 @@ async function runDataLossGuard({ baseDir, name, newHtml, prevContent, prov, liv
           await writeGuard(baseDir, name, guard);
           return;
         }
-        if (shouldFire(prov, guard.uiWorkPending, base, inc.island, D)) {
+        if (shouldFire(prov, guard.uiWorkPending && !ifMatched, base, inc.island, D)) {
           guard.event.lastWriteAt = Date.now();
         }
         if (prov === 'external') guard.uiWorkPending = false;
@@ -261,7 +324,7 @@ async function runDataLossGuard({ baseDir, name, newHtml, prevContent, prov, liv
       }
 
       const D = classify(base, inc.island);
-      const fire = shouldFire(prov, guard.uiWorkPending, base, inc.island, D);
+      const fire = shouldFire(prov, guard.uiWorkPending && !ifMatched, base, inc.island, D);
 
       if (fire) {
         const recoverableHtmlBackup = await captureRecoverPath(baseDir, name, prevContent);
@@ -304,6 +367,38 @@ async function runDataLossGuard({ baseDir, name, newHtml, prevContent, prov, liv
     console.error('[data-guard] runDataLossGuard failed (non-fatal):', e && e.message ? e.message : e);
     return null;
   }
+}
+
+function stripPageState(value) {
+  if (typeof value === 'string') {
+    if (!value.includes('merge=')) return value;
+    const { file, state } = rooms().splitPage(value);
+    return state ? file : value;
+  }
+  if (!value || typeof value !== 'object') return value;
+  let copy = null;
+  for (const [key, child] of Object.entries(value)) {
+    const next = stripPageState(child);
+    if (next === child) continue;
+    copy ??= Array.isArray(value) ? [...value] : { ...value };
+    copy[key] = next;
+  }
+  return copy ?? value;
+}
+
+function isBlockEditorDocument(html) {
+  return typeof html === 'string' && /<article/i.test(html) && rooms().pageRev(html);
+}
+
+function comparableRecovery(recoverable, html) {
+  return recoverable?.[FORM_KEY] === 'stored' || !isBlockEditorDocument(html) ? recoverable : stripPageState(recoverable);
+}
+
+function normalizeComposedBaseline(guard, prevContent) {
+  if (!guard.baseline || guard.baseline.data[FORM_KEY] === 'stored' || !isBlockEditorDocument(prevContent)) return;
+  const data = { ...stripPageState(guard.baseline.data), [FORM_KEY]: 'stored' };
+  guard.baseline.data = data;
+  guard.baseline.hash = islandHash(data);
 }
 
 async function seedBlind(guard, island) {
@@ -403,6 +498,7 @@ async function restoreDataOntoHtml(currentHtml, recoverableData) {
     return { failed: RULES_NAME };
   }
   if (!found || !recoverableData || !(RULES_NAME in recoverableData)) return { failed: RULES_NAME };
+  if (Object.keys(declaredCodecs(recoverableData)).length) return { failed: RULES_NAME };
   const { rules } = found;
   const data = recoverableData[RULES_NAME];
   try {
@@ -436,7 +532,7 @@ async function toClientEvent(event, currentHtml) {
     currentIsland = null;
   }
   const dry = await restoreDataOntoHtml(currentHtml, recoverable);
-  const preview = buildPreview(recoverable[RULES_NAME], currentIsland ? currentIsland[RULES_NAME] : null);
+  const preview = buildPreview(recoverable, currentIsland);
   return {
     id: event.id,
     firstDetectedAt: event.firstDetectedAt,
@@ -444,19 +540,65 @@ async function toClientEvent(event, currentHtml) {
     lossSummary: event.lossSummary,
     fieldCount: preview.rows.length,
     preview: preview.rows,
-    droppedAdditions: core.droppedItems(recoverable[RULES_NAME], currentIsland ? currentIsland[RULES_NAME] : null),
+    droppedAdditions: core.droppedItems(ordinaryData(recoverable), ordinaryData(currentIsland)),
     restorable: !dry.failed,
     canRevert: event.recoverableHtmlBackup != null,
     status: event.status || 'pending',
   };
 }
 
-function buildPreview(recoverableData, currentData) {
+const PREVIEW_CODEC_ROWS = 50;
+
+function declaredCodecs(island) {
+  const declared = island && island[CODECS_KEY] && island[CODECS_KEY][RULES_NAME];
+  return declared && typeof declared === 'object' ? declared : {};
+}
+
+// The island's data without its codec keys, for the readers that know only ordinary values.
+function ordinaryData(island) {
+  const data = island ? island[RULES_NAME] : null;
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return data ?? null;
+  const declared = declaredCodecs(island);
+  return Object.fromEntries(Object.entries(data).filter(([key]) => !(key in declared)));
+}
+
+function cellCount(n) {
+  return `${n} filled cell${n === 1 ? '' : 's'}`;
+}
+
+function codecPreviewRows(recoverable, current) {
+  const rows = [];
+  const was = declaredCodecs(recoverable);
+  const now = declaredCodecs(current);
+  const changed = [];
+  for (const [key, name] of Object.entries(was)) {
+    const codec = now[key] === name ? GUARD_CODECS[name] || null : null;
+    const baseView = recoverable[RULES_NAME] ? recoverable[RULES_NAME][key] : undefined;
+    const incView = codec && current && current[RULES_NAME] ? current[RULES_NAME][key] : undefined;
+    for (const { tab, tabIndex, before, now: after, change } of codecRowChanges(baseView, incView, codec)) {
+      if (change !== 'destruction' && change !== 'modification') continue;
+      const tabName = tab.name || tab.id || `Sheet ${tabIndex + 1}`;
+      const rowName = before[0] !== undefined && before[0] !== null && before[0] !== '' ? `row ${before[0]}` : 'a row';
+      const nowText = !after ? '— removed —' : change === 'modification' ? `changed, ${cellCount(after[1])}` : cellCount(after[1]);
+      (change === 'destruction' ? rows : changed).push({ key: `${key} › ${tabName} › ${rowName}`, now: nowText, yours: cellCount(before[1]) });
+    }
+  }
+  // Destroyed rows first, so changed rows never push a lost row out of the shown ones.
+  const all = rows.concat(changed);
+  const shown = all.slice(0, PREVIEW_CODEC_ROWS);
+  if (all.length > shown.length) shown.push({ key: 'more rows', now: '', yours: `${all.length - shown.length} more` });
+  return shown;
+}
+
+function buildPreview(recoverable, current) {
+  const recoverableData = ordinaryData(recoverable);
+  const currentData = ordinaryData(current);
   const rows = [];
   const rd = recoverableData && typeof recoverableData === 'object' ? recoverableData : {};
   const cd = currentData && typeof currentData === 'object' ? currentData : {};
 
   if (Array.isArray(rd) || Array.isArray(cd)) {
+    // Top-level list island: one synthetic row summarizing item counts.
     const yoursN = Array.isArray(rd) ? rd.length : 0;
     const nowN = Array.isArray(cd) ? cd.length : 0;
     if (yoursN !== nowN) {
@@ -465,12 +607,16 @@ function buildPreview(recoverableData, currentData) {
     return { rows };
   }
 
+  const wasCodec = declaredCodecs(recoverable);
+  const nowCodec = declaredCodecs(current);
   const keys = new Set([...Object.keys(rd), ...Object.keys(cd)]);
   for (const key of keys) {
+    if (key in wasCodec) continue;
     const yours = formatValue(rd[key]);
-    const now = formatValue(cd[key]);
+    const now = key in nowCodec ? `replaced by a ${nowCodec[key]}` : formatValue(cd[key]);
     if (yours !== now) rows.push({ key, now, yours });
   }
+  rows.push(...codecPreviewRows(recoverable || {}, current));
   return { rows };
 }
 
@@ -504,7 +650,7 @@ async function getGuardEvent(baseDir, name, currentHtml, live = createRootLive(n
       // recoverable atom, the loss was already undone (restored/reverted elsewhere
       // and synced here) — clear the stale event instead of showing a dead chip.
       const cur = currentHtml != null ? await safeExtractIsland(currentHtml) : { ok: false };
-      if (cur.ok && cur.island && lossUndone(classify(guard.event.recoverableData, cur.island))) {
+      if (cur.ok && cur.island && lossUndone(classify(comparableRecovery(guard.event.recoverableData, currentHtml), cur.island))) {
         const resolvedId = guard.event.id;
         await clearEvent(baseDir, name, cur.island, 'restored');
         notifyResolved(name, resolvedId, live);
@@ -512,7 +658,7 @@ async function getGuardEvent(baseDir, name, currentHtml, live = createRootLive(n
       }
       return await toClientEvent(guard.event, currentHtml != null ? currentHtml : '');
     }
-    if (currentHtml != null) {
+    if (!guard?.baseline && currentHtml != null) {
       const seed = await safeExtractIsland(currentHtml);
       if (seed.ok && seed.island && !isEmptyIsland(seed.island)) {
         await withLock(`${baseDir}::${name}`, async () => {
@@ -714,6 +860,7 @@ async function applyRemoteResolution({ baseDir, name, recoverableDataHash }) {
 
 module.exports = {
   extractIsland,
+  namesExactVersion,
   runDataLossGuard,
   provenanceForLocalSave,
   userDrivenFromHeader,

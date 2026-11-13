@@ -35,7 +35,8 @@ const { createHelperDispatcher } = require('./helpers/dispatcher');
 const errorLogger = require('./error-logger');
 const formatHtml = require('./format-html');
 const { hasHtmlRoot } = formatHtml;
-const { mapApiTagError, serveSiteApiLocal, extractSiteDataLocal, prepareSiteDataWriteLocal, applySiteDataLocal } = require('./utils/data-api');
+const { mapApiTagError, mapSheetError, serveSiteApiLocal, extractSiteDataLocal, prepareSiteDataWriteLocal, applySiteDataLocal } = require('./utils/data-api');
+const { sheetQueryOf } = require('./utils/sheet-api');
 const { readDataQuery } = require('./utils/data-query');
 const dataGuard = require('./data-loss-guard');
 const { documentEtag, ifMatchSatisfied } = require('./spec-wire');
@@ -3378,16 +3379,24 @@ function createApp(ctxOrDir, devHooks = null, isKnownPath = null) {
     async function readApiDocument(req, res, name, sourcePath) {
       const query = readDataQuery(req.originalUrl);
       if (query.error) return res.status(400).json(query.error);
+      let sheetQuery;
+      try {
+        sheetQuery = await sheetQueryOf(req.originalUrl);
+      } catch (error) {
+        const refusal = mapSheetError(error);
+        if (refusal) return sendApiResult(res, refusal);
+        throw error;
+      }
       if (!ctx.localAuthority) {
         const result = query.present
           ? await extractSiteDataLocal(baseDir, name, query.text, { sourcePath })
-          : await serveSiteApiLocal(baseDir, name, { sourcePath });
+          : await serveSiteApiLocal(baseDir, name, { sourcePath, sheetQuery });
         return sendApiResult(res, result);
       }
       try {
         const result = await runDocumentWrite(req, name, sourcePath, async (target, token) => {
-          const options = { sourcePath: target.canonicalPath, boundary: { target, token } };
-          const page = await readPageApi(target, token, name, query);
+          const options = { sourcePath: target.canonicalPath, boundary: { target, token }, sheetQuery };
+          const page = sheetQuery ? null : await readPageApi(target, token, name, query);
           if (page) return page;
           return query.present
             ? extractSiteDataLocal(baseDir, name, query.text, options)
@@ -3498,6 +3507,7 @@ function createApp(ctxOrDir, devHooks = null, isKnownPath = null) {
             kind: 'data-api', name, filePath: pending.target.canonicalPath, bytes: pending.html,
             dataLossPrev: pending.previous, userDriven: false, saveId: '', opHandle,
             expected: { type: 'checksum', value: pending.checksum },
+            ifMatch: req.headers['if-match'],
             pageFormat: req.get('X-Clay-Blockeditor-Format'),
             context: { target: pending.target, token: null },
           });
@@ -3588,7 +3598,7 @@ function createApp(ctxOrDir, devHooks = null, isKnownPath = null) {
                   });
                   const written = result.html === previous ? previous : await commitDocument({
                     name, filePath: target.canonicalPath, content: result.html, dataLossPrev: previous,
-                    userDriven: false, saveId: '', origin: 'api', target, token, persistentToken: held,
+                    userDriven: false, saveId: '', origin: 'api', ifMatch: req.headers['if-match'], target, token, persistentToken: held,
                     pageFormat: req.get('X-Clay-Blockeditor-Format'),
                   });
                   const fresh = await readPageDocument(cheerio.load, written, options);
@@ -3610,7 +3620,7 @@ function createApp(ctxOrDir, devHooks = null, isKnownPath = null) {
                 ...(query.present ? { dataParam: query.text } : {}),
                 commit: (html, previous) => commitDocument({
                   name, filePath: target.canonicalPath, content: html, dataLossPrev: previous,
-                  userDriven: false, saveId: '', origin: 'api', target, token,
+                  userDriven: false, saveId: '', origin: 'api', ifMatch: req.headers['if-match'], target, token,
                   pageFormat: req.get('X-Clay-Blockeditor-Format')
                 })
               });
@@ -3620,7 +3630,7 @@ function createApp(ctxOrDir, devHooks = null, isKnownPath = null) {
               ifMatch: req.headers['if-match'],
               ...(query.present ? { dataParam: query.text } : {}),
               commit: (html, previous) => commitDocument({
-                name, filePath: sourcePath, content: html, dataLossPrev: previous, userDriven: false, saveId: '', origin: 'api',
+                name, filePath: sourcePath, content: html, dataLossPrev: previous, userDriven: false, saveId: '', origin: 'api', ifMatch: req.headers['if-match'],
                 pageFormat: req.get('X-Clay-Blockeditor-Format')
               })
             }));
