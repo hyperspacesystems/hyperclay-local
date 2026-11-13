@@ -66,8 +66,26 @@ test('mounted routes pass the listener checks first, and roots are announced', a
   let announced = 0;
   const stop = service.onRoots(() => { announced += 1; });
   const roots = (body) => call(`${url}/v1/roots`, { method: 'POST', headers: { ...bearer, 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  fs.writeFileSync(path.join(dir, 'a.html'), '<!DOCTYPE html><html><head><title>a</title></head><body>a</body></html>');
   assert.equal((await roots({ add: [{ id: 'r1', path: dir, url: 'http://notes.htmlclay.localhost:1212' }] })).status, 200);
   assert.equal(announced, 1);
+
+  // A framed load is bridged only when the host says its id is open.
+  const framed = (id) => call(`${url}/v1/route/a.html?workspace-frame=${id}`, {
+    headers: { ...epochs, 'x-trial-root': 'r1', 'x-trial-public-host': 'notes.htmlclay.localhost:1212' },
+  });
+  const bridged = (answer) => answer.text.includes('data-hyperclay-bridge');
+  let asked = null;
+  assert.equal(bridged(await framed(7)), false, 'no host says anything yet');
+  service.frames((rootId, rel, wireId) => {
+    asked = [rootId, rel, wireId];
+    return wireId === 7 ? { wireId, shellOrigin: 'http://htmlclay.localhost:1212' } : null;
+  });
+  const live = await framed(7);
+  assert.equal(live.status, 200);
+  assert.equal(bridged(live), true);
+  assert.deepEqual(asked, ['r1', 'a.html', 7]);
+  assert.equal(bridged(await framed(8)), false, 'a dead id');
   assert.equal((await roots({ remove: ['r1'], deadlineMs: 1000 })).status, 200);
   assert.equal(announced, 2);
   stop();
