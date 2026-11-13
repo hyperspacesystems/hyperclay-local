@@ -33,8 +33,8 @@ test('bundled templates match their manifest and the hosted source when present'
   const catalogPath = path.join(__dirname, '../../../hyperclay/public-assets/core-apps/templates.json');
   const catalog = await fs.readFile(catalogPath, 'utf8').catch(() => null);
   const listed = manifest.filter(item => item.listed).map(item => item.id);
-  if (catalog) expect(listed).toEqual(['blank', ...JSON.parse(catalog).map(item => item.key)]);
-  for (const id of ['devlog', 'landing']) expect(manifest.find(item => item.id === id)?.listed).toBe(false);
+  if (catalog) expect(listed).toEqual(['blank', ...JSON.parse(catalog).filter(item => item.visibility !== 'private').map(item => item.key)]);
+  for (const id of ['devlog', 'landing', 'journal']) expect(manifest.find(item => item.id === id)?.listed).toBe(false);
   for (const item of manifest.filter(entry => entry.thumbnail)) {
     expect(await fs.stat(path.join(__dirname, '../../src/main/document-templates', item.thumbnail)).catch(() => null)).toBeTruthy();
   }

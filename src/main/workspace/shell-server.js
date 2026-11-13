@@ -354,7 +354,7 @@ function createShellServer({ authority, rootPool, observerFor, settings, appVers
       });
       return res.end();
     }
-    if (url.pathname === '/' || /^\/roots\/[^/]+\/(files|document)$/.test(url.pathname)) {
+    if (url.pathname === '/' || /^\/roots\/[^/]+\/(files|document|new)$/.test(url.pathname)) {
       if (!browserAdmitted(req)) return sendJson(res, 403, { error: 'Forbidden', reason: 'forbidden' });
       const css = manifest.entry.css.map(file => `<link rel="stylesheet" href="/${file}">`).join('');
       const html = `<!doctype html><html><head><meta charset="utf-8"><meta name="workspace-token" content="${token}">${css}<script>${BROWSER_NATIVE}</script></head><body><div id="workspace-root"></div><script type="module" src="/${manifest.entry.javascript}"></script></body></html>`;

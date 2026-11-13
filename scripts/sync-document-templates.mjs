@@ -12,8 +12,10 @@ const readJson = async file => {
 };
 
 // The gallery hyperclay.com shows: Blank first, then its listed templates in order.
+// A template hyperclay.com creates private (Journal) stays bundled but out of Local's gallery:
+// Local's sync uploads a new file as public, so a synced journal would be readable by anyone.
 const catalog = (await readJson(join(source, 'templates.json')) || [])
-  .map(item => ({ id: item.key, name: item.name, description: item.description, thumbnail: item.thumbnail, listed: true }));
+  .map(item => ({ id: item.key, name: item.name, description: item.description, thumbnail: item.thumbnail, listed: item.visibility !== 'private' }));
 const unlisted = await readJson(join(source, 'templates-unlisted.json')) || [];
 const cards = [
   { id: 'blank', name: 'Blank', description: 'An empty HTML file with ClayJS included. Bring your own everything.', thumbnail: null, listed: true },

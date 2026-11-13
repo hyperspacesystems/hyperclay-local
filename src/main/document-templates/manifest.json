@@ -25,7 +25,7 @@
     "name": "Journal",
     "description": "A private journal with search, tags and Markdown export.",
     "thumbnail": "thumbnails/journal.svg",
-    "listed": true,
+    "listed": false,
     "bytes": 321951,
     "sha256": "c6f749c23ab3abd64a97660806eee6d8f135e784724221ab0098c67a950265b7"
   },

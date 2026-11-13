@@ -139,6 +139,10 @@ test('the session cookie serves the workspace page with the token and only for t
   expect((await fetch(`${h.shell.origin}/roots/root-a/files`,
     { headers: { Cookie: `hyperclay-workspace-${port}=wrong` } })).status).toBe(403);
   expect((await fetch(`${h.shell.origin}/roots/root-a/files`)).status).toBe(403);
+  const gallery = await fetch(`${h.shell.origin}/roots/root-a/new?parent=Notes`, { headers: { Cookie: cookie } });
+  expect(gallery.status).toBe(200);
+  expect(await gallery.text()).toContain('<div id="workspace-root"></div>');
+  expect((await fetch(`${h.shell.origin}/roots/root-a/new`)).status).toBe(403);
 });
 
 test('the browser page refuses to be framed, and the session cookie alone opens no API', async () => {
