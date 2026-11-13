@@ -20,6 +20,9 @@ const fold = text => text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLoc
 
 const ENTRY_TTL_MS = 60_000;
 
+// What serveApi answers for a path under /api/ that no route takes.
+const NOT_AN_API_ROUTE = Symbol('not an api route');
+
 // A browser tab has no preload, so this stands in for it. Flush requests ride the workspace's
 // own events stream (a second long-lived request per tab would exhaust the browser's six
 // connections per host): the stream is opened with `?flush=1`, and the flush lines are taken
@@ -91,7 +94,12 @@ async function readBody(req) {
 
 function createShellServer({ authority, rootPool, observerFor, settings, appVersion, connection = () => ({}),
   syncManager = () => null, rootTitleFor = root => path.basename(root.path), appDataPath = null, checkpoint = null,
-  onFlushResult = () => false, onFlushClientGone = () => {} }) {
+  onFlushResult = () => false, onFlushClientGone = () => {},
+  // A host that serves the workspace itself (HTML Clay) gives its fixed origin, the
+  // bundle's manifest, each root's public origin, and the document host and file
+  // operations commands write through.
+  origin: fixedOrigin = null, manifest: givenManifest = null,
+  rootOriginFor = root => `http://localhost:${root.port}`, commandHostFor = () => ({}) }) {
   const token = crypto.randomBytes(32).toString('base64url');
   const bootstrapSecret = crypto.randomBytes(32).toString('base64url');
   const sessionSecret = crypto.randomBytes(32).toString('base64url');
@@ -109,15 +117,15 @@ function createShellServer({ authority, rootPool, observerFor, settings, appVers
     rootFor: id => (settings().roots || []).find(root => root.id === id && rootPool.get(id)?.state === 'running'),
     rename: async (root, from, name) => executeCommand({
       root, authority, engine: rootPool.get(root.id)?.deps?.syncEngineFor?.(),
-      request: { command: 'rename', path: from, name }, tree: await treeFor(root), moved, changed,
+      request: { command: 'rename', path: from, name }, tree: await treeFor(root), moved, changed, ...commandHostFor(root),
     }),
   }) : null;
   checkpoint?.setAutoNamer(autoNamer);
   let nextWireId = 1;
   let seq = 0;
   let server = null;
-  let origin = null;
-  let manifest = null;
+  let origin = fixedOrigin;
+  let manifest = givenManifest;
   let assetDir = null;
   let changedTimer = null;
 
@@ -128,7 +136,7 @@ function createShellServer({ authority, rootPool, observerFor, settings, appVers
     const syncStatus = syncState?.status;
     return {
       id: root.id, name: rootTitleFor(root), kind: root.kind,
-      origin: `http://localhost:${root.port}`,
+      origin: rootOriginFor(root),
       sync: status !== 'running' ? 'not-syncing' : !session ? 'off' :
         session.paused || syncStatus === 'paused' ? 'paused' :
           syncStatus === 'offline' || syncStatus === 'error' || connection().online === false ? 'offline' :
@@ -208,20 +216,28 @@ function createShellServer({ authority, rootPool, observerFor, settings, appVers
 
   let starting = null;
 
-  async function listen() {
+  async function loadManifest() {
+    if (manifest) return manifest;
     const manifestPath = require.resolve('@panphora/hyperclay-workspace/local-app/manifest.json');
     manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
     assetDir = path.dirname(manifestPath);
+    return manifest;
+  }
+
+  function fail(res, error) {
+    if (res.headersSent) { res.destroy(); return; }
+    const reason = error.reason || (error.status === 403 ? 'forbidden' : error.status === 404 ? 'missing'
+      : error.status === 409 ? 'conflict' : error.code === 'ENOENT' ? 'missing'
+      : error.code === 'destination-exists' ? 'conflict'
+        : error.code === 'peers-editing' ? 'conflict' : 'unknown');
+    sendJson(res, error.status || (reason === 'missing' ? 404 : reason === 'conflict' ? 409 : 500),
+      { error: error.message || 'Request failed', reason, ...(error.code ? { code: error.code } : {}) });
+  }
+
+  async function listen() {
+    await loadManifest();
     server = http.createServer((req, res) => {
-      handle(req, res).catch(error => {
-        if (res.headersSent) { res.destroy(); return; }
-        const reason = error.reason || (error.status === 403 ? 'forbidden' : error.status === 404 ? 'missing'
-          : error.status === 409 ? 'conflict' : error.code === 'ENOENT' ? 'missing'
-          : error.code === 'destination-exists' ? 'conflict'
-            : error.code === 'peers-editing' ? 'conflict' : 'unknown');
-        sendJson(res, error.status || (reason === 'missing' ? 404 : reason === 'conflict' ? 409 : 500),
-          { error: error.message || 'Request failed', reason, ...(error.code ? { code: error.code } : {}) });
-      });
+      handle(req, res).catch(error => fail(res, error));
     });
     try {
       await new Promise((resolve, reject) => {
@@ -235,110 +251,118 @@ function createShellServer({ authority, rootPool, observerFor, settings, appVers
     } catch (error) { server = null; throw error; }
   }
 
+  // The /api/ routes, after admission. HTML Clay's service mounts them behind its
+  // Go host, which admits each request itself (`api()` below).
+  async function serveApi(req, res, url) {
+    if (req.method === 'GET' && url.pathname === '/api/bootstrap') {
+      const state = connection();
+      return sendJson(res, 200, {
+        protocol: (await loadManifest()).protocol, epoch, shellOrigin: origin, appVersion,
+        online: state.online !== false,
+        account: { signedIn: !!state.account?.signedIn, username: state.account?.username || null }, roots: roots(),
+        templates: TEMPLATE_CARDS,
+      });
+    }
+    if (req.method === 'GET' && url.pathname === '/api/roots') return sendJson(res, 200, roots());
+    if (req.method === 'GET' && url.pathname === '/api/events') {
+      res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
+      res.write(': connected\n');
+      subscribers.add(res);
+      const client = url.searchParams.get('flush') === '1' ? String(nextFlushClient++) : null;
+      if (client) {
+        flushClients.set(client, res);
+        res.write(`${JSON.stringify({ flushClient: client })}\n`);
+      }
+      const heartbeat = setInterval(() => res.write(': heartbeat\n'), 25_000);
+      heartbeat.unref?.();
+      req.on('close', () => {
+        clearInterval(heartbeat);
+        subscribers.delete(res);
+        if (client && flushClients.delete(client)) onFlushClientGone(client);
+      });
+      return;
+    }
+    if (req.method === 'POST' && url.pathname === '/api/flush-result') {
+      const { client, requestId, participants } = await readBody(req);
+      return sendJson(res, 200, { ok: flushClients.has(client) && onFlushResult(client, { requestId, participants }) === true });
+    }
+    const match = /^\/api\/roots\/([^/]+)\/(tree|list|search|document|commands|source|versions|version|restore|upload|download|consents|conflicts\/resolve)$/.exec(url.pathname);
+    if (!match) throw refusal('unsupported', 'Route is not available yet', 501);
+    let id;
+    try { id = decodeURIComponent(match[1]); } catch { throw refusal('forbidden', 'Invalid root', 403); }
+    const root = (settings().roots || []).find(item => item.id === id);
+    if (!root || rootPool.get(id)?.state !== 'running') throw refusal('missing', 'Root is not running', 404);
+    const route = match[2];
+    if (!['tree', 'list', 'search', 'document', 'commands'].includes(route)) {
+      return handleWorkspaceRoute({ req, res, url, root, route, settings, syncManager });
+    }
+    if (route === 'commands' && req.method === 'POST') {
+      const request = await readBody(req);
+      const tree = await treeFor(root);
+      const result = await executeCommand({ root, authority, engine: rootPool.get(id)?.deps?.syncEngineFor?.(),
+        request, tree, moved, changed, ...commandHostFor(root) });
+      if (request.command === 'create') await autoNamer?.record(root, result.path, request.template);
+      else await autoNamer?.command(root, request, result.path);
+      return sendJson(res, 200, result);
+    }
+    if (req.method !== 'GET') throw refusal('unsupported', 'Method is not available', 405);
+    const tree = await treeFor(root);
+    if (route === 'tree') return sendJson(res, 200, { entries: tree.all().sort((a, b) => collator.compare(a.path, b.path)) });
+    if (route === 'list') {
+      const parent = url.searchParams.get('parent') || '';
+      if (parent) {
+        safePath(parent);
+        const parentPath = await resolveReadPath(getConsentRegistry(root.path), parent);
+        if (!(await fs.stat(parentPath)).isDirectory()) throw refusal('missing', 'Folder is missing', 404);
+      }
+      const sort = url.searchParams.get('sort') || 'name';
+      if (!['name', 'updated', 'size'].includes(sort)) throw refusal('forbidden', 'Invalid sort', 400);
+      const items = tree.all().filter(item => path.dirname(item.path) === (parent || '.') && item.path !== parent);
+      items.sort((a, b) => sort === 'name' ? collator.compare(a.name, b.name) || collator.compare(a.path, b.path)
+        : sort === 'updated' ? b.updatedAt.localeCompare(a.updatedAt) || collator.compare(a.path, b.path)
+        : (b.size || 0) - (a.size || 0) || collator.compare(a.path, b.path));
+      return sendJson(res, 200, tree.page(items, url.searchParams.get('cursor'), `list:${parent}:${sort}`));
+    }
+    if (route === 'search') {
+      const q = fold((url.searchParams.get('q') || '').trim());
+      const names = tree.all().filter(item => fold(item.name).includes(q))
+        .sort((a, b) => collator.compare(a.name, b.name) || collator.compare(a.path, b.path));
+      let items = names;
+      if (q && appDataPath) {
+        let index = indexes.get(id);
+        if (!index) { index = new SearchIndex(root, appDataPath); indexes.set(id, index); }
+        const found = await index.query(q);
+        const byPath = new Map(tree.all().filter(item => item.kind === 'document').map(item => [item.path, item]));
+        const named = new Set(names.map(item => item.path));
+        const content = found.filter(hit => byPath.has(hit.path) && !named.has(hit.path))
+          .map(hit => ({ ...byPath.get(hit.path), snippet: hit.snippet }))
+          .sort((a, b) => collator.compare(a.name, b.name) || collator.compare(a.path, b.path));
+        items = [...names, ...content];
+      }
+      return sendJson(res, 200, tree.page(items, url.searchParams.get('cursor'), `search:${q}`));
+    }
+    if (route === 'document') {
+      const rel = safePath(url.searchParams.get('path'));
+      const file = await resolveReadPath(getConsentRegistry(root.path), rel);
+      const entry = await entryFor(root, rel);
+      if (!entry || entry.kind !== 'document' || !(await fs.stat(file)).isFile()) throw refusal('missing', 'Document is missing', 404);
+      const key = `${id}:${rel}`;
+      let wireId = wires.get(key);
+      if (!wireId) { wireId = nextWireId++; wires.set(key, wireId); }
+      const frameUrl = `${roots().find(item => item.id === id).origin}/${rel.split('/').map(encodeURIComponent).join('/')}?workspace-frame=${wireId}`;
+      return sendJson(res, 200, { entry, wireId, frameUrl, publicAddress: null,
+        workspaceUrl: `${origin}/roots/${encodeURIComponent(id)}/document?path=${encodeURIComponent(rel)}` });
+    }
+    return NOT_AN_API_ROUTE;
+  }
+
   async function handle(req, res) {
     const url = new URL(req.url, origin);
     if (req.headers.host !== new URL(origin).host) return sendJson(res, 403, { error: 'Forbidden', reason: 'forbidden' });
     if (url.pathname.startsWith('/api/')) {
       if (!admitted(req)) return sendJson(res, 403, { error: 'Forbidden', reason: 'forbidden' });
-      if (req.method === 'GET' && url.pathname === '/api/bootstrap') {
-        const state = connection();
-        return sendJson(res, 200, {
-          protocol: manifest.protocol, epoch, shellOrigin: origin, appVersion,
-          online: state.online !== false,
-          account: { signedIn: !!state.account?.signedIn, username: state.account?.username || null }, roots: roots(),
-          templates: TEMPLATE_CARDS,
-        });
-      }
-      if (req.method === 'GET' && url.pathname === '/api/roots') return sendJson(res, 200, roots());
-      if (req.method === 'GET' && url.pathname === '/api/events') {
-        res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
-        res.write(': connected\n');
-        subscribers.add(res);
-        const client = url.searchParams.get('flush') === '1' ? String(nextFlushClient++) : null;
-        if (client) {
-          flushClients.set(client, res);
-          res.write(`${JSON.stringify({ flushClient: client })}\n`);
-        }
-        const heartbeat = setInterval(() => res.write(': heartbeat\n'), 25_000);
-        heartbeat.unref?.();
-        req.on('close', () => {
-          clearInterval(heartbeat);
-          subscribers.delete(res);
-          if (client && flushClients.delete(client)) onFlushClientGone(client);
-        });
-        return;
-      }
-      if (req.method === 'POST' && url.pathname === '/api/flush-result') {
-        const { client, requestId, participants } = await readBody(req);
-        return sendJson(res, 200, { ok: flushClients.has(client) && onFlushResult(client, { requestId, participants }) === true });
-      }
-      const match = /^\/api\/roots\/([^/]+)\/(tree|list|search|document|commands|source|versions|version|restore|upload|download|consents|conflicts\/resolve)$/.exec(url.pathname);
-      if (!match) throw refusal('unsupported', 'Route is not available yet', 501);
-      let id;
-      try { id = decodeURIComponent(match[1]); } catch { throw refusal('forbidden', 'Invalid root', 403); }
-      const root = (settings().roots || []).find(item => item.id === id);
-      if (!root || rootPool.get(id)?.state !== 'running') throw refusal('missing', 'Root is not running', 404);
-      const route = match[2];
-      if (!['tree', 'list', 'search', 'document', 'commands'].includes(route)) {
-        return handleWorkspaceRoute({ req, res, url, root, route, settings, syncManager });
-      }
-      if (route === 'commands' && req.method === 'POST') {
-        const request = await readBody(req);
-        const tree = await treeFor(root);
-        const result = await executeCommand({ root, authority, engine: rootPool.get(id)?.deps?.syncEngineFor?.(),
-          request, tree, moved, changed });
-        if (request.command === 'create') await autoNamer?.record(root, result.path, request.template);
-        else await autoNamer?.command(root, request, result.path);
-        return sendJson(res, 200, result);
-      }
-      if (req.method !== 'GET') throw refusal('unsupported', 'Method is not available', 405);
-      const tree = await treeFor(root);
-      if (route === 'tree') return sendJson(res, 200, { entries: tree.all().sort((a, b) => collator.compare(a.path, b.path)) });
-      if (route === 'list') {
-        const parent = url.searchParams.get('parent') || '';
-        if (parent) {
-          safePath(parent);
-          const parentPath = await resolveReadPath(getConsentRegistry(root.path), parent);
-          if (!(await fs.stat(parentPath)).isDirectory()) throw refusal('missing', 'Folder is missing', 404);
-        }
-        const sort = url.searchParams.get('sort') || 'name';
-        if (!['name', 'updated', 'size'].includes(sort)) throw refusal('forbidden', 'Invalid sort', 400);
-        const items = tree.all().filter(item => path.dirname(item.path) === (parent || '.') && item.path !== parent);
-        items.sort((a, b) => sort === 'name' ? collator.compare(a.name, b.name) || collator.compare(a.path, b.path)
-          : sort === 'updated' ? b.updatedAt.localeCompare(a.updatedAt) || collator.compare(a.path, b.path)
-          : (b.size || 0) - (a.size || 0) || collator.compare(a.path, b.path));
-        return sendJson(res, 200, tree.page(items, url.searchParams.get('cursor'), `list:${parent}:${sort}`));
-      }
-      if (route === 'search') {
-        const q = fold((url.searchParams.get('q') || '').trim());
-        const names = tree.all().filter(item => fold(item.name).includes(q))
-          .sort((a, b) => collator.compare(a.name, b.name) || collator.compare(a.path, b.path));
-        let items = names;
-        if (q && appDataPath) {
-          let index = indexes.get(id);
-          if (!index) { index = new SearchIndex(root, appDataPath); indexes.set(id, index); }
-          const found = await index.query(q);
-          const byPath = new Map(tree.all().filter(item => item.kind === 'document').map(item => [item.path, item]));
-          const named = new Set(names.map(item => item.path));
-          const content = found.filter(hit => byPath.has(hit.path) && !named.has(hit.path))
-            .map(hit => ({ ...byPath.get(hit.path), snippet: hit.snippet }))
-            .sort((a, b) => collator.compare(a.name, b.name) || collator.compare(a.path, b.path));
-          items = [...names, ...content];
-        }
-        return sendJson(res, 200, tree.page(items, url.searchParams.get('cursor'), `search:${q}`));
-      }
-      if (route === 'document') {
-        const rel = safePath(url.searchParams.get('path'));
-        const file = await resolveReadPath(getConsentRegistry(root.path), rel);
-        const entry = await entryFor(root, rel);
-        if (!entry || entry.kind !== 'document' || !(await fs.stat(file)).isFile()) throw refusal('missing', 'Document is missing', 404);
-        const key = `${id}:${rel}`;
-        let wireId = wires.get(key);
-        if (!wireId) { wireId = nextWireId++; wires.set(key, wireId); }
-        const frameUrl = `${roots().find(item => item.id === id).origin}/${rel.split('/').map(encodeURIComponent).join('/')}?workspace-frame=${wireId}`;
-        return sendJson(res, 200, { entry, wireId, frameUrl, publicAddress: null,
-          workspaceUrl: `${origin}/roots/${encodeURIComponent(id)}/document?path=${encodeURIComponent(rel)}` });
-      }
+      const answered = await serveApi(req, res, url);
+      if (answered !== NOT_AN_API_ROUTE) return answered;
     }
 
     if (req.method !== 'GET') return sendJson(res, 405, { error: 'Method not allowed', reason: 'unsupported' });
@@ -388,6 +412,14 @@ function createShellServer({ authority, rootPool, observerFor, settings, appVers
     token, bootstrapSecret,
     autoNamer,
     get origin() { return origin; },
+    // One /api/ request that a host in front of this server already admitted. Needs
+    // the fixed origin option, since there is no listener of its own to set one.
+    api(req, res) {
+      const url = new URL(req.url, origin);
+      return serveApi(req, res, url).then(answered => {
+        if (answered === NOT_AN_API_ROUTE) sendJson(res, 404, { error: 'Not found', reason: 'missing' });
+      }, error => fail(res, error));
+    },
     frame(rootId, rel, wireId) {
       return origin && wires.get(`${rootId}:${rel}`) === wireId ? { wireId, shellOrigin: origin } : null;
     },
@@ -398,7 +430,7 @@ function createShellServer({ authority, rootPool, observerFor, settings, appVers
       const name = await freeCopyName(path.dirname(path.join(root.path, source)), path.basename(source));
       const request = { command: 'duplicate', path: source, name };
       const result = await executeCommand({ root, authority, engine: rootPool.get(rootId)?.deps?.syncEngineFor?.(),
-        request, tree: await treeFor(root), moved, changed });
+        request, tree: await treeFor(root), moved, changed, ...commandHostFor(root) });
       await autoNamer?.command(root, request, result.path);
       return { path: result.path };
     },
@@ -455,7 +487,7 @@ function createShellServer({ authority, rootPool, observerFor, settings, appVers
         await closed;
       }
       server = null;
-      origin = null;
+      origin = fixedOrigin;
     },
   };
 }

@@ -230,3 +230,39 @@ test('the browser page carries the stand-in bridge, and the shell lives on local
   expect(() => new Function(script)).not.toThrow();
   expect(script).toContain('if (window.workspaceNative) return;');
 });
+
+test('a host in front serves the API through api() with its own origin and file writes', async () => {
+  const made = [];
+  const emptied = [];
+  const files = {
+    mkdir: async (destination, { rel }) => { made.push(rel); await fs.mkdir(destination); },
+    emptyTrash: async trash => { emptied.push(trash); },
+  };
+  h = await fixture({ shell: {
+    origin: 'http://htmlclay.localhost:1212',
+    manifest: { protocol: 7 },
+    rootOriginFor: () => 'http://notes.htmlclay.localhost:1212',
+    commandHostFor: () => ({ files }),
+  } });
+  await fs.mkdir(`${h.dir}/.trash`);
+  await fs.writeFile(`${h.dir}/.trash/old.html`, 'x');
+  const front = http.createServer((req, res) => h.shell.api(req, res));
+  await new Promise(resolve => front.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${front.address().port}`;
+  try {
+    const boot = await (await fetch(`${base}/api/bootstrap`)).json();
+    expect(boot).toMatchObject({ protocol: 7, shellOrigin: 'http://htmlclay.localhost:1212',
+      roots: [{ id: 'root-a', origin: 'http://notes.htmlclay.localhost:1212' }] });
+    const post = body => fetch(`${base}/api/roots/root-a/commands`, { method: 'POST',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    expect(await (await post({ command: 'folder', parent: null, name: 'Notes' })).json()).toEqual({ path: 'Notes' });
+    expect(made).toEqual(['Notes']);
+    expect((await post({ command: 'empty-trash' })).status).toBe(200);
+    expect(emptied).toEqual([`${h.dir}/.trash`]);
+    expect(await fs.readdir(`${h.dir}/.trash`)).toEqual(['old.html']);
+    expect((await fetch(`${base}/api/does-not-exist`)).status).toBe(501);
+    expect(h.shell.origin).toBe('http://htmlclay.localhost:1212');
+  } finally {
+    await new Promise(resolve => front.close(resolve));
+  }
+});

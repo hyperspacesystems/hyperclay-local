@@ -50,13 +50,22 @@ async function assertTrashDirectory(root) {
   return trash;
 }
 
+// The two writes the workspace commands make outside the document host. A host
+// that owns the filesystem (HTML Clay's Go host) passes its own.
+const nodeFiles = {
+  mkdir: destination => fs.mkdir(destination),
+  async emptyTrash(trash) {
+    for (const name of await fs.readdir(trash)) await fs.rm(path.join(trash, name), { recursive: true, force: true });
+  },
+};
+
 function restoredName(original, index) {
   const extension = path.extname(original);
   const stem = extension ? original.slice(0, -extension.length) : original;
   return `${stem} (restored${index ? ` ${index}` : ''})${extension}`;
 }
 
-async function executeCommand({ root, authority, engine, request, tree, moved, changed, documentHost = createRootDocumentHost({ ctx: { root, localAuthority: authority } }) }) {
+async function executeCommand({ root, authority, engine, request, tree, moved, changed, documentHost = createRootDocumentHost({ ctx: { root, localAuthority: authority } }), files = nodeFiles }) {
   if (!request || typeof request !== 'object') throw refusal('forbidden', 'Invalid command');
   if (request.command === 'create') {
     const template = templateManifest.find(item => item.id === request.template);
@@ -103,7 +112,7 @@ async function executeCommand({ root, authority, engine, request, tree, moved, c
       if (await exists(destination)) throw refusal('conflict', 'Destination exists', 409);
       const parentPath = parent ? await readFor(parent) : await fs.realpath(root.path);
       if (!(await fs.stat(parentPath)).isDirectory()) throw refusal('forbidden', 'Parent is not a folder', 403);
-      await fs.mkdir(destination);
+      await files.mkdir(destination, { root, rel });
       authority?.setAdmission(token, { rootId: root.id, logicalPath: rel, canonicalPath: destination, active: true, prefix: true });
       await tree.refresh([rel]);
       changed(root.id, [rel]);
@@ -112,9 +121,7 @@ async function executeCommand({ root, authority, engine, request, tree, moved, c
 
     if (request.command === 'empty-trash') {
       const trash = await assertTrashDirectory(root);
-      if (await exists(trash)) {
-        for (const name of await fs.readdir(trash)) await fs.rm(path.join(trash, name), { recursive: true, force: true });
-      }
+      if (await exists(trash)) await files.emptyTrash(trash, { root });
       changed(root.id, []);
       return { path: null };
     }
