@@ -239,6 +239,7 @@ test('a host in front serves the API through api() with its own origin and file 
     emptyTrash: async trash => { emptied.push(trash); },
   };
   let structured = 0;
+  const fetched = [];
   const locks = {
     withDocumentWrite: async (prepare, run) => run(await prepare(), null),
     withStructureChange: fn => { structured += 1; return fn(null); },
@@ -248,6 +249,13 @@ test('a host in front serves the API through api() with its own origin and file 
     manifest: { protocol: 7 },
     rootOriginFor: () => 'http://notes.htmlclay.localhost:1212',
     commandHostFor: () => ({ files, locks }),
+    rootHost: {
+      origin: () => 'http://notes.htmlclay.localhost:1212',
+      fetch: async (url, init) => {
+        fetched.push({ url, documentUrl: init.headers['document-url'] });
+        return new Response(JSON.stringify({ etag: 'saved-etag', html: init.body }), { status: 200 });
+      },
+    },
   } });
   await fs.mkdir(`${h.dir}/.trash`);
   await fs.writeFile(`${h.dir}/.trash/old.html`, 'x');
@@ -265,6 +273,11 @@ test('a host in front serves the API through api() with its own origin and file 
     expect((await post({ command: 'empty-trash' })).status).toBe(200);
     expect(emptied).toEqual([`${h.dir}/.trash`]);
     expect(structured).toBe(2);
+    await fs.writeFile(`${h.dir}/a.html`, '<html><body>a</body></html>');
+    const saved = await fetch(`${base}/api/roots/root-a/source`, { method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: 'a.html', html: '<html><body>b</body></html>', etag: 'e1', operationId: 'op-1' }) });
+    expect(await saved.json()).toEqual({ kind: 'saved', etag: 'saved-etag', html: '<html><body>b</body></html>' });
+    expect(fetched).toEqual([{ url: 'http://notes.htmlclay.localhost:1212/_/save', documentUrl: 'http://notes.htmlclay.localhost:1212/a.html' }]);
     expect(await fs.readdir(`${h.dir}/.trash`)).toEqual(['old.html']);
     expect((await fetch(`${base}/api/does-not-exist`)).status).toBe(501);
     expect(h.shell.origin).toBe('http://htmlclay.localhost:1212');
