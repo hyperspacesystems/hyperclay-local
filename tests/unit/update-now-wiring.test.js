@@ -53,3 +53,14 @@ describe('update-now wiring in main.js', () => {
     expect(JSON.parse(read('package.json')).build.mac.extendInfo).toEqual({ HCLUpdateNowArg: 1 });
   });
 });
+
+test('every way to view logs creates the folder before opening it', () => {
+  const helper = main.slice(main.indexOf('function openLogFolder('), main.indexOf('\n}\n', main.indexOf('function openLogFolder(')));
+  expect(helper.indexOf('fs.mkdirSync(folder, { recursive: true })')).toBeGreaterThan(-1);
+  expect(helper.indexOf('fs.mkdirSync')).toBeLessThan(helper.indexOf('shell.openPath(folder)'));
+  expect(main).toMatch(/'View Sync Logs': \(\) => openLogFolder\('sync'\)/);
+  expect(main).toMatch(/'View Error Logs': \(\) => openLogFolder\('errors'\)/);
+  expect(main).toMatch(/ipcMain\.handle\('open-logs', \(\) => openLogFolder\('sync'\)\)/);
+  expect(main).toMatch(/ipcMain\.handle\('open-error-logs', \(\) => openLogFolder\('errors'\)\)/);
+  expect(main.match(/shell\.openPath\(path\.join\(app\.getPath\('logs'\)/g)).toBeNull();
+});

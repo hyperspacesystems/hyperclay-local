@@ -687,6 +687,13 @@ function showAboutDialog() {
   });
 }
 
+// Each log folder is created on its first write, so opening one before then would open nothing.
+function openLogFolder(name) {
+  const folder = path.join(app.getPath('logs'), name);
+  fs.mkdirSync(folder, { recursive: true });
+  return shell.openPath(folder);
+}
+
 const TRAY_ITEM_CLICKS = {
   'Open workspace': () => workspaceWindow.openWorkspace(),
   'Start Server': () => handleStartServer(),
@@ -695,8 +702,8 @@ const TRAY_ITEM_CLICKS = {
   'Disable Sync': () => handleSyncStop(),
   'Enable AI Editing': toggleAiEditing,
   'Disable AI Editing': toggleAiEditing,
-  'View Sync Logs': () => shell.openPath(path.join(app.getPath('logs'), 'sync')),
-  'View Error Logs': () => shell.openPath(path.join(app.getPath('logs'), 'errors')),
+  'View Sync Logs': () => openLogFolder('sync'),
+  'View Error Logs': () => openLogFolder('errors'),
   'About Hyperclay Local': () => showAboutDialog(),
   'Quit': () => app.quit()
 };
@@ -1696,18 +1703,9 @@ ipcMain.handle('copy-text', (event, text) => {
   clipboard.writeText(String(text ?? ''));
 });
 
-ipcMain.handle('open-logs', () => {
-  const logsPath = app.getPath('logs');
-  const syncLogsPath = path.join(logsPath, 'sync');
-  shell.openPath(syncLogsPath);
-});
+ipcMain.handle('open-logs', () => openLogFolder('sync'));
 
-ipcMain.handle('open-error-logs', async () => {
-  const logsPath = app.getPath('logs');
-  const errorLogsPath = path.join(logsPath, 'errors');
-  await fs.promises.mkdir(errorLogsPath, { recursive: true });
-  shell.openPath(errorLogsPath);
-});
+ipcMain.handle('open-error-logs', () => openLogFolder('errors'));
 
 // C4 §5.2: only the two hyperclay https prefixes leave this app's own pages.
 ipcMain.handle('open-browser', (event, url) => {
@@ -1993,21 +1991,11 @@ ipcMain.handle('show-options-menu', (event) => {
     },
     {
       label: 'View Sync Logs',
-      click: () => {
-        const logsPath = app.getPath('logs');
-        const syncLogsPath = path.join(logsPath, 'sync');
-        fs.mkdirSync(syncLogsPath, { recursive: true });
-        shell.openPath(syncLogsPath);
-      }
+      click: () => openLogFolder('sync')
     },
     {
       label: 'View Error Logs',
-      click: () => {
-        const logsPath = app.getPath('logs');
-        const errorLogsPath = path.join(logsPath, 'errors');
-        fs.mkdirSync(errorLogsPath, { recursive: true });
-        shell.openPath(errorLogsPath);
-      }
+      click: () => openLogFolder('errors')
     },
     { type: 'separator' },
     {
