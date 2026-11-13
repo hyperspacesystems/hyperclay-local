@@ -238,11 +238,16 @@ test('a host in front serves the API through api() with its own origin and file 
     mkdir: async (destination, { rel }) => { made.push(rel); await fs.mkdir(destination); },
     emptyTrash: async trash => { emptied.push(trash); },
   };
+  let structured = 0;
+  const locks = {
+    withDocumentWrite: async (prepare, run) => run(await prepare(), null),
+    withStructureChange: fn => { structured += 1; return fn(null); },
+  };
   h = await fixture({ shell: {
     origin: 'http://htmlclay.localhost:1212',
     manifest: { protocol: 7 },
     rootOriginFor: () => 'http://notes.htmlclay.localhost:1212',
-    commandHostFor: () => ({ files }),
+    commandHostFor: () => ({ files, locks }),
   } });
   await fs.mkdir(`${h.dir}/.trash`);
   await fs.writeFile(`${h.dir}/.trash/old.html`, 'x');
@@ -259,6 +264,7 @@ test('a host in front serves the API through api() with its own origin and file 
     expect(made).toEqual(['Notes']);
     expect((await post({ command: 'empty-trash' })).status).toBe(200);
     expect(emptied).toEqual([`${h.dir}/.trash`]);
+    expect(structured).toBe(2);
     expect(await fs.readdir(`${h.dir}/.trash`)).toEqual(['old.html']);
     expect((await fetch(`${base}/api/does-not-exist`)).status).toBe(501);
     expect(h.shell.origin).toBe('http://htmlclay.localhost:1212');
