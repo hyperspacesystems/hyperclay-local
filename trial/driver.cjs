@@ -22,7 +22,7 @@ function wait(ms) {
 function parseArgs(argv) {
   const options = {
     run: null, roots: [], goBin: null, localSource: null,
-    host: 'go', canary: false, serverUrl: null, apiKeyFile: null,
+    host: 'go', canary: false, serverUrl: null, apiKeyFile: null, prefix: '',
   };
   for (let i = 0; i < argv.length; i += 1) {
     const flag = argv[i];
@@ -40,6 +40,7 @@ function parseArgs(argv) {
     else if (flag === '--host') options.host = value;
     else if (flag === '--server-url') options.serverUrl = value;
     else if (flag === '--api-key-file') options.apiKeyFile = value;
+    else if (flag === '--prefix') options.prefix = value;
     else throw new Error(`unknown argument ${flag}`);
   }
   if (!options.run) throw new Error('--run is required');
@@ -49,6 +50,9 @@ function parseArgs(argv) {
   if (options.host === 'go' && !options.localSource) throw new Error('--host go needs --local-source');
   if (Boolean(options.serverUrl) !== Boolean(options.apiKeyFile)) {
     throw new Error('--server-url and --api-key-file are given together or not at all');
+  }
+  if (options.prefix !== '' && !/^[a-z0-9_-]+$/.test(options.prefix)) {
+    throw new Error('--prefix must be one folder name of a-z, 0-9, _ or -');
   }
   return options;
 }
@@ -172,6 +176,7 @@ async function main() {
 
   const rootB = { id: 'p3-root-a', path: fs.realpathSync(path.resolve(options.roots[0])) };
   const rootD = { id: 'p3-root-b', path: fs.realpathSync(path.resolve(options.roots[1])) };
+  const at = (rel) => (options.prefix ? `${options.prefix}/${rel}` : rel);
 
   const { createRootDocumentHost } = require(path.join(REPO, 'src/main/document-host.js'));
   const { executeCommand } = require(path.join(REPO, 'src/main/workspace/commands.js'));
@@ -237,26 +242,26 @@ async function main() {
       return;
     }
 
-    const index = fs.readFileSync(path.join(rootB.path, 'index.html'), 'utf8');
-    intend(editsFor('index.html', index));
-    const saved = await browserSaveWriter('index.html', index);
+    const index = fs.readFileSync(path.join(rootB.path, at('index.html')), 'utf8');
+    intend(editsFor(at('index.html'), index));
+    const saved = await browserSaveWriter(at('index.html'), index);
     record({
       kind: 'browser-save',
       how: 'HTTP POST /_/save to the Go host',
       outcome: saved.status === 200 ? 'committed' : 'failed',
       ...(saved.status === 200 ? {} : { error: failureOf(saved, 'the browser save') }),
-      by: 'go', origin: 'go', edits: editsFor('index.html', index),
+      by: 'go', origin: 'go', edits: editsFor(at('index.html'), index),
     });
 
     const dataBody = JSON.stringify({ title: 'P3 Data Write', items: ['first', 'second'] });
     const dataRules = encodeURIComponent(JSON.stringify({ title: 'h1', items: '.item[]' }));
-    const dataEdits = editsFor('index.html', index);
+    const dataEdits = editsFor(at('index.html'), index);
     const dataNotes = [];
     let dataOutcome = 'committed';
     let missingRoute = false;
     for (const [where, requestPath] of [
-      ['POST /index.html?data=', `/index.html?data=${dataRules}`],
-      ['POST /_/api/index.html', '/_/api/index.html'],
+      ['POST /index.html?data=', `/${at('index.html')}?data=${dataRules}`],
+      ['POST /_/api/index.html', `/_/api/${at('index.html')}`],
     ]) {
       const answer = await httpRequest(go.url, {
         method: 'POST',
@@ -279,19 +284,19 @@ async function main() {
       by: 'go', origin: 'go', edits: dataEdits,
     });
 
-    const listed = await httpRequest(go.url, { path: '/_/versions/index.html' });
+    const listed = await httpRequest(go.url, { path: `/_/versions/${at('index.html')}` });
     const list = answerJson(listed);
     const version = list && Array.isArray(list.versions) ? list.versions[0] : null;
     if (listed.status === 200 && version && typeof version.name === 'string') {
       const restored = await httpRequest(go.url, {
-        method: 'POST', path: `/_/restore/index.html/${encodeURIComponent(version.name)}`,
+        method: 'POST', path: `/_/restore/${at('index.html')}/${encodeURIComponent(version.name)}`,
       });
       record({
         kind: 'restore',
         how: 'HTTP GET /_/versions/<rel> then POST /_/restore/<rel>/<name> to the Go host',
         outcome: restored.status === 200 ? 'committed' : 'failed',
         ...(restored.status === 200 ? {} : { error: failureOf(restored, 'the version restore') }),
-        by: 'go', origin: 'go', edits: editsFor('index.html', index),
+        by: 'go', origin: 'go', edits: editsFor(at('index.html'), index),
       });
     } else {
       record({
@@ -301,12 +306,12 @@ async function main() {
         error: listed.status === 200
           ? 'the version list named no version'
           : failureOf(listed, 'the version list'),
-        by: 'go', origin: 'go', edits: editsFor('index.html', index),
+        by: 'go', origin: 'go', edits: editsFor(at('index.html'), index),
       });
     }
 
-    const notes = fs.readFileSync(path.join(rootB.path, 'notes.html'), 'utf8');
-    const notesEdits = editsFor('notes.html', notes);
+    const notes = fs.readFileSync(path.join(rootB.path, at('notes.html')), 'utf8');
+    const notesEdits = editsFor(at('notes.html'), notes);
     intend(notesEdits);
     const raised = await guardRestoreWriter(notesEdits);
     record({
@@ -318,20 +323,20 @@ async function main() {
   }
 
   async function guardRestoreWriter() {
-    const source = fs.readFileSync(path.join(rootB.path, 'notes.html'), 'utf8');
-    const seeded = await browserSaveWriter('notes.html', source);
+    const source = fs.readFileSync(path.join(rootB.path, at('notes.html')), 'utf8');
+    const seeded = await browserSaveWriter(at('notes.html'), source);
     if (seeded.status !== 200) {
       return { outcome: 'failed', error: failureOf(seeded, 'the guard seed save') };
     }
     const clobber = source.replace(/<div id="notes">[^<]*<\/div>/, '<div id="notes"></div>');
     if (clobber === source) return { outcome: 'failed', error: 'the clobbered page is unchanged' };
-    const destructive = await browserSaveWriter('notes.html', clobber, { userDriven: true });
+    const destructive = await browserSaveWriter(at('notes.html'), clobber, { userDriven: true });
     if (destructive.status !== 200) {
       return { outcome: 'failed', error: failureOf(destructive, 'the destructive save') };
     }
     const notice = await httpRequest(go.url, {
       path: '/_/data-loss',
-      headers: { 'Document-URL': `${go.url}/notes.html` },
+      headers: { 'Document-URL': `${go.url}/${at('notes.html')}` },
     });
     const event = notice.status === 200 ? answerJson(notice)?.event : null;
     if (!event || typeof event.id !== 'string') {
@@ -346,7 +351,7 @@ async function main() {
       method: 'POST',
       path: `/_/data-loss/${encodeURIComponent(event.id)}`,
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ file: 'notes.html', choice: 'restore' }),
+      body: JSON.stringify({ file: at('notes.html'), choice: 'restore' }),
     });
     const answer = answerJson(restored);
     if (restored.status !== 200 || !answer || answer.ok !== true) {
@@ -369,21 +374,21 @@ async function main() {
 
   async function autoNameWriter() {
     const how = 'the real auto-namer on a created Untitled page, fed from the host\'s events';
-    const edits = editsFor(UNTITLED_NAME).concat(editsFor(AUTO_NAMED));
+    const edits = editsFor(at(UNTITLED_NAME)).concat(editsFor(at(AUTO_NAMED)));
     intend(edits);
     const entry = { kind: 'auto-name', how, by: 'node', origin: 'node', edits };
     let appDataPath = path.join(runDir, 'app-data');
     try {
-      await command({ command: 'create', parent: '', name: UNTITLED_NAME, template: 'blockeditor' });
-      const file = path.join(rootB.path, UNTITLED_NAME);
-      const current = await host.read(UNTITLED_NAME, file);
-      if (!current) throw new Error(`${UNTITLED_NAME} was not created`);
+      await command({ command: 'create', parent: options.prefix, name: UNTITLED_NAME, template: 'blockeditor' });
+      const file = path.join(rootB.path, at(UNTITLED_NAME));
+      const current = await host.read(at(UNTITLED_NAME), file);
+      if (!current) throw new Error(`${at(UNTITLED_NAME)} was not created`);
       const html = current.bytes.toString('utf8')
         .replace('<h1 data-id="title"></h1>', '<h1 data-id="title">P3 Auto Named</h1>');
       if (html === current.bytes.toString('utf8')) throw new Error('the page template carries no empty heading');
       const saved = await host.commit({
         kind: 'browser-save',
-        name: UNTITLED_NAME,
+        name: at(UNTITLED_NAME),
         filePath: file,
         bytes: html,
         expected: { type: 'checksum', value: current.checksum },
@@ -397,7 +402,7 @@ async function main() {
         rooms: new Map([[canonical, room]]),
         hasParticipatingEditors: () => false,
         checkpointTargets: (key) => (key === canonical
-          ? [{ rootId: rootB.id, logicalPath: UNTITLED_NAME }]
+          ? [{ rootId: rootB.id, logicalPath: at(UNTITLED_NAME) }]
           : []),
         identityAt: () => null,
       };
@@ -418,17 +423,17 @@ async function main() {
         }
       }
       try {
-        await autoNamer.record(rootB, UNTITLED_NAME, 'blockeditor');
+        await autoNamer.record(rootB, at(UNTITLED_NAME), 'blockeditor');
         const deadline = Date.now() + 20000;
         for (;;) {
           await autoNamer.departed(room);
-          if (fs.existsSync(path.join(rootB.path, AUTO_NAMED))) {
-            return record({ ...entry, outcome: 'committed', evidence: { renamed: AUTO_NAMED } });
+          if (fs.existsSync(path.join(rootB.path, at(AUTO_NAMED)))) {
+            return record({ ...entry, outcome: 'committed', evidence: { renamed: at(AUTO_NAMED) } });
           }
           if (Date.now() >= deadline) break;
           await wait(300);
         }
-        throw new Error(`the auto-namer did not rename ${UNTITLED_NAME} to ${AUTO_NAMED}`);
+        throw new Error(`the auto-namer did not rename ${at(UNTITLED_NAME)} to ${at(AUTO_NAMED)}`);
       } finally {
         autoNamer.close();
         if (unsubscribe) {
@@ -443,7 +448,7 @@ async function main() {
 
   async function rebaseWriter() {
     const how = 'direct call, no native caller';
-    const rel = 'article.html';
+    const rel = at('article.html');
     const edits = editsFor(rel);
     intend(edits);
     const entry = { kind: 'external-rebase', how, by: 'node', origin: 'node', edits };
@@ -519,7 +524,7 @@ async function main() {
     const session = {
       id: 'p3-sync', rootId: rootB.id, kind: 'personal', accountId: null, cached: { username: null },
     };
-    intend(editsFor('index.html'));
+    intend(editsFor(at('index.html')));
     let started = null;
     try {
       started = await manager.start(session, { id: rootB.id, path: rootB.path, kind: 'personal' }, { firstBind: true });
@@ -598,27 +603,27 @@ async function main() {
     await httpWriters();
 
     await workspaceWriter('create', 'executeCommand create from the page template through the host', {
-      command: 'create', parent: '', name: 'created.html', template: 'blockeditor',
-    }, editsFor('created.html'));
+      command: 'create', parent: options.prefix, name: 'created.html', template: 'blockeditor',
+    }, editsFor(at('created.html')));
 
-    const duplicateEdits = editsFor('article.html').concat(editsFor('article-copy.html'));
+    const duplicateEdits = editsFor(at('article.html')).concat(editsFor(at('article-copy.html')));
     await workspaceWriter('duplicate', 'executeCommand duplicate through the host', {
-      command: 'duplicate', path: 'article.html', name: 'article-copy.html',
+      command: 'duplicate', path: at('article.html'), name: 'article-copy.html',
     }, duplicateEdits);
 
-    const moveEdits = editsFor('sub/page.html').concat(editsFor('page.html'));
+    const moveEdits = editsFor(at('sub/page.html')).concat(editsFor(at('page.html')));
     await workspaceWriter('move', 'executeCommand move through the host', {
-      command: 'move', path: 'sub/page.html', parent: '',
+      command: 'move', path: at('sub/page.html'), parent: options.prefix,
     }, moveEdits);
 
-    const trashEdits = editsFor('styled.html').concat(editsFor('.trash/styled.html'));
+    const trashEdits = editsFor(at('styled.html')).concat(editsFor(`.trash/${at('styled.html')}`));
     await workspaceWriter('trash', 'executeCommand trash through the host', {
-      command: 'trash', path: 'styled.html',
+      command: 'trash', path: at('styled.html'),
     }, trashEdits);
 
-    const untrashEdits = editsFor('styled.html').concat(editsFor('.trash/styled.html'));
+    const untrashEdits = editsFor(at('styled.html')).concat(editsFor(`.trash/${at('styled.html')}`));
     await workspaceWriter('restore-trash', 'executeCommand restore-trash through the host', {
-      command: 'restore-trash', trashPath: '.trash/styled.html',
+      command: 'restore-trash', trashPath: `.trash/${at('styled.html')}`,
     }, untrashEdits);
 
     await autoNameWriter();
@@ -626,10 +631,11 @@ async function main() {
     await syncWriters();
 
     if (options.canary) {
-      const canary = path.join(rootB.path, CANARY_NAME);
-      intend([CANARY_NAME]);
+      const canaryRel = at(CANARY_NAME);
+      const canary = path.join(rootB.path, canaryRel);
+      intend([canaryRel]);
       await fs.promises.writeFile(canary, '<!doctype html><html><body><h1>canary</h1></body></html>\n');
-      fs.writeFileSync(path.join(runDir, 'canary.json'), `${JSON.stringify({ path: CANARY_NAME }, null, 2)}\n`);
+      fs.writeFileSync(path.join(runDir, 'canary.json'), `${JSON.stringify({ path: canaryRel }, null, 2)}\n`);
     }
   } catch (error) {
     crash = error?.message || String(error);

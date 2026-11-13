@@ -185,7 +185,7 @@ function findMatchingHashes(root, journalHashes) {
   return found;
 }
 
-function writeBeforeHashes(copyDir, target) {
+export function writeBeforeHashes(copyDir, target) {
   const rows = [];
   const visit = (absDir, segments) => {
     for (const entry of listEntries(absDir)) {

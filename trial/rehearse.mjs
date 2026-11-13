@@ -17,7 +17,7 @@ const MAX_BUFFER = 64 * 1024 * 1024;
 
 function parseArgs(argv) {
   const options = {
-    source: null, htmlclay: null, out: null, allowLocalApps: false, keepCopies: false,
+    source: null, htmlclay: null, out: null, allowLocalApps: false, keepCopies: false, p3Prefix: '',
   };
   for (let i = 0; i < argv.length; i += 1) {
     const flag = argv[i];
@@ -35,6 +35,7 @@ function parseArgs(argv) {
     if (flag === '--source') options.source = value;
     else if (flag === '--htmlclay') options.htmlclay = value;
     else if (flag === '--out') options.out = value;
+    else if (flag === '--p3-prefix') options.p3Prefix = value;
     else throw new Error(`unknown argument: ${flag}`);
   }
   for (const name of ['source', 'htmlclay', 'out']) {
@@ -89,7 +90,7 @@ function removeTree(dir, log) {
 }
 
 export async function rehearse({
-  source, htmlclay, out, allowLocalApps = false, keepCopies = false,
+  source, htmlclay, out, allowLocalApps = false, keepCopies = false, p3Prefix = '',
 } = {}) {
   const sourceReal = realOrNearest(source);
   if (!fs.existsSync(sourceReal) || !fs.statSync(sourceReal).isDirectory()) {
@@ -141,6 +142,7 @@ export async function rehearse({
   log(`htmlclay: ${htmlclayReal}`);
   log(`out: ${outReal}`);
   log(`allow-local-apps: ${allowLocalApps ? 'yes' : 'no'}`);
+  log(`p3-prefix: ${p3Prefix || 'none'}`);
 
   try {
     fs.writeFileSync(
@@ -307,6 +309,8 @@ export async function rehearse({
       '--source', sourceReal,
       '--go-bin', bin,
       '--local-source', REPO,
+      ...(allowLocalApps ? ['--allow-local-apps'] : []),
+      ...(p3Prefix ? ['--prefix', p3Prefix] : []),
     ], {
       cwd: REPO, encoding: 'utf8', maxBuffer: MAX_BUFFER,
     });

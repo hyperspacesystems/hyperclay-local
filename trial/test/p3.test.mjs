@@ -171,3 +171,68 @@ test('P3: the headless driver and the writer check', { skip: SKIP }, async (t) =
     assert.equal(sha256(DRIVER), before, 'the driver was not restored to its own bytes');
   });
 });
+
+test('P3 with --prefix runs its writers in a fixture folder inside a root that has its own documents', { skip: SKIP }, async (t) => {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'hcl-p3-prefix-')));
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  const source = path.join(tmp, 'source');
+  fs.mkdirSync(path.join(source, 'notes'), { recursive: true });
+  const page = (title) => `<!doctype html><html><head><title>${title}</title></head><body><h1>${title}</h1></body></html>\n`;
+  for (const rel of ['index.html', 'untitled.html', 'untitled-2.html', 'page.html', 'notes/today.html']) {
+    fs.writeFileSync(path.join(source, rel), page(rel));
+  }
+  const bin = process.env.MANAGED_TRIAL_GO_BIN || buildBinary(tmp);
+  const run = path.join(tmp, 'run');
+  const child = spawnSync(process.execPath, [
+    P3, '--run', run, '--source', source, '--go-bin', bin, '--local-source', REPO, '--prefix', 'p3',
+  ], { encoding: 'utf8', timeout: 900000 });
+  const output = `${child.stdout || ''}${child.stderr || ''}`;
+  const report = fs.existsSync(path.join(run, 'p3.json')) ? readJson(path.join(run, 'p3.json')) : null;
+  assert.ok(report, `p3 wrote no report (exit ${child.status}):\n${output}`);
+  assert.equal(report.prefix, 'p3');
+  assert.equal(report.verdict, 'pass (sync not run)', JSON.stringify({ problems: report.problems, controlProblems: report.controlProblems }));
+  assert.equal(child.status, 0);
+
+  const goGuard = readJson(path.join(run, 'go', 'driver', 'fs-guard.json'));
+  assert.deepEqual(goGuard.forbidden, []);
+  const canaryGuard = readJson(path.join(run, 'canary', 'driver', 'fs-guard.json'));
+  assert.equal(canaryGuard.forbidden.some((entry) => entry.path === 'p3/canary.html'), true,
+    `the canary run lists ${JSON.stringify(canaryGuard.forbidden.map((entry) => entry.path))}`);
+
+  const writers = readJson(path.join(run, 'go', 'driver', 'writers.json')).writers;
+  for (const writer of writers) {
+    if (writer.kind === 'data-api' || writer.outcome.startsWith('not-run')) continue;
+    assert.equal(writer.outcome, 'committed', `${writer.kind}: ${writer.error || writer.reason || ''}`);
+    for (const edit of writer.edits) {
+      assert.ok(edit.startsWith('p3/') || edit.startsWith('.trash/p3/') || /^\.hyperclay\/[^/]+\/(\.trash\/)?p3\//.test(edit),
+        `${writer.kind} aims at ${edit}, outside the fixture folder`);
+    }
+  }
+
+  const goCopy = report.runs.go.copies[0];
+  for (const rel of ['index.html', 'untitled.html', 'untitled-2.html', 'page.html', 'notes/today.html']) {
+    assert.equal(fs.readFileSync(path.join(goCopy, rel), 'utf8'), page(rel), `${rel} at the root changed`);
+  }
+
+  const goRun = path.dirname(goCopy);
+  for (const label of ['B', 'A']) {
+    const p5 = spawnSync(process.execPath, [
+      path.join(REPO, 'trial', 'p5.mjs'),
+      '--before', path.join(goRun, 'before.sha256'),
+      '--root', path.join(goRun, label),
+      '--intended', path.join(run, 'go', 'driver', 'intended-edits.txt'),
+      '--reference', path.join(goRun, 'C'),
+      '--out', path.join(tmp, `p5-${label}.json`),
+    ], { encoding: 'utf8', timeout: 300000 });
+    assert.equal(p5.status, 0, `P5 on the prefixed copy ${label}:\n${p5.stdout || ''}${p5.stderr || ''}`);
+  }
+
+  const clash = path.join(tmp, 'clash');
+  fs.mkdirSync(path.join(clash, 'p3'), { recursive: true });
+  fs.writeFileSync(path.join(clash, 'p3', 'mine.html'), page('mine'));
+  const refused = spawnSync(process.execPath, [
+    P3, '--run', path.join(tmp, 'run-clash'), '--source', clash, '--go-bin', bin, '--local-source', REPO, '--prefix', 'p3',
+  ], { encoding: 'utf8', timeout: 300000 });
+  assert.notEqual(refused.status, 0);
+  assert.match(`${refused.stdout || ''}${refused.stderr || ''}`, /already exists in the copy/);
+});

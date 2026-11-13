@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { setup } from './setup.mjs';
+import { setup, writeBeforeHashes } from './setup.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DRIVER = path.join(REPO, 'trial', 'driver.cjs');
@@ -13,13 +13,19 @@ const COMMIT_KINDS = new Set([
   'browser-save', 'data-api', 'restore', 'guard-restore', 'external-rebase', 'create', 'sync-download',
 ]);
 const NOT_RUN = 'not-run (needs the box)';
+const FIXTURE_ROOT = path.join(REPO, 'trial', 'test', 'fixtures', 'p3-root');
 
 function parseArgs(argv) {
   const options = {
     run: null, source: null, goBin: null, localSource: null, serverUrl: null, apiKeyFile: null,
+    prefix: '', allowLocalApps: false,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const flag = argv[i];
+    if (flag === '--allow-local-apps') {
+      options.allowLocalApps = true;
+      continue;
+    }
     const value = argv[i + 1];
     if (value === undefined || value.startsWith('--')) throw new Error(`${flag} needs a value`);
     i += 1;
@@ -29,6 +35,7 @@ function parseArgs(argv) {
     else if (flag === '--local-source') options.localSource = value;
     else if (flag === '--server-url') options.serverUrl = value;
     else if (flag === '--api-key-file') options.apiKeyFile = value;
+    else if (flag === '--prefix') options.prefix = value;
     else throw new Error(`unknown argument ${flag}`);
   }
   if (!options.run) throw new Error('--run is required');
@@ -98,12 +105,51 @@ function runDriver({ label, runDir, copies, args }) {
   return { status: child.status, signal: child.signal, logPath };
 }
 
+// A real root has its own documents, so P3's writers get theirs in one fresh folder:
+// the fixture pages go to <copy>/<prefix>/ and the fixture's page state to
+// <copy>/.hyperclay/page-state/<prefix>/. Nothing is replaced: a name that already
+// exists stops the run.
+function placeFixtures(copy, prefix) {
+  const pages = path.join(copy, prefix);
+  const state = path.join(copy, '.hyperclay', 'page-state', prefix);
+  for (const target of [pages, state]) {
+    if (fs.existsSync(target)) throw new Error(`refusing to place the P3 fixtures: ${target} already exists in the copy`);
+  }
+  for (const entry of fs.readdirSync(FIXTURE_ROOT, { withFileTypes: true })) {
+    if (entry.name === '.hyperclay') continue;
+    const from = path.join(FIXTURE_ROOT, entry.name);
+    const to = path.join(pages, entry.name);
+    if (entry.isDirectory()) copyDir(from, to);
+    else if (entry.isFile()) {
+      fs.mkdirSync(pages, { recursive: true });
+      fs.copyFileSync(from, to);
+    }
+  }
+  copyDir(path.join(FIXTURE_ROOT, '.hyperclay', 'page-state'), state);
+}
+
 function makeRun(options, runDir, label, mode, extraArgs) {
   const labelDir = path.join(runDir, label);
-  const made = setup({ src: options.source, run: labelDir, log: () => {} });
+  const made = setup({
+    src: options.source, run: labelDir, allowLocalApps: options.allowLocalApps, log: () => {},
+  });
   const copies = [path.join(made.runDir, 'B'), path.join(made.runDir, 'A')];
   makeWritable(path.join(made.runDir, 'C'));
-  const driven = runDriver({ label, runDir, copies, args: extraArgs });
+  if (options.prefix) {
+    // P5 reads these copies against before.sha256 and copy C, so both must
+    // describe the root as the writers find it: fixtures placed in all three
+    // copies, then the hashes taken again from C (setup's own file is kept).
+    for (const copy of [...copies, path.join(made.runDir, 'C')]) placeFixtures(copy, options.prefix);
+    const before = path.join(made.runDir, 'before.sha256');
+    fs.renameSync(before, path.join(made.runDir, 'before-setup.sha256'));
+    writeBeforeHashes(path.join(made.runDir, 'C'), before);
+  }
+  const driven = runDriver({
+    label,
+    runDir,
+    copies,
+    args: options.prefix ? [...extraArgs, '--prefix', options.prefix] : extraArgs,
+  });
   return {
     label,
     mode,
@@ -237,6 +283,7 @@ export async function main({
   const report = {
     driver: path.relative(cwd, DRIVER),
     source,
+    prefix: options.prefix || null,
     runs: {},
     verdict: 'could-not-demonstrate',
     code: 3,
