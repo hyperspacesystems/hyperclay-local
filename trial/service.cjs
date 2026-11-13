@@ -15,20 +15,19 @@ const { realpathSync } = require('fs');
 const { randomBytes, timingSafeEqual } = require('crypto');
 const { AsyncLocalStorage } = require('async_hooks');
 
-const SRC = path.join(__dirname, '..', 'src', 'main');
-const { createLocalAuthority } = require(path.join(SRC, 'local-authority.js'));
-const { createLocalCheckpoint } = require(path.join(SRC, 'local-checkpoint.js'));
-const { createRootDocumentHost } = require(path.join(SRC, 'document-host.js'));
-const { withDocumentWrite, withStructureChange } = require(path.join(SRC, 'utils', 'write-queue.js'));
-const { withReader, disk } = require(path.join(SRC, 'document-reader.js'));
-const { createRootLive } = require(path.join(SRC, 'utils', 'root-live.js'));
-const { RootObserver } = require(path.join(SRC, 'root-observer.js'));
-const { pageWriteFailure, createApp, getAndClearSnapshot } = require(path.join(SRC, 'server.js'));
-const { writeContexts } = require(path.join(SRC, 'write-contexts.js'));
-const { documentEtag } = require(path.join(SRC, 'spec-wire.js'));
-const { logicalBytes } = require(path.join(SRC, 'page-state-store.js'));
-const { newestVersionFiles } = require(path.join(SRC, 'page-rebase.js'));
-const { loadCheckpoint } = require(path.join(SRC, 'utils', 'page-api.js'));
+const { createLocalAuthority } = require('../src/main/local-authority.js');
+const { createLocalCheckpoint } = require('../src/main/local-checkpoint.js');
+const { createRootDocumentHost } = require('../src/main/document-host.js');
+const { withDocumentWrite, withStructureChange } = require('../src/main/utils/write-queue.js');
+const { withReader, disk } = require('../src/main/document-reader.js');
+const { createRootLive } = require('../src/main/utils/root-live.js');
+const { RootObserver } = require('../src/main/root-observer.js');
+const { pageWriteFailure, createApp, getAndClearSnapshot } = require('../src/main/server.js');
+const { writeContexts } = require('../src/main/write-contexts.js');
+const { documentEtag } = require('../src/main/spec-wire.js');
+const { logicalBytes } = require('../src/main/page-state-store.js');
+const { newestVersionFiles } = require('../src/main/page-rebase.js');
+const { loadCheckpoint } = require('../src/main/utils/page-api.js');
 const { setConnection, getConnection } = require('./go-process.cjs');
 const {
   createGoDocumentHost, checkpointContext, configureService, markCheckpointUnproven, checkpointUnproven,

@@ -191,9 +191,10 @@ export async function startManaged({
   // The service process, from spawn to its READY line: its URL, epoch and secret.
   async function startServiceChild() {
     const secret = randomBytes(32).toString('hex');
+    const serviceBin = env.TRIAL_SERVICE_BIN;
     const child = spawn(
-      process.execPath,
-      [...serviceNodeArgs, path.join(REPO, 'trial', 'service-main.cjs')],
+      serviceBin || process.execPath,
+      serviceBin ? [] : [...serviceNodeArgs, path.join(REPO, 'trial', 'service-main.cjs')],
       { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] },
     );
     const exitPromise = new Promise((resolve) => child.once('exit', (code, signal) => resolve({ code, signal })));

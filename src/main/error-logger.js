@@ -1,6 +1,5 @@
 const fs = require('fs').promises;
 const path = require('upath');
-const { app } = require('electron');
 
 function formatDate(date) {
   return date.toISOString().split('T')[0];
@@ -42,6 +41,7 @@ class ErrorLogger {
 
   async init() {
     try {
+      const { app } = require('electron');
       const logsPath = app.getPath('logs');
       this.logDir = path.join(logsPath, 'errors');
       await fs.mkdir(this.logDir, { recursive: true });
