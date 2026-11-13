@@ -35,6 +35,7 @@ function fakeMac({ app = { pid: 1839, version: '1.30.3', capable: true }, respon
       mac.triggers.push({ exe, version, at: mac.clock });
       respond(mac.triggers.length, mac);
     },
+    hasUpdateConfig: () => true,
     install: async (version) => { mac.installs.push(version); await install(version); },
     now: () => mac.clock,
     sleep: async (ms) => { mac.clock += ms; onSleep(mac); },
@@ -91,6 +92,17 @@ describe('update canary', () => {
     const result = await runCanary('1.31.0', mac.deps);
     expect(result).toMatchObject({ outcome: 'installed', reason: 'The running 1.30.3 predates the update trigger' });
     expect(mac.triggers).toEqual([]);
+  });
+
+  test('a running app without an app-update.yml is installed the old way without a trigger', async () => {
+    const mac = fakeMac();
+    mac.deps.hasUpdateConfig = () => false;
+    const result = await runCanary('1.31.0', mac.deps);
+    expect(result).toMatchObject({ outcome: 'installed', reason: 'The running 1.30.3 has no app-update.yml, so it cannot download updates' });
+    expect(exitCodeFor(result)).toBe(10);
+    expect(mac.triggers).toEqual([]);
+    expect(mac.installs).toEqual(['1.31.0']);
+    expect(mac.logs.join('\n')).toMatch(/app-update\.yml/);
   });
 
   test('a running capable app that refuses is a failure, and nothing is installed or killed', async () => {
@@ -263,6 +275,7 @@ describe('update canary against the real updater', () => {
       plist: (bundle, key) => (key === CAPABILITY_KEY ? '1' : '1.30.3'),
       readRequest: () => { if (!w.request) throw enoent(); return JSON.stringify(w.request); },
       trigger: (exe, version) => w.updater.updateNow(version),
+      hasUpdateConfig: () => true,
       install: async () => { w.fallbacks += 1; },
       now: () => w.now,
       sleep: async (ms) => { w.now += ms; await new Promise((resolve) => setImmediate(resolve)); },

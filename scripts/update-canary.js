@@ -84,6 +84,7 @@ async function runCanary(version, deps) {
   if (from === version) return finish('self-updated', from, `Already running ${version}`);
   if (from && VERSION.test(from) && above(from, version)) return finish('failed', from, `Running ${from}, which is newer than ${version}`);
   if (deps.plist(before.bundle, CAPABILITY_KEY) !== '1') return fallback(`The running ${from || 'build'} predates the update trigger`);
+  if (!deps.hasUpdateConfig(before.bundle)) return fallback(`The running ${from || 'build'} has no app-update.yml, so it cannot download updates`);
 
   let firstSentAt = null;
   let sentAt = null;
@@ -223,6 +224,7 @@ function canaryDeps({ log = console.log } = {}) {
       child.on('error', (error) => log(`Could not send the update request: ${error.message}`));
       child.unref();
     },
+    hasUpdateConfig: (bundle) => fs.existsSync(path.join(bundle, 'Contents', 'Resources', 'app-update.yml')),
     install: (version) => installLocally(version, { log }),
     now: () => Date.now(),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
