@@ -258,6 +258,20 @@ function writeReport(checks, overrides = {}) {
   return reportPath;
 }
 
+test('package versions accept SemVer prereleases and metadata and refuse malformed values', () => {
+  const checks = [{ id: 'row.one', status: 'pass', blocking: false }];
+  for (const version of ['0.0.0', '1.0.0', '1.1.0-sheet.5', '1.2.3-0', '1.2.3-0a.2',
+    '1.2.3+build.001', '1.2.3-rc.1+build.002']) {
+    assert.equal(validateReport(writeReport(checks, { version })).version, version);
+  }
+  for (const version of [null, 1, '', 'not-a-version', '1.2', 'v1.2.3', '01.2.3',
+    '1.02.3', '1.2.03', '1.2.3-', '1.2.3-01', '1.2.3-rc.01', '1.2.3-rc..1',
+    '1.2.3-rc_1', '1.2.3+', '1.2.3+build..1', '1.2.3\n']) {
+    assert.throws(() => validateReport(writeReport(checks, { version })), /names no package version/,
+      JSON.stringify(version));
+  }
+});
+
 test('every row status the package emits is a report the wrapper accepts', () => {
   const checks = [
     { id: 'row.pass', status: 'pass', blocking: false },
