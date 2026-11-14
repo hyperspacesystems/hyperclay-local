@@ -1,5 +1,6 @@
 const fs = require('fs').promises;
 const http = require('http');
+const path = require('path');
 const net = require('net');
 const { fixture } = require('./workspace-fixture');
 
@@ -271,7 +272,7 @@ test('a host in front serves the API through api() with its own origin and file 
     expect(await (await post({ command: 'folder', parent: null, name: 'Notes' })).json()).toEqual({ path: 'Notes' });
     expect(made).toEqual(['Notes']);
     expect((await post({ command: 'empty-trash' })).status).toBe(200);
-    expect(emptied).toEqual([`${h.dir}/.trash`]);
+    expect(emptied).toEqual([path.join(h.dir, '.trash')]);
     expect(structured).toBe(2);
     await fs.writeFile(`${h.dir}/a.html`, '<html><body>a</body></html>');
     const saved = await fetch(`${base}/api/roots/root-a/source`, { method: 'PUT', headers: { 'Content-Type': 'application/json' },
