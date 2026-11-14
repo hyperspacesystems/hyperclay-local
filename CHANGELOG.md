@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+## [1.38.0] - 2026-11-14
+
+### Added
+- A host can add and remove roots on the trial service after it has attached, through `POST /v1/roots`. Removing a root flushes its unsaved rooms first, or keeps the root and reports which rooms stayed unsaved. A request for an unknown root answers 404.
+- `serveApi` and `api(req, res)` let a host that serves the workspace itself admit a request and pass it to the shell server. New options cover a fixed origin, the bundle manifest, each root's public origin, and per-root command options.
+- `executeCommand` takes the folder and empty-trash writes as a `files` option.
+- Workspace commands take their write locks as an option, so a host that orders writes itself can pass locks that do not lock. Local's own default is unchanged.
+- A `rootHost` option lets the save, versions, version, restore and upload routes reach a root's own server. Local keeps its own loopback ports by default.
+- The trial service gains `mount(prefix, handler)`, answered after its host, bearer and epoch checks, and `onRoots(listener)` for root changes.
+- `frames(fn)` gives the trial service's app its `workspaceFrame` option, so a document load carrying a workspace frame is bridged when the host answers its id, the same way a root server's is.
+
+### Changed
+- A root that carries a public origin now treats exactly that origin and its host as its own, instead of any loopback name on its port. Roots with only a port keep the previous rule.
+
+### Fixed
+- Saves, restores and page API calls are judged by the shared data loss guard, and sheets downloaded from hyperclay.com are judged the same way as a person's save.
+- The New page in a root loads on reload instead of returning 404.
+- View Sync Logs and View Error Logs from the tray, and the open-logs request, create the logs folder first, so they work before the first log is written.
+- Rooms follow moved files when the service cannot confirm a structure settle. Touched pages are marked unconfirmed at both their old and new paths, and the service settles the plan with its own counts and reconciles them.
+
 ## [1.37.0] - 2026-11-12
 
 ### Added
