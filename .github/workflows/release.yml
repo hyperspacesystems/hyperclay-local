@@ -420,9 +420,19 @@ jobs:
           # and check what lands on disk through the same registry value the app reads to
           # decide it can update itself. build/installer.nsh puts a fresh install in
           # Programs\HyperclayLocal, the folder every older per-user install already uses.
+          function Read-InstallLocation([string]$key) {
+            for ($i = 0; $i -lt 60; $i++) {
+              $p = Get-ItemProperty -Path $key -Name InstallLocation -ErrorAction SilentlyContinue
+              if ($p) { return $p.InstallLocation }
+              Start-Sleep -Seconds 1
+            }
+            Write-Error "The installer wrote no InstallLocation under $key within 60 seconds"
+            exit 1
+          }
+
           Start-Process -FilePath $installer -ArgumentList "/S" -Wait
           $key = "HKCU:\Software\56279e69-a1ca-58cc-a483-19be13420d85"
-          $dir = (Get-ItemProperty -Path $key -Name InstallLocation).InstallLocation
+          $dir = Read-InstallLocation $key
           Write-Host "Installed to: $dir"
           if ($dir -ne (Join-Path $env:LOCALAPPDATA "Programs\HyperclayLocal")) {
             Write-Error "The installer did not install to the per-user HyperclayLocal folder: $dir"
@@ -434,7 +444,7 @@ jobs:
           # electron-updater reinstalls with --updated /S. The assisted installer must find
           # the per-user install through HKCU and reinstall into the same folder.
           Start-Process -FilePath $installer -ArgumentList "--updated","/S" -Wait
-          $again = (Get-ItemProperty -Path $key -Name InstallLocation).InstallLocation
+          $again = Read-InstallLocation $key
           if ($again -ne $dir) {
             Write-Error "A silent update moved the install: $dir -> $again"
             exit 1
