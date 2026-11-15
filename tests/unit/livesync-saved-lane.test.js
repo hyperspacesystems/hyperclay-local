@@ -40,7 +40,8 @@ describe('local saved-lane livesync', () => {
 
   afterEach(async () => {
     await closeLoopback();
-    await fs.rm(dir, { recursive: true, force: true });
+    // The data guard writes into .hyperclay/guard after the save answers.
+    await fs.rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
     jest.restoreAllMocks();
   });
 
