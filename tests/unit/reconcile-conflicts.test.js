@@ -638,6 +638,18 @@ describe('the conflict store', () => {
     expect(await readLocalFile('board.html')).toBe(REMOTE_BYTES);
   });
 
+  it('keep both on an unbound file keeps theirs at the path and mine as a conflicted copy', async () => {
+    await seedSite({ content: LOCAL_BYTES, remoteEtag: REMOTE_ETAG, localChecksum: LOCAL_SUM });
+    await executeDecision(engine, '901', { action: A.CONFLICT, conflictKind: 'unbound' });
+
+    const result = await resolveConflict(engine, { path: 'board.html', choice: 'both' });
+
+    expect(result).toEqual({ ok: true, copy: 'board-conflicted-copy.html' });
+    expect(await readLocalFile('board.html')).toBe(REMOTE_BYTES);
+    expect(await readLocalFile('board-conflicted-copy.html')).toBe(LOCAL_BYTES);
+    expect(await readRecords()).toEqual({});
+  });
+
   it('keep both skips a copy name the server already lists', async () => {
     await seedSite({ content: LOCAL_BYTES, remoteEtag: REMOTE_ETAG, localChecksum: LOCAL_SUM });
     engine.serverNodesCache = [{ id: 1300, type: 'site', name: 'board-conflicted-copy.html', parentId: 0 }];
@@ -754,6 +766,7 @@ describe('the conflict store', () => {
     expect(api.createNode.mock.calls[0][1].content).toBe(LOCAL_BYTES);
     expect(await readRecords()).toEqual({});
     expect(engine.repo.getBaseline(1200)).toMatchObject({ remoteEtag: REMOTE_ETAG_2, localChecksum: REMOTE_ETAG_2 });
+    expect(engine.repo.get('901')).toBeUndefined();
   });
 
   it('keep theirs on a remote-deleted node moves the file to .trash', async () => {
@@ -783,6 +796,19 @@ describe('the conflict store', () => {
     expect(api.renameNode).not.toHaveBeenCalled();
     expect(await readLocalFile('new.html')).toBe(LOCAL_BYTES);
     expect((await readRecords())['new.html']).toMatchObject({ kind: 'name-taken', path: 'new.html' });
+  });
+
+  it('keep mine on a name taken by a file whose name starts with digits never writes to another node', async () => {
+    await writeLocalFile('11-notes.html', LOCAL_BYTES);
+    const err = Object.assign(new Error('name taken'), { statusCode: 409, code: 'name-conflict' });
+    api.createNode.mockRejectedValueOnce(err);
+    await executeDecision(engine, null, { action: A.CREATE_REMOTE }, { path: '11-notes.html', type: 'site', parentId: 0 });
+    expect((await readRecords())['11-notes.html']).toMatchObject({ kind: 'name-taken' });
+
+    await resolveConflict(engine, { path: '11-notes.html', choice: 'mine' }).catch(() => {});
+
+    expect(api.putNodeContent).not.toHaveBeenCalled();
+    expect(api.createNode.mock.calls.at(-1)[1]).toMatchObject({ name: '11-notes.html' });
   });
 
   it('resolving a path with no record refuses', async () => {
