@@ -165,6 +165,29 @@ async function openConflict(engine, nodeId, rel) {
   return store.forNode(records, nodeId, rel);
 }
 
+// The node a fresh list shows at rel, as remoteViewOf reads it; null when there is none
+// or the list cannot be read.
+async function findHolder(engine, rel, type) {
+  engine.invalidateServerNodesCache();
+  let nodes;
+  try {
+    nodes = await engine.fetchAndCacheServerNodes(0);
+  } catch {
+    return null;
+  }
+  return (nodes || []).map((node) => engine.remoteViewOf(node)).find((remote) => remote.type === type && remote.path === rel) || null;
+}
+
+// The file meets the node holding its name as a pass meets a listed node it has
+// no baseline for: adopt on equal bytes, else an unbound conflict. Never a rename.
+async function meetHolder(engine, holder) {
+  const item = await engine.decideNode({
+    nodeId: holder.id, rel: holder.path, entry: engine.repo.get(String(holder.id)) || null,
+    remote: holder, localPresent: true, complete: true,
+  });
+  return executeDecision(engine, item.nodeId, item.decision, item.context);
+}
+
 /**
  * Park the remote bytes and write the record. `fetchRemote` is false for
  * `remote-deleted` (no remote bytes are left) and for `name-taken` (the node
@@ -189,6 +212,10 @@ async function recordConflict(engine, nodeId, rel, { kind, localChecksum = null,
     }
   }
 
+  if (nodeId !== null && nodeId !== undefined) {
+    const held = await store.load(engine.metaDir);
+    if (held[rel] && held[rel].path === rel) await store.clear(engine.metaDir, rel);
+  }
   const stored = await store.set(engine.metaDir, { ...record, nodeId });
   engine.emit('file-synced', { file: rel, action: 'conflict', kind });
   return { key: stored.key, ...stored.record };
@@ -509,13 +536,14 @@ async function createRemote(engine, nodeId, entry, context, gen) {
       modifiedAt: (await fs.stat(localPath)).mtime,
     });
   } catch (error) {
-    if (error.statusCode === 409 && error.code === 'name-conflict') {
-      const record = await recordConflict(engine, nodeId, rel, {
-        kind: store.KINDS.NAME_TAKEN,
-        localChecksum,
-        fetchRemote: false,
-      });
-      return { action: A.CONFLICT, kind: store.KINDS.NAME_TAKEN, record };
+    if (error.statusCode === 409 && (!error.code || error.code === 'name-conflict')) {
+      const holder = await findHolder(engine, rel, type);
+      if (holder) return meetHolder(engine, holder);
+      if (error.code === 'name-conflict') {
+        const record = await recordConflict(engine, nodeId, rel, { kind: store.KINDS.NAME_TAKEN, localChecksum, fetchRemote: false });
+        return { action: A.CONFLICT, kind: store.KINDS.NAME_TAKEN, record };
+      }
+      throw error;
     }
     if (!isSite && error.statusCode === 413 && error.code === 'too-large') {
       if (Number.isFinite(error.limit)) await engine.setUploadLimit(error.limit);
@@ -649,6 +677,14 @@ async function resolveConflict(session, { path: rel, choice } = {}) {
   const found = store.byPath(records, rel);
   if (!found) return { ok: false, error: 'no-conflict' };
 
+  // A conflict whose file is gone here has nothing left to keep: the record and
+  // its kept server copy go, and the next comparison decides the node afresh.
+  if (choice !== 'theirs' && await goneFromDisk(path.join(engine.syncFolder, found.path))) {
+    await store.clear(engine.metaDir, found.key);
+    await removeCopy(engine, found);
+    return { ok: false, error: 'no-conflict' };
+  }
+
   const id = idOf(found.key);
   const isSite = SITE_PATTERN.test(found.path);
   const type = isSite ? 'site' : 'upload';
@@ -709,13 +745,26 @@ async function resolveConflict(session, { path: rel, choice } = {}) {
   const modifiedAt = (await fs.stat(localPath)).mtime;
 
   if (id === null || found.kind === store.KINDS.REMOTE_DELETED) {
-    const created = await createNode(engine.conn, {
-      type,
-      name: path.basename(found.path),
-      parentId: engine.resolveParentIdByPath(dirOf(found.path)),
-      content,
-      modifiedAt,
-    });
+    await engine.createMissingParentFolders(found.path);
+    let created;
+    try {
+      created = await createNode(engine.conn, {
+        type,
+        name: path.basename(found.path),
+        parentId: engine.resolveParentIdByPath(dirOf(found.path)),
+        content,
+        modifiedAt,
+      });
+    } catch (error) {
+      if (error.statusCode !== 409 || (error.code && error.code !== 'name-conflict')) throw error;
+      const holder = await findHolder(engine, found.path, type);
+      if (!holder) throw error;
+      if (known) await engine.repo.delete(found.key);
+      await store.clear(engine.metaDir, found.key);
+      await removeCopy(engine, found);
+      const met = await meetHolder(engine, holder);
+      return met.action === A.ADOPT ? { ok: true } : { ok: false, error: 'changed' };
+    }
     const etag = created.etag || created.checksum || localChecksum;
     // The deleted node's entry goes: left beside the new one, it would claim the
     // same path and send later saves to a node that no longer exists.

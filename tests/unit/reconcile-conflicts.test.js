@@ -769,6 +769,36 @@ describe('the conflict store', () => {
     expect(engine.repo.get('901')).toBeUndefined();
   });
 
+  it('keep mine on a deleted node whose name was taken again meets the node that holds it', async () => {
+    await seedSite({ content: LOCAL_BYTES, remoteEtag: REMOTE_ETAG, localChecksum: LOCAL_SUM });
+    await executeDecision(engine, '901', { action: A.CONFLICT, conflictKind: 'remote-deleted' });
+    api.createNode.mockRejectedValue(Object.assign(new Error('A site with this name already exists'), { statusCode: 409 }));
+    api.listNodes.mockResolvedValue(Object.assign([{ id: 1300, type: 'site', name: 'board.html', path: '', parentId: null, etag: 'etag-holder', checksum: 'etag-holder' }], { complete: true }));
+    api.getNodeContent.mockResolvedValue({ content: '<p>theirs</p>', checksum: 'etag-holder', etag: 'etag-holder', modifiedAt: '2026-01-01T00:00:00Z' });
+
+    const result = await resolveConflict(engine, { path: 'board.html', choice: 'mine' });
+
+    expect(result).toEqual({ ok: false, error: 'changed' });
+    const records = await readRecords();
+    expect(records['901']).toBeUndefined();
+    expect(records['1300']).toMatchObject({ kind: 'unbound', path: 'board.html' });
+    expect(engine.repo.get('901')).toBeUndefined();
+    expect(await readLocalFile('board.html')).toBe(LOCAL_BYTES);
+  });
+
+  it('keep mine on a conflict whose file is gone drops the record', async () => {
+    await seedSite({ content: LOCAL_BYTES, remoteEtag: REMOTE_ETAG, localChecksum: LOCAL_SUM });
+    await executeDecision(engine, '901', { action: A.CONFLICT, conflictKind: 'both-edited' });
+    await fsp.rm(path.join(root, 'board.html'));
+
+    const result = await resolveConflict(engine, { path: 'board.html', choice: 'mine' });
+
+    expect(result).toEqual({ ok: false, error: 'no-conflict' });
+    expect(await readRecords()).toEqual({});
+    expect(api.createNode).not.toHaveBeenCalled();
+    expect(api.putNodeContent).not.toHaveBeenCalled();
+  });
+
   it('keep theirs on a remote-deleted node moves the file to .trash', async () => {
     await seedSite({ content: LOCAL_BYTES, remoteEtag: REMOTE_ETAG, localChecksum: LOCAL_SUM });
     await executeDecision(engine, '901', { action: A.CONFLICT, conflictKind: 'remote-deleted' });
@@ -796,6 +826,30 @@ describe('the conflict store', () => {
     expect(api.renameNode).not.toHaveBeenCalled();
     expect(await readLocalFile('new.html')).toBe(LOCAL_BYTES);
     expect((await readRecords())['new.html']).toMatchObject({ kind: 'name-taken', path: 'new.html' });
+  });
+
+  it('a create refused with a bare 409 meets the node that now holds the name', async () => {
+    await writeLocalFile('new.html', LOCAL_BYTES);
+    api.createNode.mockRejectedValue(Object.assign(new Error('A site with this name already exists'), { statusCode: 409 }));
+    api.listNodes.mockResolvedValue(Object.assign([{ id: 1400, type: 'site', name: 'new.html', path: '', parentId: null, etag: 'etag-holder', checksum: 'etag-holder' }], { complete: true }));
+    api.getNodeContent.mockResolvedValue({ content: '<p>theirs</p>', checksum: 'etag-holder', etag: 'etag-holder', modifiedAt: '2026-01-01T00:00:00Z' });
+
+    await executeDecision(engine, null, { action: A.CREATE_REMOTE }, { path: 'new.html', type: 'site', parentId: 0 });
+
+    const records = await readRecords();
+    expect(records['1400']).toMatchObject({ kind: 'unbound', path: 'new.html' });
+    expect(records['new.html']).toBeUndefined();
+    expect(api.renameNode).not.toHaveBeenCalled();
+    expect(await readLocalFile('new.html')).toBe(LOCAL_BYTES);
+  });
+
+  it('a create refused with a bare 409 and no holder is thrown as before', async () => {
+    await writeLocalFile('new.html', LOCAL_BYTES);
+    api.createNode.mockRejectedValue(Object.assign(new Error('reserved'), { statusCode: 409 }));
+    api.listNodes.mockResolvedValue(Object.assign([], { complete: true }));
+
+    await expect(executeDecision(engine, null, { action: A.CREATE_REMOTE }, { path: 'new.html', type: 'site', parentId: 0 })).rejects.toMatchObject({ statusCode: 409 });
+    expect(await readRecords()).toEqual({});
   });
 
   it('keep mine on a name taken by a file whose name starts with digits never writes to another node', async () => {

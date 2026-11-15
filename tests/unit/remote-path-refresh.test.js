@@ -60,6 +60,7 @@ const crypto = require('crypto');
 
 const api = require('../../src/sync-engine/api-client');
 const { SyncEngine } = require('../../src/sync-engine/index');
+const conflicts = require('../../src/sync-engine/reconcile/conflicts');
 
 const checksum = (content) => crypto.createHash('sha256').update(content).digest('hex').substring(0, 16);
 const completeList = (nodes) => Object.assign([...nodes], { complete: true });
@@ -226,6 +227,34 @@ describe('refreshNode after a remote move', () => {
     expect(await readBytes('b.html')).toBe(THEIRS);
     expect(await fsp.readdir(root)).toEqual(['b.html']);
     expect(api.deleteNode).not.toHaveBeenCalled();
+  });
+  it('a folder deleted online keeps a changed file as a conflict and trashes only the unchanged one', async () => {
+    await engine.repo.set('20', { type: 'folder', path: 'reports', parentId: null });
+    await engine.repo.set('21', { type: 'site', path: 'reports/q3.html', remoteEtag: 'e1', localChecksum: MINE_SUM });
+    await engine.repo.set('22', { type: 'site', path: 'reports/old.html', remoteEtag: 'e1', localChecksum: MINE_SUM });
+    await write('reports/q3.html', '<p>edited</p>');
+    await write('reports/old.html', MINE);
+    api.listNodes.mockResolvedValue(completeList([]));
+
+    await engine.refreshNode('20', { generation: 1 });
+
+    expect(await readBytes('reports/q3.html')).toBe('<p>edited</p>');
+    expect(await exists('reports/old.html')).toBe(false);
+    expect(await readBytes('.trash/reports/old.html')).toBe(MINE);
+    expect(engine.repo.get('20')).toBeUndefined();
+    expect((await conflicts.load(metaDir))['21']).toMatchObject({ kind: 'remote-deleted', path: 'reports/q3.html' });
+  });
+
+  it('a folder deleted online with nothing unsent still goes to the trash whole', async () => {
+    await engine.repo.set('20', { type: 'folder', path: 'reports', parentId: null });
+    await engine.repo.set('22', { type: 'site', path: 'reports/old.html', remoteEtag: 'e1', localChecksum: MINE_SUM });
+    await write('reports/old.html', MINE);
+    api.listNodes.mockResolvedValue(completeList([]));
+
+    await engine.refreshNode('20', { generation: 1 });
+
+    expect(await exists('reports')).toBe(false);
+    expect(await readBytes('.trash/reports/old.html')).toBe(MINE);
   });
 });
 
