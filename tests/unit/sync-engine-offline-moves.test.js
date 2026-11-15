@@ -435,7 +435,7 @@ describe('a teammate moved a node while this client was offline', () => {
 
     expect(apiClient.deleteNode).not.toHaveBeenCalled();
     expect(disk()).toContain('proj2/x.png');
-    expect(disk()).toContain('proj2 (conflicted copy)/mine.txt');
+    expect(disk()).toContain('proj2-conflicted-copy/mine.txt');
     expect(mapPaths()).toEqual(expect.objectContaining({ 10: 'proj2', 13: 'proj2/x.png' }));
   });
 
@@ -495,7 +495,7 @@ describe('a server move this disk cannot follow', () => {
     expect(disk()).toEqual(['proj2/sub/x.png', 'proj2/t.html']);
     expect(diskDirs()).toEqual(['proj2', 'proj2/sub']);
     expect(mapPaths()).toEqual({ 10: 'proj2', 11: 'proj2/t.html', 12: 'proj2/sub', 13: 'proj2/sub/x.png' });
-    expect(disk().concat(diskDirs()).some(p => p.includes('conflicted copy'))).toBe(false);
+    expect(disk().concat(diskDirs()).some(p => p.includes('conflicted-copy'))).toBe(false);
   });
 
   test('a failed relocation deletes nothing and never renames the node back', async () => {

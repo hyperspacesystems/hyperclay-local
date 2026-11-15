@@ -527,13 +527,13 @@ describe('the conflict store', () => {
 
     const result = await resolveConflict(engine, { path: 'board.html', choice: 'both' });
 
-    expect(result).toEqual({ ok: true, copy: 'board (conflicted copy).html' });
+    expect(result).toEqual({ ok: true, copy: 'board-conflicted-copy.html' });
     expect(await readLocalFile('board.html')).toBe(REMOTE_BYTES);
-    expect(await readLocalFile('board (conflicted copy).html')).toBe(LOCAL_BYTES);
+    expect(await readLocalFile('board-conflicted-copy.html')).toBe(LOCAL_BYTES);
     expect(backup.seen).toBe(LOCAL_BYTES);
     expect(api.putNodeContent).not.toHaveBeenCalled();
     expect(api.createNode).toHaveBeenCalledTimes(1);
-    expect(api.createNode.mock.calls[0][1]).toMatchObject({ type: 'site', name: 'board (conflicted copy).html', parentId: 0, content: LOCAL_BYTES });
+    expect(api.createNode.mock.calls[0][1]).toMatchObject({ type: 'site', name: 'board-conflicted-copy.html', parentId: 0, content: LOCAL_BYTES });
     expect(engine.repo.getBaseline(1200)).toMatchObject({ remoteEtag: REMOTE_ETAG_2, localChecksum: REMOTE_ETAG_2 });
     expect(engine.repo.getBaseline('901')).toMatchObject({ remoteEtag: REMOTE_ETAG, localChecksum: REMOTE_SUM });
     expect(await readRecords()).toEqual({});
@@ -591,29 +591,29 @@ describe('the conflict store', () => {
 
   it('keep both picks the next free copy name and never overwrites one', async () => {
     await seedSite({ content: LOCAL_BYTES, remoteEtag: REMOTE_ETAG, localChecksum: LOCAL_SUM });
-    await writeLocalFile('board (conflicted copy).html', '<h1>older copy</h1>');
+    await writeLocalFile('board-conflicted-copy.html', '<h1>older copy</h1>');
     await executeDecision(engine, '901', { action: A.CONFLICT, conflictKind: 'both-edited' });
 
     const result = await resolveConflict(engine, { path: 'board.html', choice: 'both' });
 
-    expect(result).toEqual({ ok: true, copy: 'board (conflicted copy 2).html' });
-    expect(await readLocalFile('board (conflicted copy).html')).toBe('<h1>older copy</h1>');
-    expect(await readLocalFile('board (conflicted copy 2).html')).toBe(LOCAL_BYTES);
+    expect(result).toEqual({ ok: true, copy: 'board-conflicted-copy-2.html' });
+    expect(await readLocalFile('board-conflicted-copy.html')).toBe('<h1>older copy</h1>');
+    expect(await readLocalFile('board-conflicted-copy-2.html')).toBe(LOCAL_BYTES);
     expect(await readLocalFile('board.html')).toBe(REMOTE_BYTES);
   });
 
   it('keep both skips a copy name the server already lists', async () => {
     await seedSite({ content: LOCAL_BYTES, remoteEtag: REMOTE_ETAG, localChecksum: LOCAL_SUM });
-    engine.serverNodesCache = [{ id: 1300, type: 'site', name: 'board (conflicted copy).html', parentId: 0 }];
+    engine.serverNodesCache = [{ id: 1300, type: 'site', name: 'board-conflicted-copy.html', parentId: 0 }];
     await executeDecision(engine, '901', { action: A.CONFLICT, conflictKind: 'both-edited' });
 
     const result = await resolveConflict(engine, { path: 'board.html', choice: 'both' });
 
-    expect(result).toEqual({ ok: true, copy: 'board (conflicted copy 2).html' });
-    expect(await readLocalFile('board (conflicted copy 2).html')).toBe(LOCAL_BYTES);
+    expect(result).toEqual({ ok: true, copy: 'board-conflicted-copy-2.html' });
+    expect(await readLocalFile('board-conflicted-copy-2.html')).toBe(LOCAL_BYTES);
     expect(await readLocalFile('board.html')).toBe(REMOTE_BYTES);
     expect(api.createNode).toHaveBeenCalledTimes(1);
-    expect(api.createNode.mock.calls[0][1]).toMatchObject({ type: 'site', name: 'board (conflicted copy 2).html', parentId: 0, content: LOCAL_BYTES });
+    expect(api.createNode.mock.calls[0][1]).toMatchObject({ type: 'site', name: 'board-conflicted-copy-2.html', parentId: 0, content: LOCAL_BYTES });
   });
 
   it('keep both on a remote-deleted node is refused and touches nothing', async () => {
@@ -624,7 +624,7 @@ describe('the conflict store', () => {
 
     expect(result).toEqual({ ok: false, error: 'no-remote-copy' });
     expect(await readLocalFile('board.html')).toBe(LOCAL_BYTES);
-    expect(await exists('board (conflicted copy).html')).toBe(false);
+    expect(await exists('board-conflicted-copy.html')).toBe(false);
     expect(api.createNode).not.toHaveBeenCalled();
     expect((await readRecords())['901']).toMatchObject({ kind: 'remote-deleted' });
   });
@@ -644,8 +644,8 @@ describe('the conflict store', () => {
 
     const result = await resolveConflict(engine, { path: 'board.html', choice: 'both' });
 
-    expect(result).toEqual({ ok: true, copy: 'board (conflicted copy).html' });
-    expect(await readLocalFile('board (conflicted copy).html')).toBe(mine);
+    expect(result).toEqual({ ok: true, copy: 'board-conflicted-copy.html' });
+    expect(await readLocalFile('board-conflicted-copy.html')).toBe(mine);
     expect(await readLocalFile('board.html')).toBe(REMOTE_BYTES);
     expect(engine.repo.getBaseline('901')).toMatchObject({ remoteEtag: REMOTE_ETAG_2 });
     expect(await readRecords()).toEqual({});
@@ -659,8 +659,8 @@ describe('the conflict store', () => {
 
     const result = await resolveConflict(engine, { path: 'board.html', choice: 'both' });
 
-    expect(result).toEqual({ ok: true, copy: 'board (conflicted copy).html' });
-    expect(await readLocalFile('board (conflicted copy).html')).toBe(LOCAL_BYTES);
+    expect(result).toEqual({ ok: true, copy: 'board-conflicted-copy.html' });
+    expect(await readLocalFile('board-conflicted-copy.html')).toBe(LOCAL_BYTES);
     expect(await readLocalFile('board.html')).toBe(REMOTE_BYTES);
     expect(engine.repo.getBaseline(1200)).toBeFalsy();
     expect(await readRecords()).toEqual({});

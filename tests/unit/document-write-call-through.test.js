@@ -214,7 +214,7 @@ async function seedConflict(dir) {
   const parked = conflicts.remoteCopyPath(dir, 'page.html', ETAG);
   await fs.mkdir(path.dirname(parked), { recursive: true });
   await fs.writeFile(parked, REMOTE_BYTES);
-  api.createNode.mockResolvedValue({ id: 903, type: 'site', name: 'page (conflicted copy).html', parentId: 0, etag: ETAG, structureVersion: 'st3' });
+  api.createNode.mockResolvedValue({ id: 903, type: 'site', name: 'page-conflicted-copy.html', parentId: 0, etag: ETAG, structureVersion: 'st3' });
   return engine;
 }
 
@@ -357,12 +357,12 @@ describe('every commit kind reaches the document host', () => {
     const dir = await makeRoot();
     const file = path.join(dir, 'page.html');
     const engine = await seedConflict(dir);
-    const copy = path.join(dir, 'page (conflicted copy).html');
+    const copy = path.join(dir, 'page-conflicted-copy.html');
 
     recorder.begin(dir);
     const result = await resolveConflict(engine, { path: 'page.html', choice: 'both' });
 
-    expect(result).toEqual({ ok: true, copy: 'page (conflicted copy).html' });
+    expect(result).toEqual({ ok: true, copy: 'page-conflicted-copy.html' });
     const named = expectHostCall('commit', (c) => c.request.kind === 'sync-download').map((c) => recorder.namedPathsOf(c)[0]);
     expect(named).toEqual(expect.arrayContaining([file, copy]));
     expectOnlyHostWrites();

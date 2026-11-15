@@ -149,7 +149,7 @@ describe('_applyFolderRelocate', () => {
 
     expect(structureMoves()).toContainEqual([
       path.join('/tmp/test-sync', 'new'),
-      path.join('/tmp/test-sync', 'new (conflicted copy)')
+      path.join('/tmp/test-sync', 'new-conflicted-copy')
     ]);
     expect(structureMoves()).toContainEqual([
       path.join('/tmp/test-sync', 'old'),

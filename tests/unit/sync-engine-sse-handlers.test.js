@@ -443,13 +443,13 @@ describe('handleNodeRenamed', () => {
       path.join(SYNC_ROOT, 'Proj'),
       path.join(SYNC_ROOT, 'proj')
     ]);
-    expect(structureMoves().some(([s, d]) => `${s} ${d}`.includes('conflicted copy'))).toBe(false);
+    expect(structureMoves().some(([s, d]) => `${s} ${d}`.includes('conflicted-copy'))).toBe(false);
     expect(syncEngine.repo.get('60').path).toBe('proj');
   });
 
   it('a folder rename onto a different entry still moves the occupant aside', async () => {
     syncEngine.repo._map.set('60', { type: 'folder', path: 'Proj', parentId: 0 });
-    fileOps.fileExists.mockImplementation(async (p) => !String(p).includes('conflicted copy'));
+    fileOps.fileExists.mockImplementation(async (p) => !String(p).includes('conflicted-copy'));
     nodeMapModule.getInode.mockImplementation(async (p) => (p === path.join(SYNC_ROOT, 'Proj') ? 1 : 2));
     nodeMapModule.walkDescendants.mockReturnValue([]);
 
@@ -457,7 +457,7 @@ describe('handleNodeRenamed', () => {
 
     expect(structureMoves()).toContainEqual([
       path.join(SYNC_ROOT, 'proj'),
-      path.join(SYNC_ROOT, 'proj (conflicted copy)')
+      path.join(SYNC_ROOT, 'proj-conflicted-copy')
     ]);
     expect(structureMoves()).toContainEqual([
       path.join(SYNC_ROOT, 'Proj'),
@@ -477,7 +477,7 @@ describe('handleNodeRenamed', () => {
       path.join(SYNC_ROOT, 'Proj.html'),
       path.join(SYNC_ROOT, 'proj.html')
     ]);
-    expect(structureMoves().some(([s, d]) => `${s} ${d}`.includes('conflicted copy'))).toBe(false);
+    expect(structureMoves().some(([s, d]) => `${s} ${d}`.includes('conflicted-copy'))).toBe(false);
     expect(syncEngine.repo.get('42').path).toBe('proj.html');
   });
 });

@@ -136,7 +136,7 @@ describe('D3: authority-owned deletes', () => {
     const { rooms, authority, instance } = setup();
     const source = path.join(dir, 'a.html');
     const destination = path.join(dir, 'b.html');
-    const aside = path.join(dir, 'b (conflicted copy).html');
+    const aside = path.join(dir, 'b-conflicted-copy.html');
     const a = authority.bindTarget({ rootId: 'root-a', logicalPath: 'a.html', canonicalPath: source });
     const b = authority.bindTarget({ rootId: 'root-a', logicalPath: 'b.html', canonicalPath: destination });
     const aRoom = rooms.open(source, doc({ n: 0 }), { nodeId: a.identity });
@@ -204,7 +204,7 @@ describe('D3: authority-owned deletes', () => {
     const { rooms, authority, instance } = setup();
     const source = path.join(dir, 'a.html');
     const destination = path.join(dir, 'b.html');
-    const aside = path.join(dir, 'b (conflicted copy).html');
+    const aside = path.join(dir, 'b-conflicted-copy.html');
     const a = authority.bindTarget({ rootId: 'root-a', logicalPath: 'a.html', canonicalPath: source });
     const b = authority.bindTarget({ rootId: 'root-a', logicalPath: 'b.html', canonicalPath: destination });
     const aRoom = rooms.open(source, doc({ n: 0 }), { nodeId: a.identity });
@@ -307,7 +307,7 @@ describe('D3: authority-owned deletes', () => {
     await instance.correlateServerFile({ nodeId: 7, path: 'b.html' }, localFiles, map);
 
     expect(map.get('7').path).toBe('b.html');
-    expect(localFiles.has('b (conflicted copy).html')).toBe(true);
+    expect(localFiles.has('b-conflicted-copy.html')).toBe(true);
     expect(fs.readFileSync(destination, 'utf8')).toBe('<html>a</html>');
     expect(rooms.get(destination)).toBe(room);
     expect(authority.isRetired({ rootId: 'root-a', logicalPath: 'a.html', canonicalPath: source })).toBe(true);

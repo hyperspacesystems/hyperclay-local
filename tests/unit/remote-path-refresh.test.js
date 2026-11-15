@@ -71,7 +71,7 @@ const THEIRS_SUM = checksum(THEIRS);
 const MINE_SUM = checksum(MINE);
 const OCCUPANT_SUM = checksum(OCCUPANT);
 
-const CONFLICT_COPY = 'b (conflicted copy).html';
+const CONFLICT_COPY = 'b-conflicted-copy.html';
 
 const dirs = [];
 let root = null;
