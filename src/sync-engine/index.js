@@ -5,7 +5,6 @@
 
 const EventEmitter = require('events').EventEmitter;
 const path = require('upath'); // Use upath for cross-platform compatibility
-const { safeStorage } = require('electron');
 const { getServerBaseUrl } = require('../main/utils/utils');
 
 // Orchestrator-only imports. Everything else (API client, file ops, livesync,
@@ -315,8 +314,9 @@ class SyncEngine extends EventEmitter {
     }
 
     // Encrypt and store API key
-    if (safeStorage?.isEncryptionAvailable?.()) {
-      this.apiKeyEncrypted = safeStorage.encryptString(apiKey);
+    // Electron passes its safeStorage as sealKey; without one the key is held only as given, in memory.
+    if (opts.sealKey?.isEncryptionAvailable?.()) {
+      this.apiKeyEncrypted = opts.sealKey.encryptString(apiKey);
     }
 
     try {

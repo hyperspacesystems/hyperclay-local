@@ -1,7 +1,16 @@
 const fs = require('fs').promises;
 const os = require('os');
 const path = require('upath');
-const { app } = require('electron');
+
+// Electron's logs folder, read only when no logsDir is given: outside Electron the
+// engine is always given one, and never loads Electron.
+function electronLogsDir() {
+  try {
+    return require('electron').app?.getPath?.('logs') ?? null;
+  } catch {
+    return null;
+  }
+}
 
 // Helper functions for formatting timestamps
 function formatDate(date) {
@@ -58,7 +67,7 @@ class SyncLogger {
   // Initialize logger with log directory
   async init(baseDir = null, { subdir = null, logsDir = null } = {}) {
     try {
-      const logsPath = logsDir ?? app?.getPath?.('logs') ?? path.join(os.tmpdir(), 'hyperclay-local-logs');
+      const logsPath = logsDir ?? electronLogsDir() ?? path.join(os.tmpdir(), 'hyperclay-local-logs');
       this.logDir = subdir ? path.join(logsPath, 'sync', subdir) : path.join(logsPath, 'sync');
       this.baseDir = baseDir; // Store for sanitizing paths
       await fs.mkdir(this.logDir, { recursive: true });

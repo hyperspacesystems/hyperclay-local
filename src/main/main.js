@@ -2128,6 +2128,7 @@ app.whenReady().then(async () => {
     observerFor,
     takeSnapshot: (rel, rootId) => getAndClearSnapshot(rel, rootId),
     localAuthority,
+    sealKey: safeStorage,
   });
   setupSyncEventHandlers();
 

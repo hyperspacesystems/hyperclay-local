@@ -69,11 +69,11 @@ function isoOrNull(value) {
 }
 
 class SyncManager extends EventEmitter {
-  constructor({ userData, deviceId, serverUrl, getApiKey, settingsStore, observerFor = null, takeSnapshot = () => null, localAuthority = null }) {
+  constructor({ userData, deviceId, serverUrl, getApiKey, settingsStore, observerFor = null, takeSnapshot = () => null, localAuthority = null, logsDir = null, sealKey = null }) {
     super();
     // v1 settings never stored a server, so the manager falls back to the same default the
     // engine does; without it discovery asks `null/_/sync/accounts` and every session 428s.
-    Object.assign(this, { userData, deviceId, serverUrl: getServerBaseUrl(serverUrl), getApiKey, settingsStore, takeSnapshot, localAuthority });
+    Object.assign(this, { userData, deviceId, serverUrl: getServerBaseUrl(serverUrl), getApiKey, settingsStore, takeSnapshot, localAuthority, logsDir, sealKey });
     this.ownObservers = new Map();
     this.observerFor = observerFor || ((rootId) => this._ownObserver(rootId));
     this.sessions = new Map();
@@ -165,7 +165,7 @@ class SyncManager extends EventEmitter {
     const noInitPasses = ownsFirstPass || this.pausedReasonFor(session) !== null;
 
     const logger = new SyncLogger();
-    await logger.init(root.path, { subdir: session.id });
+    await logger.init(root.path, { subdir: session.id, logsDir: this.logsDir });
     const engine = new SyncEngine();
     engine.setLogger(logger);
     const tags = { sessionId: session.id, rootId: root.id, accountId: session.accountId };
@@ -254,6 +254,7 @@ class SyncManager extends EventEmitter {
           observer,
           localAuthority: this.localAuthority,
           logger,
+          sealKey: this.sealKey,
         });
       if (!result.success) {
         await this.stop(session.id);
@@ -902,14 +903,24 @@ class SyncManager extends EventEmitter {
       legacyMetaDir: null,
     };
 
-    settings.roots = [...roots, root];
+    return this.bind({ session, root, account, actorId: discovery.actor && discovery.actor.id });
+  }
+
+  /**
+   * Save one root and its session, start the session and bind it. `mode: 'new'` (the
+   * default) runs the first bind, which reports progress and checks the disk before it
+   * writes; `mode: 'existing'` starts the session as a returning one, with no first bind.
+   */
+  async bind({ session, root, account, mode = 'new', actorId = this.discovery?.actor?.id }) {
+    const settings = this.settingsStore.get();
+    settings.roots = [...(settings.roots || []), root];
     settings.syncSessions = [...(settings.syncSessions || []), session];
     this.settingsStore.save(settings);
     this.emit('roots-changed', { roots: settings.roots });
 
-    // The engine exists but reconciles nothing: this session's first pass is
-    // the bind, which reports progress and checks the disk before it writes.
-    const started = await this.start(session, root, { syncBase: account.syncBase, protocol: 2, firstBind: true, uploadLimit: account?.limits?.uploadBytes });
+    const firstBind = mode !== 'existing';
+    // On a first bind the engine exists but reconciles nothing: the bind is its first pass.
+    const started = await this.start(session, root, { syncBase: account.syncBase, protocol: 2, firstBind, uploadLimit: account?.limits?.uploadBytes });
     if (!started.success) {
       this._dropSession(session, root);
       return { ok: false, error: started.error || 'no-key' };
@@ -917,9 +928,13 @@ class SyncManager extends EventEmitter {
 
     const entry = this.sessions.get(session.id);
     if (!entry) return { ok: false, error: 'cancelled', resumable: true };
+    if (!firstBind) {
+      this.startRunner(entry);
+      return { ok: true };
+    }
     const result = await this.runBind(entry, {
       account,
-      actorId: discovery.actor && discovery.actor.id,
+      actorId,
       metaDir: this.metaDirFor(session),
       onProgress: (progress) => this.emit('sync-progress', progress),
     });
