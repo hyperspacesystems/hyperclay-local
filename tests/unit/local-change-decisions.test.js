@@ -59,6 +59,8 @@ const path = require('upath');
 const crypto = require('crypto');
 
 const api = require('../../src/sync-engine/api-client');
+const store = require('../../src/sync-engine/reconcile/conflicts');
+const { resolveConflict } = require('../../src/sync-engine/reconcile/execute');
 const { SyncEngine } = require('../../src/sync-engine/index');
 
 const checksum = (content) => crypto.createHash('sha256').update(content).digest('hex').substring(0, 16);
@@ -192,5 +194,110 @@ describe('applyLocalChange against a cached inventory', () => {
     expect(await exists('gone.html')).toBe(false);
     expect(await exists(path.join('.trash', 'gone.html'))).toBe(true);
     expect(engine.repo.get('901')).toBeUndefined();
+  });
+});
+
+describe('an older file put back is held, never uploaded over newer work (H2-ab)', () => {
+  const NEWER = '<html><body>newer, saved online</body></html>';
+  const NEWER_SUM = checksum(NEWER);
+  const OLDER = '<html><body>older, from the backup</body></html>';
+  const OLDER_SUM = checksum(OLDER);
+  const HOUR_AGO = () => new Date(Date.now() - 3_600_000);
+
+  const listed = (etag) => completeList([{ id: 11, type: 'site', name: 'notes.html', parentId: null, path: '', etag, checksum: etag }]);
+
+  beforeEach(() => {
+    api.getNodeContent.mockResolvedValue({ content: NEWER, etag: NEWER_SUM, checksum: NEWER_SUM, structureVersion: '11-2' });
+    api.putNodeContent.mockImplementation(async (conn, id, content) => ({ etag: checksum(content), checksum: checksum(content), structureVersion: '11-3' }));
+    api.listNodes.mockResolvedValue(listed(NEWER_SUM));
+  });
+
+  async function syncedNewer() {
+    await write('notes.html', NEWER);
+    await engine.repo.set('11', { type: 'site', path: 'notes.html', remoteEtag: NEWER_SUM, localChecksum: NEWER_SUM, localSeenAt: Date.now() - 1000 });
+  }
+
+  const conflicts = async () => store.list(await store.load(metaDir)).map((r) => `${r.kind}:${r.key}:${r.path}`);
+
+  it('a page copied back with the time it was saved last hour waits as a conflict and keeps no baseline', async () => {
+    await syncedNewer();
+    await write('notes.html', OLDER);
+    await fsp.utimes(full('notes.html'), HOUR_AGO(), HOUR_AGO());
+
+    await engine.applyLocalChange({ type: 'change', filename: 'notes.html' });
+
+    expect(api.putNodeContent).not.toHaveBeenCalled();
+    expect(await conflicts()).toEqual(['unbound:11:notes.html']);
+    expect(engine.repo.get('11')).toBeUndefined();
+    expect(await fsp.readFile(full('notes.html'), 'utf8')).toBe(OLDER);
+  });
+
+  it('the same bytes saved now are an edit and upload', async () => {
+    await syncedNewer();
+    const before = Date.now();
+    await write('notes.html', OLDER);
+
+    await engine.applyLocalChange({ type: 'change', filename: 'notes.html' });
+
+    expect(api.putNodeContent).toHaveBeenCalledTimes(1);
+    expect(api.putNodeContent.mock.calls[0][1]).toBe(11);
+    expect(await conflicts()).toEqual([]);
+    expect(engine.repo.getBaseline('11')).toMatchObject({ remoteEtag: OLDER_SUM, localChecksum: OLDER_SUM });
+    expect(engine.repo.get('11').localSeenAt).toBeGreaterThanOrEqual(before - 1000);
+  });
+
+  it('Keep mine still sends the older page, and it then stays synced', async () => {
+    await syncedNewer();
+    await write('notes.html', OLDER);
+    await fsp.utimes(full('notes.html'), HOUR_AGO(), HOUR_AGO());
+    await engine.applyLocalChange({ type: 'change', filename: 'notes.html' });
+    expect(api.putNodeContent).not.toHaveBeenCalled();
+
+    expect(await resolveConflict(engine, { path: 'notes.html', choice: 'mine' })).toEqual({ ok: true });
+    expect(api.putNodeContent).toHaveBeenCalledTimes(1);
+    expect(api.putNodeContent.mock.calls[0][1]).toBe(11);
+    expect(api.putNodeContent.mock.calls[0][2]).toBe(OLDER);
+    expect(await conflicts()).toEqual([]);
+
+    api.listNodes.mockResolvedValue(listed(OLDER_SUM));
+    engine.invalidateServerNodesCache();
+    await engine.applyLocalChange({ type: 'change', filename: 'notes.html' });
+    expect(api.putNodeContent).toHaveBeenCalledTimes(1);
+    expect(await conflicts()).toEqual([]);
+  });
+
+  it('a full pass records when it saw the bytes of an entry an older install wrote, then holds an older copy put back', async () => {
+    await write('notes.html', NEWER);
+    await engine.repo.set('11', { type: 'site', path: 'notes.html', remoteEtag: NEWER_SUM, localChecksum: NEWER_SUM });
+    engine.lastSyncedAt = Date.now() - 60_000;
+    const before = Date.now();
+
+    await engine.reconcileAll(listed(NEWER_SUM));
+    expect(engine.repo.get('11').localSeenAt).toBeGreaterThanOrEqual(before - 1000);
+    expect(api.putNodeContent).not.toHaveBeenCalled();
+
+    await write('notes.html', OLDER);
+    await fsp.utimes(full('notes.html'), HOUR_AGO(), HOUR_AGO());
+    await engine.reconcileAll(listed(NEWER_SUM));
+
+    expect(api.putNodeContent).not.toHaveBeenCalled();
+    expect(await conflicts()).toEqual(['unbound:11:notes.html']);
+  });
+
+  it('a page downloaded here, then overwritten by a backup copy that kept its time, is held', async () => {
+    await write('notes.html', OLDER);
+    await fsp.utimes(full('notes.html'), HOUR_AGO(), HOUR_AGO());
+    await engine.repo.set('11', { type: 'site', path: 'notes.html', remoteEtag: OLDER_SUM, localChecksum: OLDER_SUM });
+
+    await engine.applyLocalChange({ type: 'change', filename: 'notes.html' });
+    expect(await fsp.readFile(full('notes.html'), 'utf8')).toBe(NEWER);
+    expect(engine.repo.getBaseline('11')).toMatchObject({ remoteEtag: NEWER_SUM, localChecksum: NEWER_SUM });
+
+    await write('notes.html', OLDER);
+    await fsp.utimes(full('notes.html'), HOUR_AGO(), HOUR_AGO());
+    await engine.applyLocalChange({ type: 'change', filename: 'notes.html' });
+
+    expect(api.putNodeContent).not.toHaveBeenCalled();
+    expect(await conflicts()).toEqual(['unbound:11:notes.html']);
   });
 });

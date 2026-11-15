@@ -10,7 +10,9 @@ const {
   loadTombstones,
   saveTombstones,
   readBaseline,
-  applyBaseline
+  applyBaseline,
+  seenSince,
+  olderThanSeen
 } = require('../../src/sync-engine/node-map');
 const NodeRepository = require('../../src/sync-engine/state/node-repository');
 
@@ -414,5 +416,35 @@ describe('NodeRepository baseline API', () => {
     expect(await repo.updateBaseline('404', { remoteEtag: 'etag-2' })).toBeNull();
     expect(repo.size).toBe(0);
     await expect(fs.readFile(path.join(tmpDir, 'node-map.json'), 'utf8')).rejects.toThrow();
+  });
+});
+
+describe('olderThanSeen: an older file put back is told from an edit by its modification time', () => {
+  const NOW = Date.parse('2026-11-15T12:00:00Z');
+  const entry = { localSeenAt: NOW - 60_000 };
+
+  test('a file modified an hour before its bytes were seen here is older; one saved since is not', () => {
+    expect(olderThanSeen(NOW - 3_600_000, entry, NOW)).toBe(true);
+    expect(olderThanSeen(NOW - 1_000, entry, NOW)).toBe(false);
+  });
+
+  test('a disk that keeps times to 2 s may stamp a save up to 2 s early', () => {
+    expect(olderThanSeen(entry.localSeenAt - 1_999, entry, NOW)).toBe(false);
+    expect(olderThanSeen(entry.localSeenAt - 2_001, entry, NOW)).toBe(true);
+  });
+
+  test('no seen time, or one later than now (the clock was set back), proves nothing', () => {
+    expect(olderThanSeen(0, {}, NOW)).toBe(false);
+    expect(olderThanSeen(0, null, NOW)).toBe(false);
+    expect(olderThanSeen(NOW - 3_600_000, { localSeenAt: NOW + 60_000 }, NOW)).toBe(false);
+  });
+
+  test('seenSince takes the earlier of this computer\'s clock and the file\'s change time', async () => {
+    const file = path.join(tmpDir, 'page.html');
+    await fs.writeFile(file, '<html></html>');
+    const { ctimeMs } = await fs.stat(file);
+    expect(await seenSince(file, Math.floor(ctimeMs) + 60_000)).toBe(Math.floor(ctimeMs));
+    expect(await seenSince(file, Math.floor(ctimeMs) - 60_000)).toBe(Math.floor(ctimeMs) - 60_000);
+    expect(await seenSince(path.join(tmpDir, 'gone.html'), 123)).toBe(123);
   });
 });

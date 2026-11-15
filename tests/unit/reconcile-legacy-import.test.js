@@ -247,13 +247,14 @@ describe('importLegacyMeta', () => {
     // The converted baseline: 901 knew its checksum, 902 has none to know, so
     // its local file is matched by checksum and parked as unbound instead. 903
     // is absent from the disk and from the inventory, so the pass that knows
-    // the legacy `lastSyncedAt` forgets it.
+    // the legacy `lastSyncedAt` forgets it. The pass found 901's bytes on disk,
+    // so it records when it saw them.
     const baseline = await readJson(path.join(metaDir, 'node-map.json'));
     expect(Object.keys(baseline).sort()).toEqual(['901', '902']);
     expect(baseline['901']).toEqual({
       type: 'site', path: 'board.html', parentId: null, inode: 77,
       remoteEtag: BOARD_SUM, localChecksum: BOARD_SUM, checksum: BOARD_SUM,
-      structureVersion: null, syncedAt: SYNCED_AT
+      structureVersion: null, syncedAt: SYNCED_AT, localSeenAt: expect.any(Number)
     });
     expect(baseline['902']).toMatchObject({ remoteEtag: null, localChecksum: null, structureVersion: null });
 
