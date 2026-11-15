@@ -34,6 +34,20 @@ describe('getLocalFiles', () => {
     expect(files.has('site2.html')).toBe(true);
   });
 
+  test('one file the scan cannot stat does not hide the files after it', async () => {
+    if (process.platform === 'win32') return;
+    await fs.writeFile(path.join(tempDir, 'a\\index.html'), 'content');
+    await fs.writeFile(path.join(tempDir, 'b.html'), 'content');
+    await fs.writeFile(path.join(tempDir, 'c.png'), 'content');
+    await fs.writeFile(path.join(tempDir, 'a\\logo.png'), 'content');
+
+    const files = await getLocalFiles(tempDir);
+    const uploads = await getLocalUploads(tempDir);
+
+    expect(files.has('b.html')).toBe(true);
+    expect(uploads.has('c.png')).toBe(true);
+  });
+
   test('finds HTML files in subdirectories', async () => {
     await fs.mkdir(path.join(tempDir, 'folder1'));
     await fs.mkdir(path.join(tempDir, 'folder1', 'folder2'));

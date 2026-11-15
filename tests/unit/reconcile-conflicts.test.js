@@ -420,6 +420,28 @@ describe('executeDecision — one case per action kind', () => {
     expect(engine.repo.get('901')).toBeUndefined();
   });
 
+  it('delete-remote leaves the server alone while the file is still on disk', async () => {
+    await seedSite();
+    const result = await executeDecision(engine, '901', { action: A.DELETE_REMOTE });
+
+    expect(result).toEqual({ action: A.NOOP, blocked: true });
+    expect(api.deleteNode).not.toHaveBeenCalled();
+    expect(engine.repo.getBaseline('901').remoteEtag).toBe(REMOTE_ETAG);
+  });
+
+  it('delete-remote leaves the server alone when the file cannot be checked', async () => {
+    if (process.platform === 'win32' || process.getuid?.() === 0) return;
+    await seedSite({ rel: 'locked/board.html' });
+    await fsp.chmod(path.join(root, 'locked'), 0o000);
+    try {
+      const result = await executeDecision(engine, '901', { action: A.DELETE_REMOTE });
+      expect(result).toEqual({ action: A.NOOP, blocked: true });
+      expect(api.deleteNode).not.toHaveBeenCalled();
+    } finally {
+      await fsp.chmod(path.join(root, 'locked'), 0o755);
+    }
+  });
+
   it('create-remote POSTs the file the server has never seen', async () => {
     await writeLocalFile('new.html', REMOTE_BYTES);
     const result = await executeDecision(engine, null, { action: A.CREATE_REMOTE }, {
