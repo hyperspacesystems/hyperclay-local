@@ -1661,3 +1661,72 @@ describe('D3: a trash the disk refused records nothing', () => {
     });
   }
 });
+
+// 8.26 (HTML Clay sync): a document host that consults the service back (Go in
+// the service, releasesBoundary) must be called with no boundary held, or Go's
+// settle or prepare waits on the engine's own boundary until Go's deadline.
+describe('a host that releases the boundary is called outside it', () => {
+  const { assertOutsideWriteBoundary } = require('../../src/main/utils/write-queue');
+  const { withLocalStructureDelete, withLocalDirectoryChange } = require('../../src/sync-engine/local-boundary');
+
+  function setup() {
+    const authority = createLocalAuthority({ rooms: createRooms({}), withDocument: withDocumentWrite });
+    authority.registerRoot({ id: 'root-r', canonicalPath: dir, path: dir }, { owner: 'server' });
+    const engine = createEngine({ syncFolder: dir, rootId: 'root-r', live: { broadcast: jest.fn(), markBrowserSave: jest.fn() }, authority });
+    const calls = [];
+    engine.documentHost = {
+      releasesBoundary: true,
+      async commit(request) {
+        assertOutsideWriteBoundary();
+        calls.push(['commit', request.name]);
+        fs.writeFileSync(path.join(dir, request.name), request.bytes);
+        return { outcome: 'committed' };
+      },
+      async restructure({ kind, steps }) {
+        assertOutsideWriteBoundary();
+        calls.push([kind, ...steps.flatMap((s) => [s.from, s.to])]);
+        for (const step of steps) {
+          fs.mkdirSync(path.dirname(path.join(dir, step.to)), { recursive: true });
+          fs.renameSync(path.join(dir, step.from), path.join(dir, step.to));
+        }
+        return { outcome: 'committed', completed: steps.length };
+      },
+    };
+    return { engine, calls };
+  }
+
+  test('a document write runs its commit with no token and no boundary', async () => {
+    const { engine, calls } = setup();
+    const answer = await withLocalDocumentWrite(engine, 'new.html', async (target, token) => {
+      expect(token).toBeNull();
+      expect(target.canonicalPath).toBe(path.join(dir, 'new.html'));
+      return engine.documentHost.commit({ name: 'new.html', bytes: '<p>new</p>' });
+    }, { explicitCreate: true });
+    expect(answer).toEqual({ outcome: 'committed' });
+    expect(calls).toEqual([['commit', 'new.html']]);
+    expect(fs.readFileSync(path.join(dir, 'new.html'), 'utf8')).toBe('<p>new</p>');
+  });
+
+  test('a delete and a move reach the host outside the structure boundary', async () => {
+    const { engine, calls } = setup();
+    fs.writeFileSync(path.join(dir, 'gone.html'), '<p>gone</p>');
+    fs.writeFileSync(path.join(dir, 'from.html'), '<p>moved</p>');
+    await withLocalStructureDelete(engine, 'gone.html', '.trash/gone.html');
+    const moved = await engine._authorityRelocate('from.html', 'to.html');
+    expect(moved.moved).toBe(true);
+    expect(calls).toEqual([['sync-trash', 'gone.html', '.trash/gone.html'], ['sync-move', 'from.html', 'to.html']]);
+    expect(fs.readFileSync(path.join(dir, 'to.html'), 'utf8')).toBe('<p>moved</p>');
+  });
+
+  test('a new folder is made outside the boundary and still admitted', async () => {
+    const { engine } = setup();
+    const made = await withLocalDirectoryChange(engine, 'apps', async (target, token) => {
+      assertOutsideWriteBoundary();
+      expect(token).toBeNull();
+      fs.mkdirSync(target.canonicalPath);
+      return 'made';
+    });
+    expect(made).toBe('made');
+    expect(fs.statSync(path.join(dir, 'apps')).isDirectory()).toBe(true);
+  });
+});
