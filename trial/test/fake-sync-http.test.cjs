@@ -104,7 +104,7 @@ test('accounts answer protocol 2', async () => {
   });
 });
 
-test('the stream sends sync-ready', async () => {
+test('the stream sends sync-ready, then what is pushed', async () => {
   await withServer(async (fake) => {
     const controller = new AbortController();
     const response = await fetch(fake.url + '/_/sync/stream', {
@@ -116,13 +116,19 @@ test('the stream sends sync-ready', async () => {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let text = '';
-    while (!text.includes('event: sync-ready')) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      text += decoder.decode(value, { stream: true });
-    }
+    const readUntil = async (needle) => {
+      while (!text.includes(needle)) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        text += decoder.decode(value, { stream: true });
+      }
+    };
+    await readUntil('"sync-ready"');
+    fake.push({ type: 'node-saved', nodeId: 2 });
+    await readUntil('"node-saved"');
     controller.abort();
 
-    assert.ok(text.includes('event: sync-ready'));
+    assert.ok(text.includes('data: {"type":"sync-ready","sync":{"enabled":true}}\n\n'));
+    assert.ok(text.includes('data: {"type":"node-saved","nodeId":2}\n\n'));
   });
 });

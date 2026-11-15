@@ -119,8 +119,10 @@ async function startFakeSyncHttp({ nodes = [], key, actor, accounts = [] } = {})
           'content-type': 'text/event-stream',
           'cache-control': 'no-cache'
         });
+        // The engine reads unnamed messages whose JSON names the frame's type
+        // (engine-sse.js onmessage, session-runner.js), as the server sends them.
         res.write(': connected\n\n');
-        res.write('event: sync-ready\ndata: {}\n\n');
+        res.write(`data: ${JSON.stringify({ type: 'sync-ready', sync: { enabled: true } })}\n\n`);
         streams.add(res);
         res.on('close', () => streams.delete(res));
         return;
@@ -209,6 +211,10 @@ async function startFakeSyncHttp({ nodes = [], key, actor, accounts = [] } = {})
     url: `http://127.0.0.1:${port}`,
     server,
     requests,
+    // Sends one frame to every open stream, as the server does when a node changes.
+    push(data) {
+      for (const res of streams) res.write(`data: ${JSON.stringify(data)}\n\n`);
+    },
     close() {
       return new Promise((resolve, reject) => {
         for (const res of streams) {
