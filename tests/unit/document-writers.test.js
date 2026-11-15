@@ -61,7 +61,7 @@ function scan() {
 // it makes. One map: a second one would let a new writer hide in the gap.
 const WRITERS = {
   // The document host: the only module that writes a document's bytes.
-  'src/main/document-host.js': { count: 13, reason: 'the document host publishes documents through placeBytes, commitExact, commitReplace and commitCreate, moves entries in restructure, and writes the generated stylesheet in refreshTailwind' },
+  'src/main/document-host.js': { count: 15, reason: 'the document host publishes documents through placeBytes, commitExact, commitReplace and commitCreate, moves entries in restructure, writes the generated stylesheet in refreshTailwind, and writes and removes sync\'s own files (the marker, the kept server copies) in createSyncWrites' },
   // The primitive every host write goes through: temp file plus rename.
   'src/main/utils/write-queue.js': { count: 5, reason: 'the atomic write primitive itself: temp file, rename into place, and the directory fsync' },
 
@@ -92,7 +92,6 @@ const WRITERS = {
   'src/main/error-logger.js': { count: 2, reason: 'log: the error log file' },
 
   // Structure and non-document bytes.
-  'src/sync-engine/reconcile/execute.js': { count: 2, reason: 'the parked remote copy and its removal under .hyperclay/conflicts, and the delete fallback' },
   'src/main/workspace/commands.js': { count: 1, reason: 'workspace: fs.rm of the entries in .trash on empty-trash (mkdir is not a mutator here)' },
   'src/main/export-zip.js': { count: 2, reason: 'export: the zip written beside its final name, then renamed into place' },
   'src/main/helpers/ai-edit.js': { count: 2, reason: 'helper: removing the scratch folder an AI edit ran in' },
@@ -189,13 +188,9 @@ describe('the sync engine has no write primitive left', () => {
     expect(offenders).toEqual([]);
   });
 
-  it('publishes a document only inside writeBytes', () => {
+  it('publishes nothing itself: the kept server copy goes through the document host', () => {
     const source = sourceOf('src/sync-engine/reconcile/execute.js');
-    const start = source.indexOf('async function writeBytes');
-    expect(start).toBeGreaterThan(-1);
-    const body = source.slice(start, source.indexOf('\n}\n', start));
-    const calls = (text) => text.split('atomicWriteFile(').length - 1;
-    expect(calls(body)).toBeGreaterThan(0);
-    expect(calls(source)).toBe(calls(body));
+    expect(source.split('atomicWriteFile(').length - 1).toBe(0);
+    expect(source).toContain('putSyncFile(engine, store.remoteCopyRef(rel, etag)');
   });
 });
