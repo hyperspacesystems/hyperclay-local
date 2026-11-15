@@ -497,6 +497,8 @@ describe('recheck — a folder the session cannot prove is its own', () => {
       const records = store.list(await store.load(metaDir));
       expect(records).toEqual([expect.objectContaining({ key: '11', kind: 'unbound', path: 'board.html' })]);
       expect(syncEngine.documentHost.commit).toHaveBeenCalledWith(expect.objectContaining({ kind: 'sync-download', name: 'since.html' }));
+      // The held page keeps no baseline, so deleting the copy here never reads as a delete to send.
+      expect(syncEngine.repo.get('11')).toBeFalsy();
     } finally {
       fs.rmSync(metaDir, { recursive: true, force: true });
     }

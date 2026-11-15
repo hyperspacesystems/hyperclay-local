@@ -118,3 +118,24 @@ test('every request that changes the server is sent on writeConn', () => {
   expect(offenders).toEqual([]);
   expect(sent.length).toBeGreaterThan(10);
 });
+
+describe('rootStaysQuiet: a folder still being copied into is not proven', () => {
+  const sessionMethods = require('../../src/sync-engine/engine-session');
+
+  test('a file written during the quiet wait fails it; a still folder passes', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'root-quiet-'));
+    try {
+      fs.writeFileSync(path.join(root, 'a.html'), '<html>a</html>');
+      const engine = { syncFolder: root, recheckQuietMs: 300 };
+      expect(await sessionMethods.rootStaysQuiet.call(engine)).toBe(true);
+
+      setTimeout(() => fs.writeFileSync(path.join(root, 'b.html'), '<html>b</html>'), 100);
+      expect(await sessionMethods.rootStaysQuiet.call(engine)).toBe(false);
+
+      setTimeout(() => fs.appendFileSync(path.join(root, 'a.html'), '<!-- more -->'), 100);
+      expect(await sessionMethods.rootStaysQuiet.call(engine)).toBe(false);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
