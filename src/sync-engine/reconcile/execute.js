@@ -38,6 +38,7 @@ const store = require('./conflicts');
 const { A } = require('./decide');
 const { isUnderLockedFolder, lockedFolderError } = require('../locked-folder');
 const { sendPageState, readPageRecord, applyPageRecord } = require('../page-state');
+const { isUtf8 } = require('buffer');
 
 const SITE_PATTERN = /\.(html|htmlclay)$/i;
 
@@ -243,6 +244,13 @@ async function refreshRemoteCopy(engine, nodeId, rel, open, gen) {
   return { action: A.CONFLICT, kind: open.kind, record: { key: updated.key, ...updated.record } };
 }
 
+// The server keeps a page as UTF-8 text: other bytes would reach it with every
+// character it cannot read replaced. The page stays here until it is UTF-8.
+async function keepNotText(engine, rel) {
+  await engine.holdFile(rel, 'not-text');
+  return { action: A.NOOP, blocked: true };
+}
+
 async function upload(engine, nodeId, entry, context, gen) {
   const rel = relPathOf(entry, context, nodeId);
   const open = await openConflict(engine, nodeId, rel);
@@ -254,6 +262,7 @@ async function upload(engine, nodeId, entry, context, gen) {
   if (overLimit(engine, isSite, size)) return keepLocal(engine, rel, size, engine.uploadLimit);
   const { buffer, checksum: localChecksum } = await readLocalBytes(engine, localPath);
   if (overLimit(engine, isSite, buffer.length)) return keepLocal(engine, rel, buffer.length, engine.uploadLimit);
+  if (isSite && Buffer.isBuffer(buffer) && !isUtf8(buffer)) return keepNotText(engine, rel);
   const content = isSite ? buffer.toString('utf8') : buffer;
   const baseline = engine.repo.getBaseline(nodeId) || {};
 
@@ -516,6 +525,7 @@ async function createRemote(engine, nodeId, entry, context, gen) {
   if (overLimit(engine, isSite, size)) return keepLocal(engine, rel, size, engine.uploadLimit);
   const { buffer, checksum: localChecksum } = await readLocalBytes(engine, localPath);
   if (overLimit(engine, isSite, buffer.length)) return keepLocal(engine, rel, buffer.length, engine.uploadLimit);
+  if (isSite && Buffer.isBuffer(buffer) && !isUtf8(buffer)) return keepNotText(engine, rel);
   const content = isSite ? buffer.toString('utf8') : buffer;
   const type = typeOf(entry, context, rel);
 
@@ -699,6 +709,10 @@ async function resolveConflict(session, { path: rel, choice } = {}) {
     copy = await conflictedCopyPath(engine, found.path);
     if (!copy) return { ok: false, error: 'no-free-name' };
     const { buffer, checksum: copiedChecksum } = await readLocalBytes(engine, localPath);
+    if (isSite && Buffer.isBuffer(buffer) && !isUtf8(buffer)) {
+      await engine.holdFile(found.path, 'not-text');
+      return { ok: false, error: 'not-text' };
+    }
     copiedAside = copiedChecksum;
     const written = await writeLocal(engine, copy, isSite ? buffer.toString('utf8') : buffer, { expectLocal: null, explicitCreate: true });
     if (written.refused) return { ok: false, error: 'copy-taken' };
@@ -740,6 +754,10 @@ async function resolveConflict(session, { path: rel, choice } = {}) {
   if (overLimit(engine, isSite, buffer.length)) {
     await keepLocal(engine, found.path, buffer.length, engine.uploadLimit);
     return { ok: false, error: 'too-large' };
+  }
+  if (isSite && Buffer.isBuffer(buffer) && !isUtf8(buffer)) {
+    await engine.holdFile(found.path, 'not-text');
+    return { ok: false, error: 'not-text' };
   }
   const content = isSite ? buffer.toString('utf8') : buffer;
   const modifiedAt = (await fs.stat(localPath)).mtime;

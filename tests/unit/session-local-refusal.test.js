@@ -452,4 +452,28 @@ describe('the root marker at start', () => {
 
     expect(session.paused).toBeNull();
   });
+
+  it('a marked folder found again at a new path keeps its session', async () => {
+    const session = teamSession({ paused: { reason: 'identity-mismatch' } });
+    const root = makeRoot(tmpDir('session-local-refusal-root-'));
+    register(session, root);
+    writeIdentity(session, { ...matchingIdentity(session, root), rootMarker: true, rootRealpath: '/Volumes/Old/Team' });
+    writeRootMarker(root.path, root.id);
+
+    const result = await manager.start(session, root);
+
+    expect(result.success).toBe(true);
+    expect(session.paused).toBeNull();
+  });
+
+  it('an unmarked folder at a new path is still refused identity-mismatch', async () => {
+    const session = teamSession();
+    const root = makeRoot(tmpDir('session-local-refusal-root-'));
+    register(session, root);
+    writeIdentity(session, { ...matchingIdentity(session, root), rootRealpath: '/Volumes/Old/Team' });
+
+    await manager.start(session, root);
+
+    expect(session.paused.reason).toBe('identity-mismatch');
+  });
 });

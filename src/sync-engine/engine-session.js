@@ -116,6 +116,7 @@ module.exports = {
 
     try {
       await this.clearFileLimitBlocks();
+      await this.setCaseTwins(nodes);
       await this.performInitialFolderSync(nodes);
       if (this.staleWork(generation, signal, work)) return;
       await this.performInitialSync();
@@ -167,6 +168,7 @@ module.exports = {
   },
 
   async refreshNodeInLane(id, inventory, { generation, signal, work }) {
+    await this.setCaseTwins(inventory);
     const node = (inventory || []).find((n) => String(n.id) === id);
     let entry = this.repo.get(id) || null;
     if (entry && entry.path && this.passLeavesToLiveJob(entry.path)) {

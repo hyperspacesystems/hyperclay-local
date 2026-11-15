@@ -61,6 +61,7 @@ const crypto = require('crypto');
 const api = require('../../src/sync-engine/api-client');
 const { SyncEngine } = require('../../src/sync-engine/index');
 const conflicts = require('../../src/sync-engine/reconcile/conflicts');
+const { A } = require('../../src/sync-engine/reconcile/decide');
 
 const checksum = (content) => crypto.createHash('sha256').update(content).digest('hex').substring(0, 16);
 const completeList = (nodes) => Object.assign([...nodes], { complete: true });
@@ -255,6 +256,36 @@ describe('refreshNode after a remote move', () => {
 
     expect(await exists('reports')).toBe(false);
     expect(await readBytes('.trash/reports/old.html')).toBe(MINE);
+  });
+
+  it('a case twin listed beside a synced file is held, never downloaded or conflicted', async () => {
+    engine.foldsCase = true;
+    const upload = (id, name, etag) => ({ id, type: 'upload', name, parentId: null, path: '', size: 1, etag, checksum: etag });
+    await engine.repo.set('12', { type: 'upload', path: 'logo.png', remoteEtag: 'e1', localChecksum: MINE_SUM });
+    await write('logo.png', MINE);
+    api.listNodes.mockResolvedValue(completeList([upload(12, 'logo.png', 'e1'), upload(20, 'Logo.png', 'e9')]));
+
+    const action = await engine.refreshNode('20', { generation: 1 });
+
+    expect(action).toBe(A.DEFER);
+    expect(api.getNodeContent).not.toHaveBeenCalled();
+    expect(await readBytes('logo.png')).toBe(MINE);
+    expect(engine.blockedUploads()).toEqual([expect.objectContaining({ path: 'Logo.png', reason: 'case-twin' })]);
+    expect(await conflicts.load(metaDir)).toEqual({});
+  });
+
+  it('the case-twin hold goes once the list no longer has the pair', async () => {
+    engine.foldsCase = true;
+    const upload = (id, name, etag) => ({ id, type: 'upload', name, parentId: null, path: '', size: 1, etag, checksum: etag });
+    await engine.repo.set('12', { type: 'upload', path: 'logo.png', remoteEtag: 'e1', localChecksum: MINE_SUM });
+    await write('logo.png', MINE);
+    api.listNodes.mockResolvedValue(completeList([upload(12, 'logo.png', 'e1'), upload(20, 'Logo.png', 'e9')]));
+    await engine.refreshNode('20', { generation: 1 });
+
+    api.listNodes.mockResolvedValue(completeList([upload(12, 'logo.png', 'e1')]));
+    await engine.refreshNode('12', { generation: 1 });
+
+    expect(engine.blockedUploads()).toEqual([]);
   });
 });
 

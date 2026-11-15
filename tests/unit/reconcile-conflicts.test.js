@@ -852,6 +852,28 @@ describe('the conflict store', () => {
     expect(await readRecords()).toEqual({});
   });
 
+  it('a page that is not UTF-8 stays on this computer with a not-text hold', async () => {
+    await writeLocalFile('old.html', Buffer.from('<title>Caf\xe9</title>', 'latin1'));
+
+    const result = await executeDecision(engine, null, { action: A.CREATE_REMOTE }, { path: 'old.html', type: 'site', parentId: 0 });
+
+    expect(result).toMatchObject({ action: A.NOOP, blocked: true });
+    expect(api.createNode).not.toHaveBeenCalled();
+    expect(engine.blockedUploads()).toEqual([expect.objectContaining({ path: 'old.html', reason: 'not-text' })]);
+  });
+
+  it('keep mine on a page that is not UTF-8 refuses and sends nothing', async () => {
+    await seedSite({ content: LOCAL_BYTES, remoteEtag: REMOTE_ETAG, localChecksum: LOCAL_SUM });
+    await executeDecision(engine, '901', { action: A.CONFLICT, conflictKind: 'remote-deleted' });
+    await writeLocalFile('board.html', Buffer.from('<title>Caf\xe9</title>', 'latin1'));
+
+    const result = await resolveConflict(engine, { path: 'board.html', choice: 'mine' });
+
+    expect(result).toEqual({ ok: false, error: 'not-text' });
+    expect(api.createNode).not.toHaveBeenCalled();
+    expect(api.putNodeContent).not.toHaveBeenCalled();
+  });
+
   it('keep mine on a name taken by a file whose name starts with digits never writes to another node', async () => {
     await writeLocalFile('11-notes.html', LOCAL_BYTES);
     const err = Object.assign(new Error('name taken'), { statusCode: 409, code: 'name-conflict' });
