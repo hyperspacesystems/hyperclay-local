@@ -336,6 +336,117 @@ describe('firstBind', () => {
     expect(await fsp.readFile(path.join(root, 'notes.html'), 'utf8')).toBe('mine');
   });
 
+  describe('a bind resumed with a page edited since it landed', () => {
+    const EDITED = '<html><body>board, edited here</body></html>';
+    const EDITED_SUM = checksum(EDITED);
+
+    async function landedThenEdited(startDir) {
+      await writeMarker({ accountId: ACCOUNT_ID, rootRealpath: root, rootDir: startDir, startedAt: '2026-09-23T12:00:00.000Z' });
+      await fsp.writeFile(path.join(root, 'board.html'), EDITED);
+      engine.repo.seed([['901', { type: 'site', path: 'board.html', parentId: null, remoteEtag: BOARD_SUM, localChecksum: BOARD_SUM, checksum: BOARD_SUM }]]);
+      api.listNodes.mockResolvedValue(completeList([site({ id: 901, name: 'board.html', etag: BOARD_SUM })]));
+      api.putNodeContent.mockResolvedValue({ etag: EDITED_SUM, checksum: EDITED_SUM });
+    }
+
+    const conflicts = async () => (await exists(path.join(metaDir, 'conflicts.json'))
+      ? JSON.parse(await fsp.readFile(path.join(metaDir, 'conflicts.json'), 'utf8'))
+      : {});
+
+    it('sends the edit when the folder is the directory the download started in', async () => {
+      await landedThenEdited(rootDirIdentity(root));
+
+      const result = await firstBind(entry);
+
+      expect(result).toEqual({ ok: true, files: 1, bytes: 40 });
+      expect(api.putNodeContent).toHaveBeenCalledWith(expect.anything(), 901, EDITED, expect.objectContaining({ ifMatch: BOARD_SUM }));
+      expect(await conflicts()).toEqual({});
+      expect(engine.repo.getBaseline('901')).toMatchObject({ remoteEtag: EDITED_SUM, localChecksum: EDITED_SUM });
+    });
+
+    it('holds it as a conflict and sends nothing in another directory', async () => {
+      await landedThenEdited('1:1');
+
+      const result = await firstBind(entry);
+
+      expect(result).toEqual({ ok: true, files: 1, bytes: 40 });
+      expect(api.putNodeContent).not.toHaveBeenCalled();
+      expect((await conflicts())['901']).toMatchObject({ kind: 'unbound', path: 'board.html' });
+      expect(await fsp.readFile(path.join(root, 'board.html'), 'utf8')).toBe(EDITED);
+    });
+
+    it('sends nothing when the folder is replaced while the bind runs', async () => {
+      await landedThenEdited(rootDirIdentity(root));
+      engine.snapshots = {
+        take: () => {
+          fs.renameSync(root, `${root}-gone`);
+          dirs.push(`${root}-gone`);
+          fs.cpSync(`${root}-gone`, root, { recursive: true });
+          return null;
+        }
+      };
+
+      const result = await firstBind(entry);
+
+      expect(result).toMatchObject({ ok: false, error: 'folder-unproven', resumable: true });
+      expect(api.putNodeContent).not.toHaveBeenCalled();
+    });
+
+    it('holds it as a conflict when the marker names no directory', async () => {
+      await landedThenEdited(undefined);
+
+      await firstBind(entry);
+
+      expect(api.putNodeContent).not.toHaveBeenCalled();
+      expect((await conflicts())['901']).toMatchObject({ kind: 'unbound', path: 'board.html' });
+    });
+  });
+
+  it('a resumed bind downloads a page removed since it landed instead of deleting it online', async () => {
+    await writeMarker({ accountId: ACCOUNT_ID, rootRealpath: root, rootDir: rootDirIdentity(root), startedAt: '2026-09-23T12:00:00.000Z' });
+    engine.repo.seed([['901', { type: 'site', path: 'board.html', parentId: null, remoteEtag: BOARD_SUM, localChecksum: BOARD_SUM, checksum: BOARD_SUM }]]);
+    api.listNodes.mockResolvedValue(completeList([site({ id: 901, name: 'board.html', etag: BOARD_SUM })]));
+
+    const result = await firstBind(entry);
+
+    expect(result).toEqual({ ok: true, files: 1, bytes: 40 });
+    expect(api.deleteNode).not.toHaveBeenCalled();
+    expect(await fsp.readFile(path.join(root, 'board.html'), 'utf8')).toBe(BOARD);
+  });
+
+  describe('the directory a first download started in', () => {
+    let release = null;
+    const markerDir = async () => JSON.parse(await fsp.readFile(markerPath(), 'utf8')).rootDir;
+
+    beforeEach(() => {
+      release = null;
+      api.listNodes.mockResolvedValue(completeList([site({ id: 902, name: 'notes.html', etag: NOTES_SUM })]));
+      api.getNodeContent.mockImplementation(() => new Promise((resolve) => {
+        release = () => resolve(remoteContent(NOTES, NOTES_SUM));
+      }));
+    });
+
+    it('is in the bind marker before the first byte lands', async () => {
+      const bind = firstBind(entry);
+      await waitFor(() => release !== null);
+
+      expect(await markerDir()).toBe(rootDirIdentity(root));
+      expect(await exists(path.join(root, 'notes.html'))).toBe(false);
+      release();
+      expect(await bind).toEqual({ ok: true, files: 1, bytes: 40 });
+    });
+
+    it('stays the one the marker names when the bind resumes', async () => {
+      await writeMarker({ accountId: ACCOUNT_ID, rootRealpath: root, rootDir: '1:1', startedAt: '2026-09-23T12:00:00.000Z' });
+
+      const bind = firstBind(entry);
+      await waitFor(() => release !== null);
+
+      expect(await markerDir()).toBe('1:1');
+      release();
+      await bind;
+    });
+  });
+
   it('downloads a large upload without marking it uploadBlocked', async () => {
     api.listNodes.mockResolvedValue(completeList([
       upload({ id: 902, name: 'movie.bin', etag: NOTES_SUM, size: 12 * 1024 * 1024 })
