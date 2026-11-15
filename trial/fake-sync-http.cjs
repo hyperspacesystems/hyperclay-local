@@ -225,7 +225,10 @@ async function startFakeSyncHttp({ nodes = [], key, actor, accounts = [] } = {})
           }
         }
         streams.clear();
+        // A client still syncing holds keep-alive connections open; without this,
+        // close would wait for it forever.
         httpServer.close((error) => (error ? reject(error) : resolve()));
+        httpServer.closeAllConnections();
         if (typeof httpServer.closeAllConnections === 'function') {
           httpServer.closeAllConnections();
         }
