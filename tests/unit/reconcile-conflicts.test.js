@@ -540,6 +540,55 @@ describe('the conflict store', () => {
     expect(await exists(path.join('.hyperclay', 'conflicts', 'board.remote-aaaa1111.html'))).toBe(false);
   });
 
+  // L3 and L3b: the document host decides each write; these hosts refuse or race one.
+  function hostWith(commit) {
+    const { documentHostFor } = require('../../src/sync-engine/local-boundary');
+    const real = documentHostFor(engine);
+    engine.documentHost = { ...real, commit: (request) => commit(request, real) };
+  }
+
+  it('a refused Keep theirs leaves the record and the kept server copy', async () => {
+    await seedSite({ content: LOCAL_BYTES, remoteEtag: REMOTE_ETAG, localChecksum: LOCAL_SUM });
+    await executeDecision(engine, '901', { action: A.CONFLICT, conflictKind: 'both-edited' });
+    hostWith((request, real) => (request.kind === 'sync-download' ? { outcome: 'refused', reason: 'changed' } : real.commit(request)));
+
+    const result = await resolveConflict(engine, { path: 'board.html', choice: 'theirs' });
+
+    expect(result).toEqual({ ok: false, error: 'changed' });
+    expect(await readLocalFile('board.html')).toBe(LOCAL_BYTES);
+    expect(Object.keys(await readRecords())).toEqual(['901']);
+    expect(await exists(path.join('.hyperclay', 'conflicts', 'board.remote-aaaa1111.html'))).toBe(true);
+  });
+
+  it('a save between the choice and the write is not replaced', async () => {
+    await seedSite({ content: LOCAL_BYTES, remoteEtag: REMOTE_ETAG, localChecksum: LOCAL_SUM });
+    await executeDecision(engine, '901', { action: A.CONFLICT, conflictKind: 'both-edited' });
+    const saved = '<p>saved after the choice</p>';
+    hostWith(async (request, real) => {
+      if (request.kind === 'sync-download') await fsp.writeFile(path.join(root, 'board.html'), saved);
+      return real.commit(request);
+    });
+
+    const result = await resolveConflict(engine, { path: 'board.html', choice: 'theirs' });
+
+    expect(result).toEqual({ ok: false, error: 'changed' });
+    expect(await readLocalFile('board.html')).toBe(saved);
+    expect(Object.keys(await readRecords())).toEqual(['901']);
+  });
+
+  it('no version, no conflict', async () => {
+    await seedSite({ content: LOCAL_BYTES, remoteEtag: REMOTE_ETAG, localChecksum: LOCAL_SUM });
+    hostWith((request, real) => (request.kind === 'sync-download' ? { outcome: 'refused', reason: 'backup-failed' } : real.commit(request)));
+
+    await expect(executeDecision(engine, '901', { action: A.DOWNLOAD })).rejects.toMatchObject({ code: 'backup-failed', statusCode: 503 });
+    expect(await readRecords()).toEqual({});
+    expect(await readLocalFile('board.html')).toBe(LOCAL_BYTES);
+
+    hostWith((request, real) => (request.kind === 'sync-download' ? { outcome: 'refused', reason: 'changed' } : real.commit(request)));
+    const other = await executeDecision(engine, '901', { action: A.DOWNLOAD });
+    expect(other.action).toBe(A.CONFLICT);
+  });
+
   it('keep both picks the next free copy name and never overwrites one', async () => {
     await seedSite({ content: LOCAL_BYTES, remoteEtag: REMOTE_ETAG, localChecksum: LOCAL_SUM });
     await writeLocalFile('board (conflicted copy).html', '<h1>older copy</h1>');

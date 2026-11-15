@@ -124,6 +124,11 @@ async function writeLocal(engine, rel, content, { modifiedAt = null, gen, expect
       expected: expectedFrom(expectLocal), context: { target, token },
     });
     if (written.outcome === 'indeterminate') throw written.error;
+    if (written.outcome === 'refused' && written.reason === 'backup-failed') {
+      // The bytes on disk could not be kept as a version, so they are not replaced. That is
+      // not an edit on this side: the download is retried after a back-off, never a conflict.
+      throw Object.assign(new Error(`${rel} was not replaced: no version of it could be kept`), { code: 'backup-failed', statusCode: 503 });
+    }
     if (written.outcome === 'refused') { refused = CHANGED; return null; }
     checksum = written.checksum;
     return written;
@@ -630,11 +635,13 @@ async function resolveConflict(session, { path: rel, choice } = {}) {
   const extra = await entryMeta(engine, found.path, type, known ? known.parentId : undefined);
 
   let copy = null;
+  let copiedAside;
   if (choice === 'both') {
     if (!KEEP_BOTH_KINDS.has(found.kind) || !found.remoteCopy) return { ok: false, error: 'no-remote-copy' };
     copy = await conflictedCopyPath(engine, found.path);
     if (!copy) return { ok: false, error: 'no-free-name' };
-    const { buffer } = await readLocalBytes(engine, localPath);
+    const { buffer, checksum: copiedChecksum } = await readLocalBytes(engine, localPath);
+    copiedAside = copiedChecksum;
     const written = await writeLocal(engine, copy, isSite ? buffer.toString('utf8') : buffer, { expectLocal: null, explicitCreate: true });
     if (written.refused) return { ok: false, error: 'copy-taken' };
     try {
@@ -650,7 +657,11 @@ async function resolveConflict(session, { path: rel, choice } = {}) {
     } else {
       if (!found.remoteCopy) return { ok: false, error: 'no-remote-copy' };
       const other = await readFileBuffer(path.join(engine.syncFolder, found.remoteCopy));
-      const restored = await writeLocal(engine, found.path, isSite ? other.toString('utf8') : other, {});
+      // A save that lands after the choice is not replaced: the write expects the bytes the
+      // choice was made over (for Keep both, the bytes it just copied aside).
+      const expectLocal = copy ? copiedAside : await localChecksumOf(engine, found.path);
+      const restored = await writeLocal(engine, found.path, isSite ? other.toString('utf8') : other, { expectLocal });
+      if (restored.refused) return { ok: false, error: 'changed' };
       await saveEntry(engine, found.key, known, {
         remoteEtag: found.remoteEtag,
         localChecksum: restored.checksum,
