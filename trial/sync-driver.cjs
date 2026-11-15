@@ -4,7 +4,6 @@
 // that forks one can fork the other.
 const fs = require('fs');
 const path = require('path');
-const { EventEmitter } = require('events');
 const { pathToFileURL } = require('url');
 const { Agent } = require(process.env.UNDICI_PATH);
 
@@ -46,6 +45,7 @@ const { createRootDocumentHost } = require(path.join(LOCAL_DIR, 'src/main/docume
 const { load: loadConflicts } = require(path.join(LOCAL_DIR, 'src/sync-engine/reconcile/conflicts.js'));
 const { adapterCounts } = require(localTrial('go-document-host.cjs'));
 const { setConnection } = require(localTrial('go-process.cjs'));
+const { passiveObserver, followHost } = require(localTrial('sync-observer.cjs'));
 
 const observer = passiveObserver();
 const feeds = [];
@@ -59,22 +59,6 @@ let goRuns = 0;
 
 function liveStub() {
   return { markBrowserSave() {}, broadcast() {} };
-}
-
-function passiveObserver() {
-  const emitter = new EventEmitter();
-  const listeners = new Set();
-  emitter.subscribe = (listener) => {
-    listeners.add(listener);
-    return () => listeners.delete(listener);
-  };
-  emitter.setRemoteApplyCheck = () => {};
-  emitter.start = async () => {};
-  emitter.stop = async () => {};
-  emitter.deliver = (frame) => {
-    for (const listener of listeners) listener(frame);
-  };
-  return emitter;
 }
 
 function filesUnder(dir, prefix = '') {
@@ -144,9 +128,7 @@ function openAdapters(roots, served) {
       logger: null,
     });
     adapters.push({ settingsId: spec ? spec.id : null, goId, path: real, host });
-    feeds.push(host.events(null, (frame) => {
-      if (frame.type === 'change') observer.deliver({ event: frame.event, rel: frame.rel });
-    }));
+    feeds.push(followHost(host, observer));
   }
 }
 
