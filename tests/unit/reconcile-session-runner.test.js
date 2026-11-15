@@ -170,6 +170,40 @@ describe('sync-ready and the first reconcile', () => {
     expect(engine.reconcileAll).not.toHaveBeenCalled();
   });
 
+  it('a folder the marker names but the directory does not is rechecked before the normal pass', async () => {
+    let unproven = true;
+    const order = [];
+    const { runner, engine, api, stream } = session({ engine: {
+      rootUnproven: () => unproven,
+      recheckRoot: jest.fn(async () => { order.push('recheck'); unproven = false; return true; }),
+      reconcileAll: jest.fn(async () => { order.push('reconcile'); }),
+    } });
+
+    const started = runner.start();
+    stream.push(READY);
+    await started;
+
+    expect(order).toEqual(['recheck', 'reconcile']);
+    expect(engine.recheckRoot).toHaveBeenCalledWith({ complete: true, nodes: [] }, expect.objectContaining({ generation: runner.generation }));
+    expect(api.listNodes).toHaveBeenCalledTimes(2);
+    expect(runner.state).toBe('live');
+  });
+
+  it('a recheck that could not settle every file runs no normal pass and backs off', async () => {
+    const { runner, engine, stream } = session({ engine: {
+      rootUnproven: () => true,
+      recheckRoot: jest.fn().mockResolvedValue(false),
+    } });
+
+    const started = runner.start();
+    stream.push(READY);
+    await started;
+
+    expect(engine.recheckRoot).toHaveBeenCalledTimes(1);
+    expect(engine.reconcileAll).not.toHaveBeenCalled();
+    expect(runner.state).toBe('offline');
+  });
+
   it('buffers node frames that arrive before the inventory and refreshes them after reconcile', async () => {
     const inventory = deferred();
     const statesAtRefresh = [];

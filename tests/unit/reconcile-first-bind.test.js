@@ -74,7 +74,7 @@ const fs = require('fs');
 const fsp = require('fs').promises;
 const os = require('os');
 const path = require('upath');
-const { readRootMarker } = require('../../src/sync-engine/root-marker');
+const { readRootMarker, rootDirIdentity } = require('../../src/sync-engine/root-marker');
 const crypto = require('crypto');
 
 const api = require('../../src/sync-engine/api-client');
@@ -303,7 +303,8 @@ describe('firstBind', () => {
       accountId: ACCOUNT_ID,
       rootId: ROOT_ID,
       rootRealpath: root,
-      rootMarker: true
+      rootMarker: true,
+      rootDir: rootDirIdentity(root)
     });
     expect(readRootMarker(root)).toMatchObject({ rootId: ROOT_ID });
     expect(engine.rootMarkerRequired).toBe(true);

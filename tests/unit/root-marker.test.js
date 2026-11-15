@@ -1,7 +1,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { classifyRoot, readRootMarker, writeRootMarker, rootIsEmpty, flagIdentity, markerPath } = require('../../src/sync-engine/root-marker');
+const { classifyRoot, readRootMarker, writeRootMarker, rootIsEmpty, recordIdentity, rootDirIdentity, markerPath } = require('../../src/sync-engine/root-marker');
 
 let root;
 let metaDir;
@@ -95,18 +95,39 @@ describe('classifyRoot', () => {
   });
 });
 
-describe('flagIdentity', () => {
-  test('sets rootMarker on an existing identity and keeps the other fields', () => {
+describe('recordIdentity', () => {
+  test('merges into an existing identity and keeps the other fields', () => {
     const file = path.join(metaDir, 'identity.json');
     fs.writeFileSync(file, JSON.stringify({ serverUrl: 'https://hyperclay.test', rootId: 'root-1' }));
-    expect(flagIdentity(metaDir)).toBe(true);
-    expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual({ serverUrl: 'https://hyperclay.test', rootId: 'root-1', rootMarker: true });
-    expect(flagIdentity(metaDir)).toBe(false);
+    expect(recordIdentity(metaDir, { rootMarker: true, rootDir: '7:1' })).toBe(true);
+    expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual({ serverUrl: 'https://hyperclay.test', rootId: 'root-1', rootMarker: true, rootDir: '7:1' });
   });
 
-  test('writes nothing when there is no identity', () => {
-    expect(flagIdentity(metaDir)).toBe(false);
-    expect(fs.existsSync(path.join(metaDir, 'identity.json'))).toBe(false);
-    expect(flagIdentity(null)).toBe(false);
+  test('a session with no identity yet (a folder linked with its files) gets one', () => {
+    expect(recordIdentity(metaDir, { rootMarker: true, rootDir: '7:1' })).toBe(true);
+    expect(JSON.parse(fs.readFileSync(path.join(metaDir, 'identity.json'), 'utf8'))).toEqual({ rootMarker: true, rootDir: '7:1' });
+    expect(recordIdentity(null, { rootMarker: true })).toBe(false);
+  });
+});
+
+describe('rootDirIdentity', () => {
+  test('a rename keeps the folder\'s identity; a copy with the same marker and files does not', () => {
+    writeRootMarker(root, 'root-1');
+    fs.writeFileSync(path.join(root, 'board.html'), 'x');
+    const before = rootDirIdentity(root);
+    expect(before).toMatch(/^\d+:\d+$/);
+
+    const moved = `${root}-moved`;
+    fs.renameSync(root, moved);
+    expect(rootDirIdentity(moved)).toBe(before);
+
+    fs.cpSync(moved, root, { recursive: true });
+    expect(readRootMarker(root)).toMatchObject({ rootId: 'root-1' });
+    expect(rootDirIdentity(root)).not.toBe(before);
+    fs.rmSync(moved, { recursive: true, force: true });
+  });
+
+  test('a folder that is not there has none', () => {
+    expect(rootDirIdentity(path.join(root, 'nope'))).toBeNull();
   });
 });

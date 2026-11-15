@@ -60,7 +60,7 @@ function makeEngine({ protocol = 2, entries = [], nodes = [], syncFolder = rootD
   repo.attach(metaDir);
   repo.seed(entries);
 
-  return Object.assign({}, mutations, sessionMethods, {
+  const engine = Object.assign({}, mutations, sessionMethods, {
     protocol,
     generation: 1,
     conn: {},
@@ -73,6 +73,8 @@ function makeEngine({ protocol = 2, entries = [], nodes = [], syncFolder = rootD
     metaDir,
     repo
   });
+  // The engine's own getter (index.js): a request that changes the server checks the folder first.
+  return Object.defineProperty(engine, 'writeConn', { get() { this.assertRootWritable(); return this.conn; } });
 }
 
 beforeEach(() => {

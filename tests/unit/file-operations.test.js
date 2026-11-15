@@ -9,8 +9,10 @@ const {
   getFileStats,
   ensureDirectory,
   readFileBuffer,
-  calculateBufferChecksum
+  calculateBufferChecksum,
+  getLocalFolders
 } = require('../../src/sync-engine/file-operations');
+const { snapshotDisk } = require('../../src/sync-engine/reconcile/disk-snapshot');
 
 describe('getLocalFiles', () => {
   let tempDir;
@@ -288,5 +290,33 @@ describe('ensureDirectory', () => {
     await fs.mkdir(dirPath);
 
     await expect(ensureDirectory(dirPath)).resolves.not.toThrow();
+  });
+});
+
+describe('a synced folder nested inside another (Carbon 2)', () => {
+  let tempDir;
+
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'files-nested-'));
+    await fs.mkdir(path.join(tempDir, 'personal', '.hyperclay'), { recursive: true });
+    await fs.writeFile(path.join(tempDir, 'personal', '.hyperclay', 'sync-root.json'), JSON.stringify({ rootId: 'root-personal' }));
+    await fs.mkdir(path.join(tempDir, 'personal', 'notes'), { recursive: true });
+    await fs.writeFile(path.join(tempDir, 'personal', 'private.html'), '<p>private</p>');
+    await fs.writeFile(path.join(tempDir, 'personal', 'notes', 'photo.png'), 'png');
+    await fs.mkdir(path.join(tempDir, 'shared'));
+    await fs.writeFile(path.join(tempDir, 'shared', 'plan.html'), '<p>team</p>');
+    await fs.writeFile(path.join(tempDir, 'shared', 'chart.png'), 'png');
+  });
+
+  afterEach(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  test('none of its pages, files or folders are part of the outer folder', async () => {
+    expect([...(await getLocalFiles(tempDir)).keys()]).toEqual(['shared/plan.html']);
+    expect([...(await getLocalUploads(tempDir)).keys()]).toEqual(['shared/chart.png']);
+    expect([...(await getLocalFolders(tempDir)).keys()]).toEqual(['shared']);
+    const { entries } = await snapshotDisk(tempDir);
+    expect([...entries.keys()].filter((rel) => rel.startsWith('personal'))).toEqual([]);
   });
 });

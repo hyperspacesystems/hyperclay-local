@@ -72,7 +72,7 @@ const { SyncEngine } = require('../../src/sync-engine');
 const { SessionRunner } = require('../../src/sync-engine/reconcile/session-runner');
 const { createRootLive } = require('../../src/main/utils/root-live');
 const { SyncManager } = require('../../src/main/sync-manager');
-const { readRootMarker, writeRootMarker } = require('../../src/sync-engine/root-marker');
+const { readRootMarker, writeRootMarker, rootDirIdentity } = require('../../src/sync-engine/root-marker');
 
 const TEAM_ACCOUNT_ID = 21;
 const SERVER_URL = 'http://test';
@@ -475,5 +475,65 @@ describe('the root marker at start', () => {
     await manager.start(session, root);
 
     expect(session.paused.reason).toBe('identity-mismatch');
+  });
+});
+
+describe('the folder\'s own directory at start (8.55 H2-u, H2-v, H2-w)', () => {
+  async function untilMarked(engine) {
+    for (let i = 0; i < 100 && !engine.rootMarkerRequired; i += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+
+  it('a folder linked with its files already in it records its identity, so an unrelated folder in its place is paused folder-replaced', async () => {
+    const session = teamSession({ kind: 'personal' });
+    const root = makeRoot(tmpDir('session-local-refusal-root-'), 'personal');
+    fs.writeFileSync(path.join(root.path, 'board.html'), 'mine');
+
+    const bound = await manager.bind({ session, root, account: teamAccount(), mode: 'existing', actorId: 17 });
+    expect(bound.ok).toBe(true);
+    await untilMarked(manager.sessions.get(session.id).engine);
+    expect(readIdentity(session)).toMatchObject({ actorId: 17, rootId: root.id, rootMarker: true, rootDir: rootDirIdentity(root.path) });
+    await manager.stop(session.id);
+
+    const other = tmpDir('session-local-refusal-other-');
+    fs.writeFileSync(path.join(other, 'draft.html'), 'unrelated');
+    await manager.start(session, { ...root, path: other });
+
+    expect(session.paused.reason).toBe('folder-replaced');
+  });
+
+  it('a marked copy of the folder starts unproven: no normal pass runs before the recheck', async () => {
+    const session = teamSession();
+    const root = makeRoot(tmpDir('session-local-refusal-root-'));
+    register(session, root);
+    writeRootMarker(root.path, root.id);
+    fs.writeFileSync(path.join(root.path, 'board.html'), 'older');
+    writeIdentity(session, { ...matchingIdentity(session, root), rootMarker: true, rootDir: rootDirIdentity(root.path) });
+    const copy = tmpDir('session-local-refusal-copy-');
+    fs.cpSync(root.path, copy, { recursive: true });
+
+    const result = await manager.start(session, { ...root, path: copy });
+
+    expect(result.success).toBe(true);
+    expect(session.paused).toBeNull();
+    expect(manager.sessions.get(session.id).engine.rootUnproven()).toBe(true);
+    expect(initialSync.performInitialSync).not.toHaveBeenCalled();
+  });
+
+  it('the same folder moved on the same disk is proven and syncs normally', async () => {
+    const session = teamSession();
+    const root = makeRoot(tmpDir('session-local-refusal-root-'));
+    register(session, root);
+    writeRootMarker(root.path, root.id);
+    fs.writeFileSync(path.join(root.path, 'board.html'), 'mine');
+    writeIdentity(session, { ...matchingIdentity(session, root), rootMarker: true, rootDir: rootDirIdentity(root.path) });
+    const moved = `${root.path}-moved`;
+    fs.renameSync(root.path, moved);
+    dirs.push(moved);
+
+    const result = await manager.start(session, { ...root, path: moved });
+
+    expect(result.success).toBe(true);
+    expect(manager.sessions.get(session.id).engine.rootUnproven()).toBe(false);
+    expect(initialSync.performInitialSync).toHaveBeenCalled();
   });
 });

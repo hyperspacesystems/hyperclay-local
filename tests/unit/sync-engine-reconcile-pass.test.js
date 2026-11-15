@@ -459,3 +459,68 @@ describe('sites held at the free plan\'s file limit are retried', () => {
     expect(syncEngine.blockedUploads()).toEqual([]);
   });
 });
+
+describe('recheck — a folder the session cannot prove is its own', () => {
+  const page = (id, name, sum) => ({ id, type: 'site', name, path: '', checksum: sum, modifiedAt: '2024-01-01T00:00:00Z' });
+
+  test('an older page is held as a conflict, a page made since comes down, and nothing is sent', async () => {
+    const metaDir = fs.mkdtempSync(path.join(os.tmpdir(), 'reconcile-pass-recheck-'));
+    syncEngine.metaDir = metaDir;
+    try {
+      const newer = checksum('<html>content</html>');
+      syncEngine.repo.seed([
+        ['11', { type: 'site', path: 'board.html', inode: 1, remoteEtag: newer, localChecksum: newer }],
+        ['15', { type: 'site', path: 'since.html', inode: 2, remoteEtag: newer, localChecksum: newer }]
+      ]);
+      syncEngine.lastSyncedAt = Date.now();
+      apiClient.listNodes.mockResolvedValue(completeList([page(11, 'board.html', newer), page(15, 'since.html', newer)]));
+      apiClient.getNodeContent.mockResolvedValue({ content: '<html>content</html>', etag: newer, checksum: newer });
+      fileOps.getLocalFiles.mockResolvedValue(new Map([
+        ['board.html', localFile('board.html')],
+        ['draft.html', localFile('draft.html')]
+      ]));
+      fileOps.readFile.mockImplementation(async (filePath) => (filePath.endsWith('board.html') ? '<html>old</html>' : '<html>content</html>'));
+      syncEngine.documentHost.read.mockImplementation(async (rel, filePath) => {
+        const bytes = Buffer.from(String(filePath).endsWith('board.html') ? '<html>old</html>' : '<html>content</html>');
+        return { bytes, checksum: realBufferChecksum(bytes) };
+      });
+
+      // The live structure job holds since.html as deleted here: measured against the folder
+      // that left, so the recheck decides it anyway.
+      syncEngine.holdsPath = (rel) => rel === 'since.html';
+      syncEngine.recheckPass = true;
+      await syncEngine.performInitialSync();
+
+      expect(apiClient.putNodeContent).not.toHaveBeenCalled();
+      expect(apiClient.deleteNode).not.toHaveBeenCalled();
+      expect(apiClient.createNode).not.toHaveBeenCalled();
+      const records = store.list(await store.load(metaDir));
+      expect(records).toEqual([expect.objectContaining({ key: '11', kind: 'unbound', path: 'board.html' })]);
+      expect(syncEngine.documentHost.commit).toHaveBeenCalledWith(expect.objectContaining({ kind: 'sync-download', name: 'since.html' }));
+    } finally {
+      fs.rmSync(metaDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('a teammate renamed a node onto a path where this disk holds another file', () => {
+  test('the other file is held against the node, never uploaded over it', async () => {
+    const metaDir = fs.mkdtempSync(path.join(os.tmpdir(), 'reconcile-pass-occupant-'));
+    syncEngine.metaDir = metaDir;
+    try {
+      syncEngine.repo.seed([['11', { type: 'site', path: 'draft.html', inode: 111, remoteEtag: 'old', localChecksum: 'old' }]]);
+      syncEngine.lastSyncedAt = Date.now();
+      apiClient.listNodes.mockResolvedValue(completeList([{ id: 11, type: 'site', name: 'launch.html', path: '', checksum: 'old', modifiedAt: '2024-01-01T00:00:00Z' }]));
+      apiClient.getNodeContent.mockResolvedValue({ content: '<html>teammate</html>', etag: 'old', checksum: 'old' });
+      fileOps.getLocalFiles.mockResolvedValue(new Map([['launch.html', localFile('launch.html')]]));
+
+      await syncEngine.performInitialSync();
+
+      expect(apiClient.putNodeContent).not.toHaveBeenCalled();
+      expect(apiClient.createNode).not.toHaveBeenCalled();
+      expect(store.list(await store.load(metaDir))).toEqual([expect.objectContaining({ key: '11', kind: 'unbound', path: 'launch.html' })]);
+    } finally {
+      fs.rmSync(metaDir, { recursive: true, force: true });
+    }
+  });
+});

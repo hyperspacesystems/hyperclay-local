@@ -57,6 +57,7 @@ const fsp = require('fs').promises;
 const os = require('os');
 const path = require('upath');
 const crypto = require('crypto');
+const nodeMap = require('../../src/sync-engine/node-map');
 
 const api = require('../../src/sync-engine/api-client');
 const { SyncEngine } = require('../../src/sync-engine/index');
@@ -218,8 +219,8 @@ describe('refreshNode after a remote move', () => {
   });
 
   it('a file already moved to the listed path is adopted', async () => {
-    await engine.repo.set('11', { type: 'site', path: 'a.html', remoteEtag: 'e1', localChecksum: THEIRS_SUM });
     await write('b.html', THEIRS);
+    await engine.repo.set('11', { type: 'site', path: 'a.html', remoteEtag: 'e1', localChecksum: THEIRS_SUM, inode: await nodeMap.getInode(full('b.html')) });
     api.listNodes.mockResolvedValue(completeList([site({ id: 11, name: 'b.html' })]));
 
     await engine.refreshNode('11', { generation: 1 });
@@ -228,6 +229,20 @@ describe('refreshNode after a remote move', () => {
     expect(await readBytes('b.html')).toBe(THEIRS);
     expect(await fsp.readdir(root)).toEqual(['b.html']);
     expect(api.deleteNode).not.toHaveBeenCalled();
+  });
+  it('an unrelated file at the listed path, the node\'s own deleted here, is held: nothing is uploaded over the renamed node', async () => {
+    await write('a.html', THEIRS);
+    await engine.repo.set('11', { type: 'site', path: 'a.html', remoteEtag: 'e1', localChecksum: THEIRS_SUM, inode: await nodeMap.getInode(full('a.html')) });
+    await fsp.rm(full('a.html'));
+    await write('b.html', MINE);
+    api.listNodes.mockResolvedValue(completeList([site({ id: 11, name: 'b.html' })]));
+    api.getNodeContent.mockResolvedValue({ content: THEIRS, etag: 'e1', checksum: 'e1' });
+
+    await engine.refreshNode('11', { generation: 1 });
+
+    expect(api.putNodeContent).not.toHaveBeenCalled();
+    expect(await readBytes('b.html')).toBe(MINE);
+    expect((await conflicts.load(metaDir))['11']).toMatchObject({ kind: 'unbound', path: 'b.html' });
   });
   it('a folder deleted online keeps a changed file as a conflict and trashes only the unchanged one', async () => {
     await engine.repo.set('20', { type: 'folder', path: 'reports', parentId: null });
@@ -286,6 +301,23 @@ describe('refreshNode after a remote move', () => {
     await engine.refreshNode('12', { generation: 1 });
 
     expect(engine.blockedUploads()).toEqual([]);
+  });
+});
+
+describe('a server file this disk holds only in another case (Carbon 5)', () => {
+  it('neither replaces the local file nor is created beside it: both wait as a name clash', async () => {
+    engine.foldsCase = true;
+    const upload = (id, name, etag) => ({ id, type: 'upload', name, parentId: null, path: '', size: 1, etag, checksum: etag });
+    await write('logo.png', MINE);
+    api.listNodes.mockResolvedValue(completeList([upload(20, 'Logo.png', 'e9')]));
+    api.getNodeContent.mockResolvedValue({ content: THEIRS, etag: 'e9', checksum: 'e9' });
+
+    await engine.reconcileAll(await api.listNodes(), { generation: engine.generation });
+
+    expect(await readBytes('logo.png')).toBe(MINE);
+    expect(api.getNodeContent).not.toHaveBeenCalled();
+    expect(api.createNode).not.toHaveBeenCalled();
+    expect(engine.blockedUploads().map(({ path: rel, reason }) => [rel, reason]).sort()).toEqual([['Logo.png', 'case-twin'], ['logo.png', 'case-twin']]);
   });
 });
 

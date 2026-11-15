@@ -1137,3 +1137,53 @@ describe('sync download contract', () => {
     expect(api.putNodeContent).not.toHaveBeenCalled();
   });
 });
+
+describe('a conflict whose node was deleted online (Carbon 4)', () => {
+  async function unboundOnDeletedNode() {
+    engine.repo.seed([['7', { type: 'folder', path: 'projects', parentId: null }]]);
+    await writeLocalFile('projects/spec.html', LOCAL_BYTES);
+    await store.set(metaDir, { nodeId: '41', kind: 'unbound', path: 'projects/spec.html', localChecksum: null, remoteEtag: REMOTE_ETAG, remoteCopy: null, detectedAt: 1 });
+    engine.createMissingParentFolders = jest.fn(async () => {});
+  }
+
+  it('keep mine creates the page again when its node is gone', async () => {
+    await unboundOnDeletedNode();
+    api.putNodeContent.mockRejectedValueOnce(Object.assign(new Error('not found'), { statusCode: 404 }));
+    api.createNode.mockResolvedValueOnce({ id: 50, type: 'site', name: 'spec.html', parentId: 7, etag: 'e50' });
+
+    const result = await resolveConflict(engine, { path: 'projects/spec.html', choice: 'mine' });
+
+    expect(result).toEqual({ ok: true });
+    expect(engine.createMissingParentFolders).toHaveBeenCalledWith('projects/spec.html');
+    expect(api.createNode.mock.calls[0][1]).toMatchObject({ type: 'site', name: 'spec.html', content: LOCAL_BYTES });
+    expect(engine.repo.get('50')).toMatchObject({ path: 'projects/spec.html' });
+    expect(await readRecords()).toEqual({});
+  });
+
+  it('a complete list without the node holds the conflict as remote-deleted', async () => {
+    await unboundOnDeletedNode();
+    engine.serverNodesComplete = true;
+
+    await engine.markDeletedConflicts([{ id: 99, type: 'site', name: 'other.html', parentId: 0 }]);
+
+    expect((await readRecords())['41']).toMatchObject({ kind: 'remote-deleted', path: 'projects/spec.html' });
+  });
+
+  it('a list that is not complete changes nothing', async () => {
+    await unboundOnDeletedNode();
+    engine.serverNodesComplete = false;
+
+    await engine.markDeletedConflicts([]);
+
+    expect((await readRecords())['41']).toMatchObject({ kind: 'unbound' });
+  });
+
+  it('a page waiting as a conflict is not created behind it', async () => {
+    await unboundOnDeletedNode();
+
+    const result = await executeDecision(engine, null, { action: A.CREATE_REMOTE }, { path: 'projects/spec.html', type: 'site' });
+
+    expect(result).toMatchObject({ action: A.CONFLICT, kind: 'unbound' });
+    expect(api.createNode).not.toHaveBeenCalled();
+  });
+});

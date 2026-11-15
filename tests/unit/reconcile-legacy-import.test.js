@@ -66,7 +66,7 @@ jest.mock('../../src/sync-engine/utils', () => ({
 
 const os = require('os');
 const path = require('upath');
-const { readRootMarker } = require('../../src/sync-engine/root-marker');
+const { readRootMarker, rootDirIdentity } = require('../../src/sync-engine/root-marker');
 const crypto = require('crypto');
 const fsp = require('fs').promises;
 
@@ -275,7 +275,8 @@ describe('importLegacyMeta', () => {
       accountId: ACCOUNT_ID,
       rootId: ROOT_ID,
       rootRealpath: root,
-      rootMarker: true
+      rootMarker: true,
+      rootDir: rootDirIdentity(root)
     });
     expect(readRootMarker(root)).toMatchObject({ rootId: ROOT_ID });
     expect(engine.rootMarkerRequired).toBe(true);
