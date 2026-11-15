@@ -211,6 +211,10 @@ async function startFakeSyncHttp({ nodes = [], key, actor, accounts = [] } = {})
     url: `http://127.0.0.1:${port}`,
     server,
     requests,
+    // How many event streams a client holds open right now.
+    openStreams() {
+      return streams.size;
+    },
     // Sends one frame to every open stream, as the server does when a node changes.
     push(data) {
       for (const res of streams) res.write(`data: ${JSON.stringify(data)}\n\n`);

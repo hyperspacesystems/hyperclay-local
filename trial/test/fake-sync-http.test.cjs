@@ -126,7 +126,11 @@ test('the stream sends sync-ready, then what is pushed', async () => {
     await readUntil('"sync-ready"');
     fake.push({ type: 'node-saved', nodeId: 2 });
     await readUntil('"node-saved"');
+    assert.equal(fake.openStreams(), 1);
     controller.abort();
+    const deadline = Date.now() + 2000;
+    while (fake.openStreams() !== 0 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(fake.openStreams(), 0);
 
     assert.ok(text.includes('data: {"type":"sync-ready","sync":{"enabled":true}}\n\n'));
     assert.ok(text.includes('data: {"type":"node-saved","nodeId":2}\n\n'));
