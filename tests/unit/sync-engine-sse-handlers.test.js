@@ -55,7 +55,7 @@ const { calculateChecksum } = require('../../src/sync-engine/utils');
 const Outbox = require('../../src/sync-engine/state/outbox');
 const CascadeSuppression = require('../../src/sync-engine/state/cascade-suppression');
 const EchoWindow = require('../../src/sync-engine/state/echo-window');
-const { stubDocumentHost } = require('../helpers/document-host-stub');
+const { stubDocumentHost, folderThroughFileOps } = require('../helpers/document-host-stub');
 
 let syncEngine;
 let liveSyncMock;
@@ -118,7 +118,7 @@ beforeEach(() => {
     errors: []
   };
 
-  syncEngine.documentHost = stubDocumentHost();
+  syncEngine.documentHost = stubDocumentHost({ ensureFolder: folderThroughFileOps(fileOps, () => syncEngine.syncFolder) });
   fileOps.readFile.mockResolvedValue('');
   fileOps.readFileBuffer.mockResolvedValue(Buffer.from(''));
   fileOps.ensureDirectory.mockResolvedValue();

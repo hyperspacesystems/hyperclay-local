@@ -21,7 +21,6 @@ const fs = require('fs').promises;
 const path = require('upath');
 const {
   readFileBuffer,
-  ensureDirectory,
   fileExists,
 } = require('../file-operations');
 const { calculateChecksum } = require('../utils');
@@ -31,8 +30,7 @@ const {
   getNodeContent,
   putNodeContent,
 } = require('../api-client');
-const { atomicWriteFile } = require('../../main/utils/write-queue');
-const { withLocalDocumentWrite, withLocalDirectoryChange, claimLocalDocumentTarget, documentHostFor } = require('../local-boundary');
+const { withLocalDocumentWrite, withLocalDirectoryChange, claimLocalDocumentTarget, documentHostFor, putSyncFile, removeSyncFile, ensureLocalFolder } = require('../local-boundary');
 const { getConsentRegistry, resolveWritePath } = require('../../main/utils/path-resolver');
 const nodeMap = require('../node-map');
 const store = require('./conflicts');
@@ -97,10 +95,6 @@ function overLimit(engine, isSite, bytes) {
   return !isSite && Number.isFinite(limit) && bytes > limit;
 }
 
-async function writeBytes(filePath, content) {
-  await ensureDirectory(path.dirname(filePath));
-  await atomicWriteFile(filePath, Buffer.isBuffer(content) ? content : Buffer.from(content, 'utf8'), null);
-}
 
 const STALE = 'stale';
 const CHANGED = 'changed';
@@ -175,7 +169,7 @@ async function recordConflict(engine, nodeId, rel, { kind, localChecksum = null,
     try {
       const response = await getNodeContent(engine.conn, idOf(nodeId));
       const etag = response.etag || response.checksum || remoteEtag;
-      await writeBytes(store.remoteCopyPath(engine.syncFolder, rel, etag), response.content);
+      await putSyncFile(engine, store.remoteCopyRef(rel, etag), response.content);
       record.remoteEtag = etag;
       record.remoteCopy = store.remoteCopyRef(rel, etag);
     } catch (error) {
@@ -202,7 +196,7 @@ async function refreshRemoteCopy(engine, nodeId, rel, open, gen) {
   if (gen !== undefined && gen !== engine.generation) return { action: A.CONFLICT, stale: true };
 
   const etag = response.etag || response.checksum || null;
-  await writeBytes(store.remoteCopyPath(engine.syncFolder, rel, etag), response.content);
+  await putSyncFile(engine, store.remoteCopyRef(rel, etag), response.content);
   const updated = await store.update(engine.metaDir, open.key, {
     remoteEtag: etag,
     remoteCopy: store.remoteCopyRef(rel, etag),
@@ -307,7 +301,7 @@ async function downloadFolder(engine, nodeId, entry, context, gen) {
   let localPath = null;
   const created = await withLocalDirectoryChange(engine, rel, (target) => {
     localPath = target.canonicalPath;
-    return engine._applyRemoteFsChange([rel], () => ensureDirectory(target.canonicalPath));
+    return engine._applyRemoteFsChange([rel], () => ensureLocalFolder(engine, rel));
   }, { generation: gen });
   if (created && created.stale) return { action: A.DOWNLOAD, stale: true };
   if (!created) engine.cascade.consume(rel);
@@ -592,11 +586,9 @@ async function executeDecision(session, nodeId, decision, context = {}) {
 
 async function removeCopy(engine, record) {
   if (!record || !record.remoteCopy) return;
-  try {
-    await fs.unlink(path.join(engine.syncFolder, record.remoteCopy));
-  } catch (error) {
-    if (error.code !== 'ENOENT') console.error(`[SYNC] Could not remove ${record.remoteCopy}:`, error.message);
-  }
+  const result = await removeSyncFile(engine, record.remoteCopy)
+    .catch((error) => ({ outcome: 'refused', reason: error.message }));
+  if (result.outcome !== 'committed') console.error(`[SYNC] Could not remove ${record.remoteCopy}:`, result.reason);
 }
 
 /**

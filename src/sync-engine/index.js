@@ -14,7 +14,6 @@ const { getServerBaseUrl } = require('../main/utils/utils');
 const { calibrateClock, getLegacySnapshot } = require('./utils');
 const { classifyError } = require('./reconcile/classify-error');
 const { createRootLive } = require('../main/utils/root-live');
-const { ensureDirectory } = require('./file-operations');
 const SyncQueue = require('./sync-queue');
 const { classifyPath } = require('./path-helpers');
 const Outbox = require('./state/outbox');
@@ -324,7 +323,7 @@ class SyncEngine extends EventEmitter {
       // Ensure sync folder exists
       if (opts.createFolder !== false) {
         console.log(`[SYNC] Ensuring sync folder exists: ${syncFolder}`);
-        await ensureDirectory(syncFolder);
+        await require('./local-boundary').ensureLocalFolder(this, '');
       }
 
       // Prove the key works and the server answers before anything syncs. C3

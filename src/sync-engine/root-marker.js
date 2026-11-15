@@ -28,12 +28,26 @@ function readRootMarker(rootPath) {
   }
 }
 
-function writeRootMarker(rootPath, rootId, { now = Date.now } = {}) {
+const MARKER_REL = '.hyperclay/sync-root.json';
+
+function markerBytes(rootId, { now = Date.now } = {}) {
+  return JSON.stringify({ rootId: String(rootId), createdAt: new Date(now()).toISOString() }, null, 2);
+}
+
+function writeRootMarker(rootPath, rootId, options) {
   const file = markerPath(rootPath);
   fsSync.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.tmp`;
-  fsSync.writeFileSync(tmp, JSON.stringify({ rootId: String(rootId), createdAt: new Date(now()).toISOString() }, null, 2));
+  fsSync.writeFileSync(tmp, markerBytes(rootId, options));
   fsSync.renameSync(tmp, file);
+}
+
+/** The engine's marker write: through the root's document host, which makes every write in a root. */
+async function putRootMarker(host, rootId, options) {
+  const result = await host.syncFile({ op: 'put', rel: MARKER_REL, bytes: markerBytes(rootId, options) });
+  if (result.outcome !== 'committed') {
+    throw Object.assign(new Error(`the sync marker was not written: ${result.reason}`), { code: result.reason });
+  }
 }
 
 /** Nothing the sync would scan: only dot entries and OS junk. Unreadable reads as empty. */
@@ -88,4 +102,4 @@ function flagIdentity(metaDir) {
   return true;
 }
 
-module.exports = { MARKER_DIR, MARKER_FILE, markerPath, readRootMarker, writeRootMarker, rootIsEmpty, classifyRoot, flagIdentity };
+module.exports = { MARKER_DIR, MARKER_FILE, markerPath, readRootMarker, writeRootMarker, rootIsEmpty, classifyRoot, flagIdentity, putRootMarker, markerBytes, MARKER_REL };

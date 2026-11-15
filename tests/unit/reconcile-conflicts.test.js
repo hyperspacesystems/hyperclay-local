@@ -358,6 +358,26 @@ describe('executeDecision — one case per action kind', () => {
     expect([...(await fileOps.getLocalFiles(root)).keys()]).toEqual(['board.html']);
   });
 
+  it('the kept server copy is written by the host, and a refused one leaves the record without it', async () => {
+    await seedSite({ content: LOCAL_BYTES, remoteEtag: REMOTE_ETAG, localChecksum: LOCAL_SUM });
+    const { documentHostFor } = require('../../src/sync-engine/local-boundary');
+    const writes = [];
+    engine.documentHost = {
+      ...documentHostFor(engine),
+      syncFile: async (request) => {
+        writes.push(request);
+        return { outcome: 'refused', reason: 'EACCES' };
+      },
+    };
+
+    const result = await executeDecision(engine, '901', { action: A.CONFLICT, conflictKind: 'both-edited' });
+
+    expect(writes).toEqual([{ op: 'put', rel: '.hyperclay/conflicts/board.remote-aaaa1111.html', bytes: REMOTE_BYTES }]);
+    expect(await exists('.hyperclay/conflicts/board.remote-aaaa1111.html')).toBe(false);
+    expect(result.record).toMatchObject({ kind: 'both-edited', remoteCopy: null });
+    expect(await readLocalFile('board.html')).toBe(LOCAL_BYTES);
+  });
+
   it('trash-local moves the file into .trash and forgets the node', async () => {
     await seedSite({ content: LOCAL_BYTES, remoteEtag: REMOTE_ETAG, localChecksum: LOCAL_SUM });
     const result = await executeDecision(engine, '901', { action: A.TRASH_LOCAL });

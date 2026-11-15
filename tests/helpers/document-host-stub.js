@@ -15,8 +15,19 @@ function stubDocumentHost(overrides = {}) {
       reason: null,
     })),
     blockeditorState: jest.fn(async () => undefined),
+    syncFile: jest.fn(async () => ({ outcome: 'committed', reason: null })),
+    ensureFolder: jest.fn(async () => ({ outcome: 'committed', reason: null, created: true })),
     ...overrides,
   };
 }
 
-module.exports = { stubDocumentHost };
+// The in-process host's folder step through a suite's mocked file-operations, so a
+// suite that asserts ensureDirectory calls still sees the folder a download makes.
+function folderThroughFileOps(fileOps, rootOf) {
+  return jest.fn(async (rel) => {
+    const made = await fileOps.ensureDirectory(rel ? require('upath').join(rootOf(), rel) : rootOf());
+    return { outcome: 'committed', reason: null, created: made !== undefined };
+  });
+}
+
+module.exports = { stubDocumentHost, folderThroughFileOps };

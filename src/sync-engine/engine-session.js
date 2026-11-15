@@ -12,7 +12,7 @@
 const path = require('upath');
 const { fileExists } = require('./file-operations');
 const { listNodes } = require('./api-client');
-const { classifyRoot, writeRootMarker, flagIdentity } = require('./root-marker');
+const { classifyRoot, putRootMarker, flagIdentity } = require('./root-marker');
 const { decidePath } = require('./reconcile/decide');
 
 module.exports = {
@@ -30,19 +30,34 @@ module.exports = {
       required: this.rootMarkerRequired === true,
       baselineSize: this.repo ? this.repo.size : 0,
     });
-    if (refusal) return refusal;
-    if (adopt) {
-      try {
-        writeRootMarker(this.syncFolder, this.rootId);
-      } catch {
-        // A root the app cannot write into (read-only mount, permissions) syncs as it did
-        // before the marker: the marker is not required until it has been written.
-        return null;
-      }
-      flagIdentity(this.metaDir);
-      this.rootMarkerRequired = true;
+    return refusal || null;
+  },
+
+  /**
+   * Write the marker for a session that had none yet. The check above only reads; this is
+   * the write, made through the root's document host when a session starts.
+   */
+  markerToAdopt() {
+    if (!fileExists(this.syncFolder)) return false;
+    const { refusal, adopt } = classifyRoot(this.syncFolder, {
+      rootId: this.rootId ?? null,
+      required: this.rootMarkerRequired === true,
+      baselineSize: this.repo ? this.repo.size : 0,
+    });
+    return !refusal && adopt;
+  },
+
+  async adoptRootMarker() {
+    if (!this.markerToAdopt()) return;
+    try {
+      await putRootMarker(require('./local-boundary').documentHostFor(this), this.rootId);
+    } catch {
+      // A root the app cannot write into (read-only mount, permissions) syncs as it did
+      // before the marker: the marker is not required until it has been written.
+      return;
     }
-    return null;
+    flagIdentity(this.metaDir);
+    this.rootMarkerRequired = true;
   },
 
   rootPresent() {

@@ -45,7 +45,7 @@ const fileOps = require('../../src/sync-engine/file-operations');
 const utils = require('../../src/sync-engine/utils');
 const apiClient = require('../../src/sync-engine/api-client');
 const nodeMapModule = require('../../src/sync-engine/node-map');
-const { stubDocumentHost } = require('../helpers/document-host-stub');
+const { stubDocumentHost, folderThroughFileOps } = require('../helpers/document-host-stub');
 const fsSync = require('fs');
 const os = require('os');
 const nodePath = require('path');
@@ -140,6 +140,7 @@ beforeEach(() => {
   fileOps.getLocalFolders.mockResolvedValue(new Map());
 
   syncEngine.documentHost = stubDocumentHost({
+    ensureFolder: folderThroughFileOps(fileOps, () => syncEngine.syncFolder),
     read: jest.fn(async (name, filePath) => {
       try {
         const bytes = await fileOps.readFileBuffer(filePath);

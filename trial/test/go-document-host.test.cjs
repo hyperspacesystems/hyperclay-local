@@ -548,3 +548,81 @@ test('the Go document host adapter', { skip: SKIP }, async (t) => {
     }
   });
 });
+
+// L2: sync's own files and the folders a download makes reach Go's control
+// routes. A stub Go records the calls, so this runs without the htmlclay source.
+test('sync files and folders go to Go\'s control routes', async (t) => {
+  const calls = [];
+  const stub = http.createServer((req, res) => {
+    const chunks = [];
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.on('end', () => {
+      const body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
+      calls.push({ method: req.method, path: req.url, body });
+      let answer = { error: 'not-found' };
+      if (req.url === '/v1/sync/file') {
+        answer = body.rel.startsWith('.hyperclay/conflicts/')
+          ? { outcome: 'committed', sha256: 'x', opId: body.opId }
+          : { outcome: 'refused', reason: 'not-allowed', opId: body.opId };
+      } else if (req.url === '/v1/restructure') {
+        answer = body.steps[0].to === 'apps'
+          ? { outcome: 'failed', completed: 0, reason: 'EEXIST', opId: body.opId }
+          : { outcome: 'committed', completed: 1, reason: null, opId: body.opId };
+      }
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(answer));
+    });
+  });
+  await new Promise((resolve) => stub.listen(0, '127.0.0.1', resolve));
+  const root = realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'go-sync-files-')));
+  setConnection({ url: `http://127.0.0.1:${stub.address().port}`, secret: 'stub-secret', roots: { [root]: 'root-0' } });
+  t.after(() => {
+    clearConnection();
+    stub.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  const host = createGoDocumentHost({ ctx: { root: { id: 'root-0', path: root } } });
+
+  await t.test('a kept copy is put through /v1/sync/file', async () => {
+    calls.length = 0;
+    const result = await host.syncFile({ op: 'put', rel: '.hyperclay/conflicts/apps/index.remote-aaaa1111.html', bytes: '<p>theirs</p>' });
+    assert.deepEqual(result, { outcome: 'committed', reason: null });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].path, '/v1/sync/file');
+    assert.equal(calls[0].body.root, 'root-0');
+    assert.equal(calls[0].body.op, 'put');
+    assert.deepEqual(calls[0].body.bytes, { encoding: 'utf8', data: '<p>theirs</p>' });
+    assert.match(calls[0].body.opId, /^[0-9a-f]{32}$/);
+    assert.equal(fs.existsSync(path.join(root, '.hyperclay')), false, 'the adapter wrote nothing itself');
+  });
+
+  await t.test('binary bytes go as base64, and a remove carries none', async () => {
+    calls.length = 0;
+    await host.syncFile({ op: 'put', rel: '.hyperclay/conflicts/a.remote.png', bytes: PNG });
+    await host.syncFile({ op: 'remove', rel: '.hyperclay/conflicts/a.remote.png' });
+    assert.deepEqual(calls[0].body.bytes, { encoding: 'base64', data: PNG.toString('base64') });
+    assert.equal(calls[1].body.op, 'remove');
+    assert.equal('bytes' in calls[1].body, false);
+  });
+
+  await t.test('a refusal comes back with its reason', async () => {
+    const result = await host.syncFile({ op: 'put', rel: '.hyperclay/versions/x', bytes: 'x' });
+    assert.deepEqual(result, { outcome: 'refused', reason: 'not-allowed' });
+  });
+
+  await t.test('a folder is made one level at a time, an existing level counted as made', async () => {
+    calls.length = 0;
+    const result = await host.ensureFolder('apps/notes');
+    assert.deepEqual(result, { outcome: 'committed', reason: null, created: true });
+    assert.deepEqual(calls.map((call) => [call.path, call.body.kind, call.body.steps]), [
+      ['/v1/restructure', 'folder', [{ to: 'apps' }]],
+      ['/v1/restructure', 'folder', [{ to: 'apps/notes' }]],
+    ]);
+  });
+
+  await t.test('the root itself is never made here', async () => {
+    calls.length = 0;
+    assert.deepEqual(await host.ensureFolder(''), { outcome: 'committed', reason: null, created: false });
+    assert.equal(calls.length, 0);
+  });
+});

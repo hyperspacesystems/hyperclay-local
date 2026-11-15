@@ -20,7 +20,8 @@ const path = require('upath');
 const { getAccounts, listNodes } = require('../api-client');
 const { fileExists } = require('../file-operations');
 const { executeDecision } = require('./execute');
-const { writeRootMarker } = require('../root-marker');
+const { putRootMarker } = require('../root-marker');
+const { documentHostFor } = require('../local-boundary');
 
 const BIND_MARKER = 'bind-in-progress.json';
 const IDENTITY_FILE = 'identity.json';
@@ -306,7 +307,7 @@ async function firstBind(entry, options = {}) {
     // 6. The baseline first, then identity, then the marker: only a session
     // whose disk matches its baseline is ever identified as bound.
     await engine.repo.apply(() => {});
-    if (session.rootId != null) writeRootMarker(root.path, session.rootId);
+    if (session.rootId != null) await putRootMarker(documentHostFor(engine), session.rootId);
     await writeIdentity(metaDir, {
       serverUrl: engine.serverUrl,
       actorId: discovered.actorId ?? null,

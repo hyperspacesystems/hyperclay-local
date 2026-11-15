@@ -15,7 +15,6 @@ const {
   getLocalFiles,
   readFile,
   fileExists,
-  ensureDirectory,
   getLocalUploads,
   readFileBuffer,
   calculateBufferChecksum
@@ -27,7 +26,7 @@ const { SYNC_CONFIG } = require('./constants');
 const nodeMap = require('./node-map');
 const { getConsentRegistry, resolveWritePath } = require('../main/utils/path-resolver');
 const { withStructureChange } = require('../main/utils/write-queue');
-const { withLocalDocumentWrite, withLocalDirectoryChange, withLocalStructureDelete, claimLocalDocumentTarget, structureEntryFor, documentHostFor, restructureMove, restructureTrash, requireCommitted } = require('./local-boundary');
+const { withLocalDocumentWrite, withLocalDirectoryChange, withLocalStructureDelete, claimLocalDocumentTarget, structureEntryFor, documentHostFor, restructureMove, restructureTrash, requireCommitted, ensureLocalFolder } = require('./local-boundary');
 const {
   readPageRecord, applyPageRecord, moveDocumentPageState, moveFolderPageState,
   dropDocumentPageState, dropFolderPageState
@@ -265,7 +264,7 @@ module.exports = {
     let localPath = null;
     const created = await withLocalDirectoryChange(this, localFolderPath, (target) => {
       localPath = target.canonicalPath;
-      return this._applyRemoteFsChange([localFolderPath], () => ensureDirectory(target.canonicalPath));
+      return this._applyRemoteFsChange([localFolderPath], () => ensureLocalFolder(this, localFolderPath));
     }, { generation: gen });
     if (created && created.stale) return;
     if (gen !== this.generation) return;

@@ -50,6 +50,8 @@ class SessionRunner extends EventEmitter {
     // replaced folder (root-marker.js).
     const rootRefusal = this.engine.rootRefusal();
     if (rootRefusal) return this.pause(rootRefusal);
+    // Not awaited: the start keeps its order, and the marker lands beside it (it is never scanned).
+    this.engine.adoptRootMarker?.()?.catch(() => {});
     // C3.11: every path into a live session comes through here — a resume, a
     // rediscover, the restart a backoff ends in, and the first start of a
     // session whose init ran no passes (paused at launch, or offline). A

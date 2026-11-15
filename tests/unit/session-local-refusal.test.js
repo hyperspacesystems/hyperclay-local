@@ -350,6 +350,9 @@ describe('the root marker at start', () => {
     fs.writeFileSync(path.join(root.path, 'board.html'), 'mine');
 
     await manager.start(session, root);
+    // The runner adopts the folder as it starts, through the document host, after start returns.
+    const engine = manager.sessions.get(session.id).engine;
+    for (let i = 0; i < 100 && !engine.rootMarkerRequired; i += 1) await new Promise((resolve) => setTimeout(resolve, 5));
 
     expect(session.paused).toBeNull();
     expect(readRootMarker(root.path)).toMatchObject({ rootId: root.id });
@@ -366,6 +369,8 @@ describe('the root marker at start', () => {
     fs.writeFileSync(path.join(root.path, '.hyperclay'), 'not a directory');
 
     const result = await manager.start(session, root);
+    // Outwait the runner's attempt to adopt the folder, which runs after start returns.
+    await new Promise((resolve) => setTimeout(resolve, 50));
 
     expect(result.success).toBe(true);
     expect(session.paused).toBeNull();
