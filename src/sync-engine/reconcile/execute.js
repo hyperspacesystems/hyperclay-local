@@ -169,7 +169,11 @@ async function openConflict(engine, nodeId, rel) {
  * that answered is a different one).
  */
 async function recordConflict(engine, nodeId, rel, { kind, localChecksum = null, remoteEtag = null, fetchRemote = true }) {
-  const record = { kind, path: rel, localChecksum, remoteEtag, remoteCopy: null, detectedAt: Date.now() };
+  // The same conflict found again (a restart compares from scratch) keeps the time it was first
+  // found: that time is part of the id a shell shows the person and resolves by.
+  const open = await openConflict(engine, nodeId, rel);
+  const detectedAt = open && open.kind === kind && open.path === rel ? open.detectedAt : Date.now();
+  const record = { kind, path: rel, localChecksum, remoteEtag, remoteCopy: null, detectedAt };
 
   if (fetchRemote && nodeId !== null && nodeId !== undefined) {
     try {

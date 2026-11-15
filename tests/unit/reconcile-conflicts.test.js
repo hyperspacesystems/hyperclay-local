@@ -358,6 +358,20 @@ describe('executeDecision — one case per action kind', () => {
     expect([...(await fileOps.getLocalFiles(root)).keys()]).toEqual(['board.html']);
   });
 
+  it('the same conflict found again keeps the time it was first found, and another kind gets a new one', async () => {
+    await seedSite({ content: LOCAL_BYTES, remoteEtag: REMOTE_ETAG, localChecksum: LOCAL_SUM });
+    await executeDecision(engine, '901', { action: A.CONFLICT, conflictKind: 'both-edited' });
+    const first = (await readRecords())[901].detectedAt;
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await executeDecision(engine, '901', { action: A.CONFLICT, conflictKind: 'both-edited' });
+    expect((await readRecords())[901].detectedAt).toBe(first);
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await executeDecision(engine, '901', { action: A.CONFLICT, conflictKind: 'remote-deleted' });
+    expect((await readRecords())[901].detectedAt).toBeGreaterThan(first);
+  });
+
   it('the kept server copy is written by the host, and a refused one leaves the record without it', async () => {
     await seedSite({ content: LOCAL_BYTES, remoteEtag: REMOTE_ETAG, localChecksum: LOCAL_SUM });
     const { documentHostFor } = require('../../src/sync-engine/local-boundary');
