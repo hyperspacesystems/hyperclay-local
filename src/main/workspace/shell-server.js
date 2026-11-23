@@ -7,7 +7,7 @@ const { RootTree, entryFor } = require('./tree');
 const { executeCommand, safePath, refusal } = require('./commands');
 const { createAutoNamer } = require('./auto-name');
 const { createRootDocumentHost } = require('../document-host');
-const { freeCopyName } = require('../utils/free-name');
+const { freeCopyName, freeNewName } = require('../utils/free-name');
 const { SearchIndex } = require('./search-index');
 const { handleWorkspaceRoute } = require('./routes');
 const TEMPLATE_ROWS = require('../document-templates/manifest.json');
@@ -433,6 +433,18 @@ function createShellServer({ authority, rootPool, observerFor, settings, appVers
       const result = await executeCommand({ root, authority, engine: rootPool.get(rootId)?.deps?.syncEngineFor?.(),
         request, tree: await treeFor(root), moved, changed, ...commandHostFor(root) });
       await autoNamer?.command(root, request, result.path);
+      return { path: result.path };
+    },
+    async newDocument(rootId, rel, html) {
+      const root = (settings().roots || []).find(item => item.id === rootId);
+      if (!root || rootPool.get(rootId)?.state !== 'running') throw refusal('missing', 'Root is not running', 404);
+      const source = safePath(rel);
+      const dirRel = path.dirname(source);
+      const parent = dirRel === '.' ? '' : dirRel;
+      const name = await freeNewName(path.dirname(path.join(root.path, source)), path.basename(source));
+      const request = { command: 'create', parent, name, html: String(html ?? '') };
+      const result = await executeCommand({ root, authority, engine: rootPool.get(rootId)?.deps?.syncEngineFor?.(),
+        request, tree: await treeFor(root), moved, changed, ...commandHostFor(root) });
       return { path: result.path };
     },
     entryUrl(rootId) {

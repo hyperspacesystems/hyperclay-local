@@ -11,6 +11,7 @@ const MESSAGES = {
   export: "Couldn't export the document.",
   codeEditor: "Couldn't open the code editor.",
   duplicate: "Couldn't duplicate the document.",
+  newDocument: "Couldn't make a new document.",
 };
 
 function createDocumentActions({ roots, shellServer, workspaceWindow }) {
@@ -76,6 +77,18 @@ function createDocumentActions({ roots, shellServer, workspaceWindow }) {
         return { ok: true, href: `http://localhost:${root.port}/${address}` };
       } catch {
         return { ok: false, message: MESSAGES.duplicate };
+      }
+    },
+
+    newDocument: async (rootId, rel, html) => {
+      const root = rootFor(rootId);
+      if (!root) return { ok: false, message: MESSAGES.newDocument };
+      try {
+        const created = await shellServer().newDocument(rootId, rel, html);
+        const address = created.path.split('/').map(encodeURIComponent).join('/');
+        return { ok: true, href: `http://localhost:${root.port}/${address}` };
+      } catch {
+        return { ok: false, message: MESSAGES.newDocument };
       }
     },
   };

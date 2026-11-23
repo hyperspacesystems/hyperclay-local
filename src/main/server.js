@@ -2624,6 +2624,7 @@ function createApp(ctxOrDir, devHooks = null, isKnownPath = null) {
                   export: { post: '/_/export' },
                   codeEditor: { post: '/_/code-editor' },
                   duplicate: { post: '/_/duplicate' },
+                  newDocument: { post: '/_/new-document' },
                 },
               } : {}),
               upload: { allowed: true, maxBytes: UPLOAD_MAX_BYTES, access: UPLOAD_ACCESS },
@@ -2922,6 +2923,34 @@ function createApp(ctxOrDir, devHooks = null, isKnownPath = null) {
     documentActionRoute('export', 'export', (name, filePath) => nativePath.normalize(filePath));
     documentActionRoute('code-editor', 'codeEditor', name => name);
     documentActionRoute('duplicate', 'duplicate', name => name);
+
+    app.post('/new-document', express.text({ type: () => true, limit: SAVE_MAX_BYTES }), async (req, res, next) => {
+      if (!req.originalUrl.startsWith('/_/new-document')) return next();
+      const href = documentUrlHeader(req);
+      if (!href) return res.status(400).json({ ok: false, message: 'No document named.' });
+      let name, filePath;
+      try {
+        name = resolveResourceFromHref(href);
+        filePath = await resolveWriteTarget(paths, name);
+        if (!(await fs.stat(filePath)).isFile()) {
+          return res.status(404).json({ ok: false, message: 'No document named.' });
+        }
+      } catch {
+        return res.status(404).json({ ok: false, message: 'No document named.' });
+      }
+      if (!ctx.documentActions || typeof ctx.documentActions.newDocument !== 'function') {
+        return res.status(404).json({ ok: false, message: 'These actions are not available.' });
+      }
+      const html = typeof req.body === 'string' ? req.body : Buffer.isBuffer(req.body) ? req.body.toString('utf8') : '';
+      let answer;
+      try {
+        answer = await ctx.documentActions.newDocument(ctx.root.id, name, html);
+      } catch {
+        answer = { ok: false };
+      }
+      if (!answer || typeof answer !== 'object') answer = { ok: false };
+      return res.status(answer.ok ? 200 : 500).json(answer);
+    });
 
     // GET /_/uploads/<folder>/<name>: the host path every upload answers (spec §9).
     // It names a file in this root's `uploads/`, so it resolves on any port this root

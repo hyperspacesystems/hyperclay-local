@@ -73,14 +73,19 @@ function restoredName(original, index) {
 async function executeCommand({ root, authority, engine, request, tree, moved, changed, documentHost = createRootDocumentHost({ ctx: { root, localAuthority: authority } }), files = nodeFiles, locks = localLocks }) {
   if (!request || typeof request !== 'object') throw refusal('forbidden', 'Invalid command');
   if (request.command === 'create') {
-    const template = templateManifest.find(item => item.id === request.template);
-    if (!template) throw refusal('unsupported', 'Unknown document template', 501);
+    let html;
+    if (typeof request.html === 'string') {
+      html = request.html;
+    } else {
+      const template = templateManifest.find(item => item.id === request.template);
+      if (!template) throw refusal('unsupported', 'Unknown document template', 501);
+      const bytes = await fs.readFile(path.join(__dirname, '../document-templates', template.file));
+      html = bytes.toString('utf8');
+    }
     const parent = request.parent == null || request.parent === '' ? '' : safePath(request.parent);
     const name = safeName(request.name);
     const rel = parent ? `${parent}/${name}` : name;
     const registry = getConsentRegistry(root.path);
-    const bytes = await fs.readFile(path.join(__dirname, '../document-templates', template.file));
-    const html = bytes.toString('utf8');
     const runCreate = () => locks.withDocumentWrite(async () => {
       const destination = await resolveWritePath(registry, rel);
       return { canonicalPath: destination };
