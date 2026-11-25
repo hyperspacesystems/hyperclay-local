@@ -22,7 +22,7 @@ Kanban: a board of lists and cards, Trello style, in one file.
 <html lang="en" autosave clay-mode-switch="live" opens-in="edit">
 <head>
 <meta charset="utf-8">
-<meta name="clay-signature" content="v1 key=ecosystem-2026-11 app=kanban version=1.4.1 sig=0QJQ5M36LVh4W5AvDShPzv7Zy29QG51GbRmq86MrZL4DE0Bh25YqPQ4ol2VC5omeriaVJvzA0HVLGZbJcxCYDg">
+<meta name="clay-signature" content="v1 key=ecosystem-2026-11 app=kanban version=1.4.2 sig=iSUHziYw25Dm_LMHEvh4LUKDm_Q_CMqLZf62w1gSFTLyjNk5-0OzxcaI7MdEtCkEvU5J5LnqVFg_D5YyuDBnAg">
 <!--
 This file is free and open source under the MIT No Attribution license (MIT-0).
 
@@ -44,7 +44,7 @@ CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFT
 OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 -->
 <meta name="hyper-source" content="https://hyperclay.com/templates/kanban/owned/latest.html">
-<meta name="hyper-version" content="1.4.1">
+<meta name="hyper-version" content="1.4.2">
 <meta name="clay-template" content="kanban owned">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="#0c2635">
@@ -806,6 +806,7 @@ html[no-clay] #board>.list:not([cms-template]){display:grid!important}
 })();
 </script>
 <script type="application/json" data-rules-name="api" data-rules-version="1">{"boardName":"#board-meta > h1#board-name","nextCard":"#board-meta@data-next-card","labelDefs":["#board-meta ul.label-defs > li",{"id":"@data-id","color":"@data-color","name":"."}],"lists":["#board > section.list[item]",{"id":"@data-id","title":"h2.list-title","tone":"@data-tone","cards":["ol.cards > li.card[item]",{"id":"@data-id","num":"@data-num","title":"h3.card-title","desc":"div.card-desc","labels":"@data-labels","cover":"@data-cover","coverImage":"@data-cover-image","due":"@data-due","start":"@data-start","complete":"@data-complete","members":"@data-members","checklists":[":scope > section.checklist",{"id":"@data-id","name":"h4","items":[":scope > ul.checklist-items > li",{"id":"@data-id","text":".","done":"@data-done","member":"@data-member"}]}],"comments":["ol.comments > li",{"id":"@data-id","by":"@data-by","at":"@data-at","edited":"@data-edited","text":"."}],"attachments":["ul.attachments > li",{"id":"@data-id","name":"a","href":"a@href","kind":"a@data-kind"}]}]}],"people":["[clay-people] > data",{"id":"@value","name":"."}],"thanks":["a[clay-menu-item]",{"id":"@data-id"}],"look":"html@look"}</script>
+<script type="application/json" clay-new-document="kanban board" keep="look thanks">{"boardName":"Untitled board","nextCard":"1","labelDefs":[],"lists":[],"people":[]}</script>
 <style>[cms-template]{display:none!important}</style>
 <style clay-menu-skin="1" media="not all">
 [part~="dock"] { --bevel-surface: var(--paper); --bevel-sunk: var(--well); --bevel-ink: var(--ink); --bevel-ink-2: var(--muted); --bevel-muted: var(--subtle); --bevel-faint: var(--subtle); --bevel-line: var(--line); --bevel-line-2: var(--line); --bevel-line-3: var(--line); --bevel-brass: var(--violet); --bevel-font-sans: var(--font); --bevel-font-mono: ui-monospace, SFMono-Regular, Menlo, monospace; --clay-shadow: var(--shadow); }
@@ -814,8 +815,12 @@ html[no-clay] #board>.list:not([cms-template]){display:grid!important}
 [part~="button"]:hover { background: var(--gear-hover, var(--bar-hover)); }
 [part~="button"][aria-expanded="true"] { background: var(--gear-active, var(--bar-active)); border-color: var(--gear-active-line, var(--bar-active-line)); }
 [part~="button"] svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.65; stroke-linecap: round; stroke-linejoin: round; }
-[part~="list"] { width: 270px; padding: 5px; background: var(--paper); border: 1px solid var(--line); border-radius: 9px; box-shadow: var(--shadow); }
+[part~="button"] svg[fill="currentColor"] { width: 22px; height: auto; fill: currentColor; stroke: none; }
+[part~="list"] { min-width: 270px; width: max-content; max-width: calc(100vw - 24px); padding: 5px; background: var(--paper); border: 1px solid var(--line); border-radius: 9px; box-shadow: var(--shadow); }
 [part~="item"], [part~="dismiss"], [part~="text"] { min-height: 32px; padding: 7px 9px; border-radius: 6px; font: 400 13.5px/1.3 var(--font); color: var(--ink); }
+[part~="nested"] { min-height: 29px; padding: 5px 9px; color: var(--muted); }
+.clay-menu-list [part~="item"][aria-disabled="true"] { opacity: 0.45; }
+.clay-menu-list .clay-menu-stepper [part~="step"] { display: inline-flex; align-items: center; justify-content: center; border-radius: 5px; color: var(--ink); }
 [part~="item"] kbd { padding-left: 14px; font: 400 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--subtle); }
 [part~="quiet"] { font-size: 12px; color: var(--subtle); text-decoration: underline; text-underline-offset: 2px; }
 [part~="dismiss"] { color: var(--subtle); }
@@ -862,7 +867,7 @@ html[no-clay] #board>.list:not([cms-template]){display:grid!important}
   </div>
   <div class="faces" id="faces" role="group" aria-label="People on this board" clay="freeze" effect="Board.paintFaces(el)"></div>
   <span class="me-slot" clay="freeze" effect="Board.paintMe(el)"><button class="me-button edit-only" id="me" data-act="change-my-name" title="Change my name" aria-label="Change my name" hidden></button></span>
-  <div class="menu-slot" clay-menu-slot clay-menu-looks no-edit-switch clay-menu-label="Settings" clay="freeze"><template clay-menu-icon><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 9a3 3 0 1 1 0 6 3 3 0 0 1 0-6M10 3h4l1.5 3 3.5-.5 2 4-2 2.5 2 2.5-2 4-3.5-.5-1.5 3h-4l-1.5-3-3.5.5-2-4 2-2.5-2-2.5 2-4 3.5.5Z"/></svg></template></div>
+  <div class="menu-slot" clay-menu-slot clay-menu-looks no-edit-switch clay-menu-label="Settings" clay="freeze"></div>
 </header>
 <div id="board-meta" class="board-data" data-next-card="15" merge-max="data-next-card">
 <h1 id="board-name">Launch Plan</h1>
@@ -944,8 +949,8 @@ Give teams a useful starting point, with less noise and a little more room to th
 </div>
 <div clay-people hidden><data value="" cms-template></data></div>
 <div class="doc-links" hidden>
-<a cms-template data-id="" clay-menu-item clay-menu-section="end" clay-menu-quiet clay-menu-dismiss="Remove this suggestion" href="mailto:david@hyperclay.com?subject=Kanban">Send an appreciation email to the creator of this file</a>
-<a data-id="appreciation" clay-menu-item clay-menu-section="end" clay-menu-quiet clay-menu-dismiss="Remove this suggestion" href="mailto:david@hyperclay.com?subject=Kanban">Send an appreciation email to the creator of this file</a>
+<a cms-template data-id="" clay-menu-item clay-menu-section="end" clay-menu-quiet clay-menu-dismiss="Remove this suggestion" href="mailto:david@hyperclay.com?subject=Kanban">Thank the creator by email</a>
+<a data-id="appreciation" clay-menu-item clay-menu-section="end" clay-menu-quiet clay-menu-dismiss="Remove this suggestion" href="mailto:david@hyperclay.com?subject=Kanban">Thank the creator by email</a>
 </div>
 
 <!-- Runtime UI. Cloned at startup and marked clay="editor-ui" as it is inserted, so no clone is ever saved. -->

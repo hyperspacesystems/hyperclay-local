@@ -9,7 +9,7 @@
 <html lang="en" autosave clay-mode-switch="live" opens-in="edit">
 <head>
 <meta charset="utf-8">
-<meta name="clay-signature" content="v1 key=ecosystem-2026-11 app=journal version=1.6.1 sig=On4cXFUgOA84GzYxwOiRatYeQu2LZXNFUR8pQvtAZSFccgOBghWq3oqBZZ-27PI4R2mMeVRJuIJwNlcblpqOCw">
+<meta name="clay-signature" content="v1 key=ecosystem-2026-11 app=journal version=1.6.2 sig=SzoaeOYn7ga0QKecxm6KZ_Ub8hVb4EyZBug3IVfWcLOFsrGFdeUKsNo1dJTQfksNfTNEWmFtmh54-yQCtWjpDg">
 <!--
 This file is free and open source under the MIT No Attribution license (MIT-0).
 
@@ -31,7 +31,7 @@ CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFT
 OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 -->
 <meta name="hyper-source" content="https://hyperclay.com/templates/journal/owned/latest.html">
-<meta name="hyper-version" content="1.6.1">
+<meta name="hyper-version" content="1.6.2">
 <meta name="clay-template" content="journal owned">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Journal</title>
@@ -2283,11 +2283,15 @@ body .strip-journal .sj-line {
 </script>
 <style clay-menu-skin="1" media="not all">
 [part~="dock"] { --bevel-surface: var(--sheet); --bevel-sunk: var(--hover); --bevel-ink: var(--ink); --bevel-ink-2: var(--ink-2); --bevel-muted: var(--ink-3); --bevel-faint: var(--ink-3); --bevel-line: var(--line); --bevel-line-2: var(--line-2); --bevel-line-3: var(--line-2); --bevel-brass: var(--blue); --bevel-font-sans: var(--sans); --bevel-font-mono: var(--mono); --clay-shadow: var(--shadow); }
-[part~="button"] { width: 32px; height: 32px; border: 0; border-radius: 6px; background: none; color: var(--ink-2); }
+[part~="button"] { width: 34px; height: 34px; border: 0; border-radius: 6px; background: none; color: var(--ink); }
 [part~="button"]:hover, [part~="button"][aria-expanded="true"] { color: var(--ink); background: var(--hover); }
 [part~="button"] svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2.1; stroke-linecap: square; stroke-linejoin: miter; }
-[part~="list"] { width: 270px; padding: 5px; background: var(--sheet); border: 1px solid var(--line-2); border-radius: 8px; box-shadow: var(--shadow); }
+[part~="button"] svg[fill="currentColor"] { width: 22px; height: auto; fill: currentColor; stroke: none; }
+[part~="list"] { min-width: 270px; width: max-content; max-width: calc(100vw - 24px); padding: 5px; background: var(--sheet); border: 1px solid var(--line-2); border-radius: 8px; box-shadow: var(--shadow); }
 [part~="item"], [part~="dismiss"], [part~="text"] { min-height: 30px; padding: 7px 9px; border-radius: 5px; font: 400 13px/1.3 var(--sans); color: var(--ink); }
+[part~="nested"] { min-height: 29px; padding: 5px 9px; color: var(--ink-2); }
+.clay-menu-list [part~="item"][aria-disabled="true"] { opacity: 0.45; }
+.clay-menu-list .clay-menu-stepper [part~="step"] { display: inline-flex; align-items: center; justify-content: center; border-radius: 5px; color: var(--ink); }
 [part~="item"] kbd { padding-left: 14px; font: 400 11px/1 var(--mono); color: var(--ink-3); }
 [part~="quiet"] { font-size: 11.5px; color: var(--ink-3); text-decoration: underline; text-underline-offset: 2px; }
 [part~="dismiss"] { color: var(--ink-3); }
@@ -2297,12 +2301,13 @@ body .strip-journal .sj-line {
 </style>
 <style id="no-js">@media (scripting: none) { #entries { display: flex !important; } .entries > .entry { display: block; padding: 20px 28px; border-bottom: 1px solid var(--line); white-space: pre-wrap; font-family: var(--mono); } .entries > .entry::before { content: attr(data-date); display: block; margin-bottom: 8px; font: 500 11px/1 var(--mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); } .entry-source { margin: 0; white-space: pre-wrap; font: inherit; } .entries > .entry[data-deleted-at]:not([data-deleted-at=""]) { display: none !important; } .desk-scroll { display: block !important; } :is(.reader, .tb-slot, .sheet-empty, .writer) { display: none !important; } }</style>
 <script type="application/json" data-rules-name="api" data-rules-version="1">{"entries":["#entries > article.entry",{"id":"@data-id","date":"@data-date","created":"@data-created","updated":"@data-updated","body":".entry-body@textContent","deletedAt":"@data-deleted-at","pinned":"@data-pinned"}],"name":"#docTitle","title":"title","look":"html@look","thanks":["a[clay-menu-item]",{"id":"@data-id"}]}</script>
+<script type="application/json" clay-new-document="journal" keep="look thanks">{"entries":[],"name":"Journal","title":"Journal"}</script>
 <style>[cms-template]{display:none!important}</style>
 </head>
 <body>
 <div class="doc-links" hidden>
-<a cms-template data-id="" clay-menu-item clay-menu-section="end" clay-menu-quiet clay-menu-dismiss="Remove this suggestion" href="mailto:david@hyperclay.com?subject=Journal">Send an appreciation email to the creator of this file</a>
-<a data-id="appreciation" clay-menu-item clay-menu-section="end" clay-menu-quiet clay-menu-dismiss="Remove this suggestion" href="mailto:david@hyperclay.com?subject=Journal">Send an appreciation email to the creator of this file</a>
+<a cms-template data-id="" clay-menu-item clay-menu-section="end" clay-menu-quiet clay-menu-dismiss="Remove this suggestion" href="mailto:david@hyperclay.com?subject=Journal">Thank the creator by email</a>
+<a data-id="appreciation" clay-menu-item clay-menu-section="end" clay-menu-quiet clay-menu-dismiss="Remove this suggestion" href="mailto:david@hyperclay.com?subject=Journal">Thank the creator by email</a>
 </div>
 <div class="app" sap state="tag:transient view:transient shown:transient from:transient to:transient calendarMonth:transient calendarOpen:transient calendarDay:transient today:transient otdShown:transient pick:transient" calc:live="fmt.live(state.entries)" calc:otd="fmt.onThisDay(state.live, state.today, state.otdShown)">
   <div class="status-slot" clay="freeze">
@@ -2322,7 +2327,7 @@ body .strip-journal .sj-line {
       <div class="head-acts" clay="freeze">
         <button class="icon-btn new-btn" type="button" data-act="new" aria-label="New entry" title="New entry"><svg class="i" viewBox="0 0 16 16"><path d="M13.5 8.5v4a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1h4M11.5 2.5l2 2L8 10l-2.5.5L6 8z"/></svg></button>
         <button class="icon-btn" id="searchBtn" type="button" aria-label="Search entries" title="Search (/)" aria-expanded="false"><svg class="i" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14"/></svg></button>
-        <div class="menu-slot" clay-menu-slot clay-menu-looks no-edit-switch clay-menu-label="Settings" clay="freeze"><template clay-menu-icon><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 9a3 3 0 1 1 0 6 3 3 0 0 1 0-6M10 3h4l1.5 3 3.5-.5 2 4-2 2.5 2 2.5-2 4-3.5-.5-1.5 3h-4l-1.5-3-3.5.5-2-4 2-2.5-2-2.5 2-4 3.5.5Z"/></svg></template></div>
+        <div class="menu-slot" clay-menu-slot clay-menu-looks no-edit-switch clay-menu-label="Settings" clay="freeze"></div>
         <div class="menu" id="fileMenu" clay="freeze">
           <button class="icon-btn" id="menuBtn" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="Settings" title="Settings"><svg class="i gear" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 9a3 3 0 1 1 0 6 3 3 0 0 1 0-6M10 3h4l1.5 3 3.5-.5 2 4-2 2.5 2 2.5-2 4-3.5-.5-1.5 3h-4l-1.5-3-3.5.5-2-4 2-2.5-2-2.5 2-4 3.5.5Z"/></svg></button>
           <div class="menu-pop" id="menuPop" role="menu">

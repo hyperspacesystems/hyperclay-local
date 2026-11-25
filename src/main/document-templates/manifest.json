@@ -16,8 +16,8 @@
     "description": "Move work across lists on a simple board you can share by link.",
     "thumbnail": "thumbnails/kanban.svg",
     "listed": true,
-    "bytes": 266916,
-    "sha256": "dca2537be7b874b8ebb23d42feeaa77b5e70aa4705fea20f794edcd2ee3f5a6d"
+    "bytes": 267283,
+    "sha256": "506a441ba1943edb9e2d6f6bb7fee820841d4062a2beb72ff7500432733fb4aa"
   },
   {
     "id": "journal",
@@ -26,8 +26,8 @@
     "description": "A private journal with search, tags and Markdown export.",
     "thumbnail": "thumbnails/journal.svg",
     "listed": false,
-    "bytes": 323134,
-    "sha256": "22e485581a496825949cfc7034ff64bbf5d6b204d5e266675793cf1eb1156378"
+    "bytes": 323460,
+    "sha256": "6e570613c055663cb4ae2d4ab08188eded29f2efe363e547050dba1beef31938"
   },
   {
     "id": "freelance-rate-calculator",
@@ -36,8 +36,8 @@
     "description": "Stop undercharging. This free freelance rate calculator turns your real living costs, business expenses, and tax rate into the hourly rate you need to charge.",
     "thumbnail": "thumbnails/freelance-rate-calculator.svg",
     "listed": true,
-    "bytes": 110395,
-    "sha256": "a4abc315a24cc4575ef238ed7001bd99d36c033fde3c7ec8de335d51038756f9"
+    "bytes": 111193,
+    "sha256": "c0150c5ddf52793ba9a83bed643e842b3649022c516c466c8f2db7b748782201"
   },
   {
     "id": "blockeditor",
@@ -46,8 +46,8 @@
     "description": "A page for writing, tables, checklists and boards. Starts nearly empty.",
     "thumbnail": "thumbnails/blockeditor.svg",
     "listed": true,
-    "bytes": 18579,
-    "sha256": "4defb5401ba1d5c70cf51c3d59444e3d10916042c13320be9dcfda2eef911096"
+    "bytes": 18764,
+    "sha256": "a52b326261d80fe18207ed236288d8cad2e3798a834d22e244c025a0977533c4"
   },
   {
     "id": "devlog",
