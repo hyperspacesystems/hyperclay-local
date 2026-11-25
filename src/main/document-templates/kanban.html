@@ -22,8 +22,29 @@ Kanban: a board of lists and cards, Trello style, in one file.
 <html lang="en" autosave clay-mode-switch="live" opens-in="edit">
 <head>
 <meta charset="utf-8">
+<meta name="clay-signature" content="v1 key=ecosystem-2026-11 app=kanban version=1.4.1 sig=0QJQ5M36LVh4W5AvDShPzv7Zy29QG51GbRmq86MrZL4DE0Bh25YqPQ4ol2VC5omeriaVJvzA0HVLGZbJcxCYDg">
+<!--
+This file is free and open source under the MIT No Attribution license (MIT-0).
+
+MIT No Attribution
+
+Copyright (c) 2026 David Miranda
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this
+software and associated documentation files (the "Software"), to deal in the Software
+without restriction, including without limitation the rights to use, copy, modify,
+merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE
+OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+-->
 <meta name="hyper-source" content="https://hyperclay.com/templates/kanban/owned/latest.html">
-<meta name="hyper-version" content="1.4.0">
+<meta name="hyper-version" content="1.4.1">
 <meta name="clay-template" content="kanban owned">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="#0c2635">
@@ -214,8 +235,6 @@ html:not([editmode="true"]) .list-handle{cursor:default}
 .history-note{position:fixed;left:50%;bottom:76px;transform:translateX(-50%);z-index:41;display:flex;align-items:center;gap:10px;max-width:calc(100% - 32px);padding:6px 6px 6px 16px;background:var(--note-bg);color:var(--note-ink);border:1px solid var(--note-line);border-radius:8px;font-size:12px;box-shadow:0 8px 25px var(--shade-toast)}
 .history-note button{color:var(--note-ink);font-weight:600;padding:0 10px;min-height:32px;border:1px solid var(--note-line);border-radius:6px;background:transparent}
 .history-note button:hover:not(:disabled){background:var(--note-hover)!important}
-[ephemeral~="history-hit"]{outline:3px solid var(--focus);outline-offset:2px;border-radius:8px;animation:history-hit 1600ms ease-out}
-@keyframes history-hit{from{box-shadow:0 0 0 8px var(--focus-glow)}to{box-shadow:0 0 0 0 transparent}}
 .empty-note{padding:14px 8px;font-size:12px;text-align:center;color:var(--muted)}
 .no-results{position:fixed;left:50%;top:84px;transform:translateX(-50%);background:var(--paper);border:1px solid var(--line);border-radius:9px;box-shadow:var(--shadow);z-index:10;display:flex;align-items:center;gap:10px;padding:8px 8px 8px 14px}
 .no-results[hidden]{display:none}
@@ -1651,7 +1670,13 @@ Give teams a useful starting point, with less noise and a little more room to th
   function restoreEntry(entryId) {
     pendingEntry = null;
     if (!entryId || topEntryId() !== entryId) return false;
-    return afterReplay(window.clay?.undo?.undo?.({ entryId }));
+    const label = (window.clay?.undo?.history || []).at(-1)?.label;
+    hideSkipped();
+    const receipt = window.clay?.undo?.undo?.({ entryId });
+    if (!receipt?.ok && receipt?.code) {
+      showHistoryNote(label ? `Could not restore “${label}”: the board changed it.` : 'Could not restore that: the board changed it.');
+    }
+    return afterReplay(receipt);
   }
   // A delete's Undo addresses the exact entry the delete made.
   function deletedToast(message, receipt) {
@@ -1666,7 +1691,6 @@ Give teams a useful starting point, with less noise and a little more room to th
   const historyNext = direction => (direction === 'redo'
     ? (window.clay?.undo?.future || [])[0]
     : (window.clay?.undo?.history || []).at(-1)) || null;
-  const refusedTop = () => [historyNext('undo'), historyNext('redo')].find(e => e?.refused) || null;
   // The refresh and the number repair a replay finishes with, named once so there is exactly
   // one of each and one place that counts them.
   const Maintenance = {
@@ -1691,6 +1715,7 @@ Give teams a useful starting point, with less noise and a little more room to th
     (before?.isConnected && !before.disabled ? before : face || inDialog)?.focus?.();
   }
   function replayHistory(direction) {
+    hideSkipped();
     const undo = window.clay?.undo;
     const before = document.activeElement;
     const cardId = before?.closest?.('.card')?.dataset.id;
@@ -1702,6 +1727,7 @@ Give teams a useful starting point, with less noise and a little more room to th
   // when that replay reports its change.
   window.addEventListener('keydown', e => {
     if (!(e.metaKey || e.ctrlKey) || !/^[zy]$/i.test(e.key || '')) return;
+    hideSkipped();
     const before = document.activeElement;
     const cardId = before?.closest?.('.card')?.dataset.id;
     const restore = () => keepFocus(before, cardId);
@@ -1710,6 +1736,7 @@ Give teams a useful starting point, with less noise and a little more room to th
   }, true);
   // The controls name the action they would take back or put again, and say nothing else.
   function paintHistory() {
+    if (readOnly) hideSkipped();
     for (const button of historyButtons()) {
       const direction = button.dataset.act === 'undo-main' ? 'undo' : 'redo';
       const name = direction === 'undo' ? 'Undo' : 'Redo';
@@ -1727,44 +1754,42 @@ Give teams a useful starting point, with less noise and a little more room to th
       button.hidden = readOnly;
     }
     paintToastUndo();
-    paintRefusal();
   }
-  // A refused step stays at the top, where a person can see what the board did to it: review the
-  // part that changed, or dismiss exactly that entry and leave the document as it is.
-  let noteGoneFor = null;
-  function paintRefusal() {
+  // The history note says what the last press could not do: which steps it skipped because
+  // the board changed them, or that a toast's Undo could not restore its step. It stays until
+  // the next press, Close, leaving Edit, or closing the dialog it sits in.
+  let skippedLabels = [];
+  const namesList = names => names.length < 3 ? names.join(' and ') : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
+  function showHistoryNote(text) {
     const note = $('#history-note');
-    if (!note) return;
-    const entry = readOnly ? null : refusedTop();
-    if (!entry) { note.hidden = true; note.textContent = ''; noteGoneFor = null; return; }
-    const refused = entry.refused;
-    const done = refused.direction === 'redo' ? 'redone' : 'undone';
-    const said = noteGoneFor === entry.id
-      ? 'That part of the board is gone now, so there is nothing to show.'
-      : `“${esc(entry.label)}” could not be ${done} because the board changed.`;
-    note.innerHTML = `<span>${said}</span><button data-act="review-refusal">Review</button><button data-act="dismiss-refusal">Dismiss this undo step</button>`;
+    if (!note || readOnly) return;
+    const said = document.createElement('span');
+    said.textContent = text;
+    const close = document.createElement('button');
+    close.dataset.act = 'close-history-note';
+    close.textContent = 'Close';
+    note.replaceChildren(said, close);
     const host = $('#ask').open ? $('#ask') : detailEl.open ? detailEl : document.body;
     if (note.parentNode !== host) host.append(note);
     note.hidden = false;
   }
-  // Review takes the eye to the first part of the entry that is still on this page.
-  function reviewRefusal() {
-    const entry = refusedTop();
-    if (!entry) { paintRefusal(); return; }
-    const target = (entry.refused.targets || [])
-      .map(t => (t.id ? $(`[data-id="${CSS.escape(t.id)}"]`) : null))
-      .find(el => el && el.isConnected && !el.closest('[cms-template]'));
-    if (!target) { noteGoneFor = entry.id; paintRefusal(); return; }
-    target.scrollIntoView?.({ block: 'center' });
-    window.clay?.ephemeral?.add?.(target, 'history-hit');
-    setTimeout(() => window.clay?.ephemeral?.remove?.(target, 'history-hit'), 1600);
+  function showSkipped(detail) {
+    skippedLabels.push(detail?.label || '');
+    const named = skippedLabels.filter(Boolean).map(label => `“${label}”`);
+    showHistoryNote(named.length
+      ? `Skipped ${namesList(named)}: the board changed ${named.length > 1 ? 'them' : 'it'}.`
+      : 'Skipped a step the board changed.');
   }
-  // Dismissal drops that one blocked entry; older history becomes reachable again.
-  function dismissRefusal() {
-    const entry = refusedTop();
-    if (!entry) { paintRefusal(); return; }
-    window.clay?.undo?.discard?.(entry.id);
-    paintHistory();
+  function hideSkipped() {
+    skippedLabels = [];
+    const note = $('#history-note');
+    if (!note) return;
+    note.hidden = true;
+    note.textContent = '';
+  }
+  document.addEventListener('clay:undo-skipped', e => showSkipped(e.detail));
+  for (const dialog of [$('#ask'), detailEl]) {
+    dialog?.addEventListener('close', () => { if (dialog.contains($('#history-note'))) hideSkipped(); });
   }
   document.addEventListener('clay:undo-change', paintHistory);
 
@@ -3440,8 +3465,7 @@ Give teams a useful starting point, with less noise and a little more room to th
   registerAction('undo', () => { const entryId = pendingEntry; pendingEntry = null; $('#toast').hidden = true; if (entryId) restoreEntry(entryId); }, { edit: false });
   registerAction('undo-main', () => replayHistory('undo'), { edit: false });
   registerAction('redo-main', () => replayHistory('redo'), { edit: false });
-  registerAction('review-refusal', () => reviewRefusal(), { edit: false });
-  registerAction('dismiss-refusal', () => dismissRefusal(), { edit: false });
+  registerAction('close-history-note', () => hideSkipped(), { edit: false });
   registerAction('show-capture', ({ el }) => {
     clearTimeout(toastTimer);
     $('#toast').hidden = true;
