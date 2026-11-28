@@ -30,13 +30,13 @@ Hyperclay lets you create **HTML file apps** - powerful, self-contained files th
 
 ### The Big Idea
 - **Own Your Stack**: No vendor lock-in. Download your apps and run them anywhere.
-- **Editable**: Your HTML files can modify themselves and save changes instantly.
+- **Self-saving**: Your HTML files can modify themselves and save changes instantly.
 - **Shareable**: Send a link, and others can view or clone your app with one click.
 - **Future-Proof**: Built on standard HTML/CSS/JavaScript - no proprietary frameworks.
 
 ### How Hyperclay Apps Work
 
-#### HTML File Apps
+#### Self-saving HTML files
 Your HTML files can edit themselves in real-time. Change text, add features, modify layouts - everything saves automatically and becomes part of the app. Each app is a complete file that includes:
 - Your content and data
 - Styling (CSS) 
