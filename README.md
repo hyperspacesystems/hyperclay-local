@@ -8,7 +8,7 @@
 >
 > Plain answers: [hyperclay.com/host-program](https://hyperclay.com/host-program) · binding text in [LICENSE](LICENSE) · questions: license@hyperclay.com
 
-A beautiful, cross-platform desktop application for running your malleable documents locally with zero configuration.
+A beautiful, cross-platform desktop application for running your HTML file apps locally with zero configuration.
 
 ## ✨ Features
 
@@ -26,18 +26,18 @@ A beautiful, cross-platform desktop application for running your malleable docum
 
 ## What is Hyperclay?
 
-Hyperclay lets you create **malleable documents** - powerful, self-contained files that you fully own and control. Think of it as combining the simplicity of Google Docs with the power of custom web applications.
+Hyperclay lets you create **HTML file apps** - powerful, self-contained files that you fully own and control. Think of it as combining the simplicity of Google Docs with the power of custom web applications.
 
 ### The Big Idea
 - **Own Your Stack**: No vendor lock-in. Download your apps and run them anywhere.
-- **Malleable**: Your HTML files can modify themselves and save changes instantly.
+- **Editable**: Your HTML files can modify themselves and save changes instantly.
 - **Shareable**: Send a link, and others can view or clone your app with one click.
 - **Future-Proof**: Built on standard HTML/CSS/JavaScript - no proprietary frameworks.
 
 ### How Hyperclay Apps Work
 
-#### Malleable Documents
-Your malleable documents can edit themselves in real-time. Change text, add features, modify layouts - everything saves automatically and becomes part of the app. Each app is a complete HTML document that includes:
+#### HTML File Apps
+Your HTML files can edit themselves in real-time. Change text, add features, modify layouts - everything saves automatically and becomes part of the app. Each app is a complete file that includes:
 - Your content and data
 - Styling (CSS) 
 - Behavior (JavaScript)
@@ -69,7 +69,7 @@ While [hyperclay.com](https://hyperclay.com) provides the full hosted experience
 - ✅ **Privacy first** - Your apps and data never leave your computer
 - ✅ **Future-proof** - Apps work forever, regardless of service status
 
-This local server provides the core functionality needed to run and edit your Hyperclay apps, ensuring you're never locked into any platform while still benefiting from the malleable document concept.
+This local server provides the core functionality needed to run and edit your Hyperclay apps, ensuring you're never locked into any platform while still benefiting from self-saving HTML files.
 
 ## 🚀 Quick Start
 
@@ -84,7 +84,7 @@ This local server provides the core functionality needed to run and edit your Hy
 
 2. **Install** and run the app
 
-3. **Select your folder** containing malleable documents
+3. **Select your folder** containing HTML files
 
 4. **Click "Start Server"**
 
@@ -185,7 +185,7 @@ Select some text in any HTML file that loads ClayJS, press ⌘J (Ctrl+J on Windo
 - The agent runs with no tools: it cannot read files, run commands or browse. It sees the block's HTML, the selected text, your request, any file you name with `@name.ext` (it must sit inside the served folder; at most 8 files, 256 KB each, 1 MB in total), and with `@page` the whole saved page. The agent CLI sends that prompt to its model provider.
 - A reply that adds a script, an inline event handler or a `javascript:` URL is refused.
 - `@agy` is not supported, because agy can read files without asking.
-- One AI edit runs per document at a time.
+- One AI edit runs per file at a time.
 - Your own agents: add `"aiEdit": { "engines": { "name": ["command", "arg", "{prompt}"] } }` to `settings.json` in the app's data folder. An argument containing `{prompt}` receives the prompt; without one, the prompt arrives on standard input. `"default": "name"` makes one the default.
 
 ## 🛡️ Security Features
@@ -355,5 +355,5 @@ Contributions welcome! Areas that need help:
 
 ---
 
-**Made with ❤️ for Hyperclay** - The platform for malleable documents  
+**Made with ❤️ for Hyperclay** - The platform for HTML file apps  
 Get the full experience at [hyperclay.com](https://hyperclay.com)

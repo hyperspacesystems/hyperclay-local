@@ -681,7 +681,7 @@ function showAboutDialog() {
     type: 'info',
     title: 'About Hyperclay Local',
     message: `Hyperclay Local Server v${app.getVersion()}`,
-    detail: 'A local server for running your malleable documents offline.\n\nMade with \u2764\ufe0f for the Hyperclay platform.',
+    detail: 'A local server for running your HTML files offline.\n\nMade with \u2764\ufe0f for the Hyperclay platform.',
     buttons: ['OK'],
     icon: getAppIcon() || undefined
   });

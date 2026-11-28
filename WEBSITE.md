@@ -11,7 +11,7 @@
 - An OS-aware hero download button backed by the canonical download list.
 - An interactive hero: transparent hotspots over the popover screenshot let visitors click the Serve and Sync switches and the bell to swap between the five captured UI states.
 - Live in-page SAP demos for example single-file apps.
-- Canonical documentation links for creating and saving malleable documents.
+- Canonical documentation links for creating and saving HTML files.
 - FAQ answers and links to the canonical setup, saving and troubleshooting documentation.
 
 ## How To Use It
