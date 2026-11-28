@@ -1085,7 +1085,7 @@ async function handleSelectFolder(event) {
   const parentWin = event ? BrowserWindow.fromWebContents(event.sender) : null;
   const result = await dialog.showOpenDialog(parentWin, {
     properties: ['openDirectory'],
-    title: 'Select folder containing your malleable documents'
+    title: 'Select the folder that holds your HTML files'
   });
 
   if (result.canceled || result.filePaths.length === 0) return { success: false };
