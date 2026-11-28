@@ -1,6 +1,6 @@
 // ClayJS's page menu reads `document.actions` from `GET /_/meta` and POSTs to the
-// same-origin address each action names. This host offers five, each naming its
-// document with Document-URL: reveal, versions, export, codeEditor and duplicate.
+// same-origin address each action names. This host offers six, each naming its
+// document with Document-URL: reveal, versions, export, codeEditor, duplicate and newDocument.
 // The decisions live in main, so this file pins the wire contract the server owes:
 // the block, the five routes, the path each hook receives, and the refusals.
 
@@ -62,8 +62,8 @@ afterEach(async () => {
   jest.restoreAllMocks();
 });
 
-describe('discovery offers the five document actions', () => {
-  test('a document block carries the five posts when the hooks are wired', async () => {
+describe('discovery offers the six document actions', () => {
+  test('a document block carries the six posts when the hooks are wired', async () => {
     server = await app(actions());
 
     const res = await meta('http://localhost/index.html');
@@ -75,6 +75,7 @@ describe('discovery offers the five document actions', () => {
       export: { post: '/_/export' },
       codeEditor: { post: '/_/code-editor' },
       duplicate: { post: '/_/duplicate' },
+      newDocument: { post: '/_/new-document' },
     });
   });
 
